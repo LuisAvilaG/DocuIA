@@ -13,13 +13,13 @@ export async function POST(req: NextRequest, { params }: Params) {
   const session = await getTenantSession();
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
-  try {
-    const { docId } = await params;
-    const docIdNum = Number(docId);
-    if (!Number.isFinite(docIdNum)) {
-      return NextResponse.json({ error: "ID inválido" }, { status: 400 });
-    }
+  const { docId } = await params;
+  const docIdNum = Number(docId);
+  if (!Number.isFinite(docIdNum)) {
+    return NextResponse.json({ error: "ID inválido" }, { status: 400 });
+  }
 
+  try {
     const doc = await db.query.historyDocuments.findFirst({
       where: and(
         eq(historyDocuments.id, docIdNum),
@@ -177,6 +177,7 @@ export async function POST(req: NextRequest, { params }: Params) {
       due_date:               body.due_date,
       currency_internal_id:   body.currency,
       location_internal_id:   body.location_internal_id ?? null,
+      external_id:            `docuia:${session.orgId}:${docIdNum}`,
       line_items:             validLines,
     };
 
@@ -223,6 +224,7 @@ export async function POST(req: NextRequest, { params }: Params) {
     await db.update(historyDocuments)
       .set({ status: "review", errorMessage: message, updatedAt: new Date() })
       .where(and(
+        eq(historyDocuments.id, docIdNum),
         eq(historyDocuments.organizationId, session.orgId),
         eq(historyDocuments.status, "processing")
       )).catch(() => {});

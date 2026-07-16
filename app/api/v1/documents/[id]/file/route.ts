@@ -3,7 +3,8 @@ import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
 import { historyDocuments } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
-import { getFileBuffer } from "@/lib/storage/minio";
+import { getFileStream } from "@/lib/storage/minio";
+import { Readable } from "node:stream";
 import path from "path";
 
 const MIME_MAP: Record<string, string> = {
@@ -49,11 +50,12 @@ export async function GET(
   const contentType = MIME_MAP[ext] ?? "application/octet-stream";
 
   try {
-    const buffer = await getFileBuffer(doc.storageKey);
-    return new NextResponse(new Uint8Array(buffer), {
+    const nodeStream = await getFileStream(doc.storageKey);
+    // Pipe the object straight through instead of buffering the whole file.
+    const webStream = Readable.toWeb(nodeStream) as unknown as ReadableStream<Uint8Array>;
+    return new NextResponse(webStream, {
       headers: {
         "Content-Type":        contentType,
-        "Content-Length":      String(buffer.length),
         "Cache-Control":       "private, max-age=3600",
         "Content-Disposition": "inline",
       },

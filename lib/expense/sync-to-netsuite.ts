@@ -4,6 +4,8 @@ import { eq, and } from "drizzle-orm";
 import { decryptField } from "@/lib/crypto/encrypt";
 import { buildOAuthHeader, buildRestApiUrl, NSCredentials } from "@/lib/netsuite/oauth";
 
+const NS_TIMEOUT_MS = Number(process.env.NETSUITE_TIMEOUT_MS) || 30_000;
+
 // ── NS REST helpers ───────────────────────────────────────────────────
 
 function buildSuiteQLUrl(accountId: string): string {
@@ -26,6 +28,7 @@ async function nsRest(
       Accept:         "application/json",
     },
     body: body != null ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(NS_TIMEOUT_MS),
   });
   let data: unknown;
   try { data = await res.json(); } catch { data = null; }
@@ -42,6 +45,7 @@ async function suiteQL(
     method: "POST",
     headers: { Authorization: authHeader, "Content-Type": "application/json", Accept: "application/json", Prefer: "transient" },
     body: JSON.stringify({ q: query }),
+    signal: AbortSignal.timeout(NS_TIMEOUT_MS),
   });
   if (!res.ok) return [];
   const json = await res.json() as { items?: Array<Record<string, unknown>> };
@@ -59,13 +63,22 @@ async function lookupVendor(creds: NSCredentials, vendorNit: string): Promise<st
   return rows.length > 0 && rows[0].id ? String(rows[0].id) : null;
 }
 
-async function createVendor(creds: NSCredentials, vendorNit: string, vendorName: string): Promise<string> {
+async function createVendor(
+  creds: NSCredentials,
+  vendorNit: string,
+  vendorName: string,
+  subsidiaryNsId: string,
+): Promise<string> {
   const createUrl = `${buildRestApiUrl(creds.accountId)}/vendor`;
-  const result = await nsRest("POST", createUrl, creds, {
+  const body: Record<string, unknown> = {
     companyName: vendorName,
     entityid:    vendorNit,
     isPerson:    false,
-  });
+  };
+  // OneWorld: the vendor must belong to the transaction's subsidiary, otherwise
+  // the Vendor Bill fails with "transaction subsidiary does not match the entity".
+  if (subsidiaryNsId) body.subsidiary = { id: subsidiaryNsId };
+  const result = await nsRest("POST", createUrl, creds, body);
   if (!result.ok) {
     throw new Error(`No se pudo crear el proveedor "${vendorName}" (NIT: ${vendorNit}): HTTP ${result.status}`);
   }
@@ -95,16 +108,18 @@ async function createNSExpenseReport(
     subsidiaryNsId: string;
     trandate:       string;
     memo:           string;
+    externalId:     string;
     lines:          ExpenseLineForNS[];
   },
 ): Promise<string> {
   const url = `${buildRestApiUrl(creds.accountId)}/expensereport`;
   const result = await nsRest("POST", url, creds, {
+    externalId:  opts.externalId,
     employee:    { id: opts.employeeNsId },
     subsidiary:  { id: opts.subsidiaryNsId },
     trandate:    opts.trandate,
     memo:        opts.memo,
-    expenselist: { expense: opts.lines },
+    expense:     { items: opts.lines },
   });
   if (!result.ok) {
     const d = result.data as Record<string, unknown> | null;
@@ -129,11 +144,25 @@ async function createNSVendorBill(
     invoiceNumber:    string;
     invoiceDate:      string;
     memo:             string;
-    total:            number;
-    description:      string;
+    externalId:       string;
+    currency:         string | null;
+    accountNsId:      string;
+    amount:           number;
+    department?:      string | null;
+    class?:           string | null;
   },
 ): Promise<string> {
   const { processDocument } = await import("@/lib/netsuite/client");
+  // Employee expenses paid to a vendor have no catalog item — they post to the
+  // Vendor Bill's expense sublist against the category's GL account.
+  const expenseLine: Record<string, unknown> = {
+    account_internal_id: opts.accountNsId,
+    amount:              opts.amount,
+    memo:                opts.memo,
+  };
+  if (opts.department) expenseLine.department = opts.department;
+  if (opts.class)      expenseLine.class      = opts.class;
+
   const result = await processDocument(creds, opts.processScriptId, opts.processDeployId, {
     document_type:          "invoice",
     dry_run:                false,
@@ -141,14 +170,10 @@ async function createNSVendorBill(
     subsidiary_internal_id: opts.subsidiaryNsId,
     invoice_number:         opts.invoiceNumber,
     invoice_date:           opts.invoiceDate,
+    external_id:            opts.externalId,
+    currency_internal_id:   opts.currency,
     memo:                   opts.memo,
-    lines: [{
-      item_internal_id: "",
-      quantity:         1,
-      rate:             opts.total,
-      amount:           opts.total,
-      description:      opts.description,
-    }],
+    expense_lines:          [expenseLine],
   });
   if (!result.ok) throw new Error(result.error ?? "Error en NS al crear Vendor Bill");
   const d = result.data as Record<string, unknown>;
@@ -175,7 +200,7 @@ export async function syncReportToNetsuite(reportId: string, orgId: string): Pro
       submitter: { columns: { netsuiteEmployeeId: true, fullName: true, email: true } },
       items: {
         with: {
-          category:   { columns: { netsuiteCategoryId: true } },
+          category:   { columns: { netsuiteCategoryId: true, netsuiteAccountId: true } },
           department: { columns: { netsuiteId: true } },
           class:      { columns: { netsuiteId: true } },
         },
@@ -185,7 +210,9 @@ export async function syncReportToNetsuite(reportId: string, orgId: string): Pro
   });
 
   if (!report) throw new Error("Informe no encontrado");
-  if (report.status !== "approved") {
+  // Allow re-syncing a report that landed in "exception" after a partial failure,
+  // not just freshly-approved ones. "syncing"/"synced" are intentionally excluded.
+  if (report.status !== "approved" && report.status !== "exception") {
     throw new Error(`El informe debe estar aprobado para sincronizar (estado actual: ${report.status})`);
   }
 
@@ -206,12 +233,15 @@ export async function syncReportToNetsuite(reportId: string, orgId: string): Pro
     tokenSecret:    decryptField(conn.tokenSecret),
   };
 
-  // ── 3. Get subsidiary NS ID ────────────────────────────────────────
-  const sub = await db.query.subsidiaries.findFirst({
+  // ── 3. Resolve subsidiary NS ID (deterministic) ───────────────────
+  // The expense report doesn't carry a subsidiary yet (schema gap — tracked
+  // as a follow-up). Instead of silently picking an arbitrary one, we require
+  // an unambiguous choice: exactly one active subsidiary.
+  const activeSubs = await db.query.subsidiaries.findMany({
     where: and(eq(subsidiaries.organizationId, orgId), eq(subsidiaries.isActive, true)),
-    columns: { nsSubsidiaryId: true },
+    columns: { nsSubsidiaryId: true, name: true },
   });
-  const subsidiaryNsId = sub?.nsSubsidiaryId ?? "";
+  const subsidiaryNsId = activeSubs.length === 1 ? (activeSubs[0].nsSubsidiaryId ?? "") : "";
 
   // ── 4. Separate items by record type ──────────────────────────────
   const personalItems   = report.items.filter(i => i.nsRecordType === "expense_report");
@@ -222,6 +252,16 @@ export async function syncReportToNetsuite(reportId: string, orgId: string): Pro
   // ═══════════════════════════════════════════════════════════════════
   const preErrors: string[] = [];
 
+  // A0. Subsidiary must be unambiguous
+  if (activeSubs.length === 0) {
+    preErrors.push("No hay subsidiaria activa para esta organización.");
+  } else if (activeSubs.length > 1) {
+    preErrors.push(
+      "La organización tiene múltiples subsidiarias activas y el informe no especifica cuál usar. " +
+      "Asigna la subsidiaria del informe antes de sincronizar."
+    );
+  }
+
   // A1. Employee NS ID (required for personal items)
   if (personalItems.length > 0 && !report.submitter.netsuiteEmployeeId) {
     preErrors.push(
@@ -230,17 +270,24 @@ export async function syncReportToNetsuite(reportId: string, orgId: string): Pro
     );
   }
 
-  // A2. Category NS ID on every item
-  for (const item of report.items) {
+  // A2. Personal (Expense Report) items need the NS expense category
+  for (const item of personalItems) {
     if (!item.category?.netsuiteCategoryId) {
       preErrors.push(`Línea ${item.lineNumber}: sin categoría de NetSuite (re-sincroniza catálogos)`);
     }
   }
 
-  // A3. VendorNit present on every vendor_bill item
+  // A3. Vendor Bill items need NIT, invoice number, and the category's GL account
+  //     (the expense line on the bill is account-based, not item-based).
   for (const item of vendorBillItems) {
     if (!item.vendorNit) {
       preErrors.push(`Línea ${item.lineNumber}: Vendor Bill requiere NIT/RFC del proveedor`);
+    }
+    if (!item.invoiceNumber) {
+      preErrors.push(`Línea ${item.lineNumber}: Vendor Bill requiere número de factura`);
+    }
+    if (!item.category?.netsuiteAccountId) {
+      preErrors.push(`Línea ${item.lineNumber}: la categoría no tiene cuenta contable de NetSuite (re-sincroniza catálogos)`);
     }
   }
 
@@ -271,7 +318,7 @@ export async function syncReportToNetsuite(reportId: string, orgId: string): Pro
         vendorMap.set(nit, found);
       } else {
         // Auto-create vendor
-        const nsId = await createVendor(creds, nit, item.vendorName ?? nit);
+        const nsId = await createVendor(creds, nit, item.vendorName ?? nit, subsidiaryNsId);
         vendorMap.set(nit, nsId);
         // Persist vendor NS ID so future syncs skip the lookup
         await db.update(expenseItems)
@@ -306,6 +353,11 @@ export async function syncReportToNetsuite(reportId: string, orgId: string): Pro
 
   // C1. Vendor Bills
   for (const item of vendorBillItems) {
+    // Skip items already synced in a previous (partial) run — idempotency.
+    if (item.nsRecordId) {
+      itemResults.push({ itemId: item.id, nsRecordId: item.nsRecordId, error: null });
+      continue;
+    }
     try {
       const vendorNsId   = vendorMap.get(item.vendorNit!)!;
       const invoiceDate  = item.invoiceDate
@@ -320,8 +372,12 @@ export async function syncReportToNetsuite(reportId: string, orgId: string): Pro
         invoiceNumber:   item.invoiceNumber ?? "",
         invoiceDate,
         memo:            item.description ?? report.purpose,
-        total:           Number(item.total),
-        description:     item.description ?? item.vendorName ?? "",
+        externalId:      `docuia-exp:${reportId}:${item.id}`,
+        currency:        item.currency ?? null,
+        accountNsId:     item.category!.netsuiteAccountId!,
+        amount:          Number(item.total),
+        department:      item.department?.netsuiteId ?? null,
+        class:           item.class?.netsuiteId ?? null,
       });
 
       await db.update(expenseItems)
@@ -340,9 +396,10 @@ export async function syncReportToNetsuite(reportId: string, orgId: string): Pro
   }
 
   // C2. Expense Report (personal items — skip if VBs already failed)
-  let nsExpenseReportId: string | null = null;
+  let nsExpenseReportId: string | null = report.netsuiteExpenseReportId ?? null;
 
-  if (personalItems.length > 0 && syncErrors.length === 0) {
+  // Skip if the Expense Report was already created in a previous run.
+  if (personalItems.length > 0 && syncErrors.length === 0 && !nsExpenseReportId) {
     try {
       const today = new Date().toISOString().slice(0, 10);
 
@@ -369,6 +426,7 @@ export async function syncReportToNetsuite(reportId: string, orgId: string): Pro
         subsidiaryNsId,
         trandate:       today,
         memo:           report.purpose,
+        externalId:     `docuia-exp:${reportId}`,
         lines,
       });
 

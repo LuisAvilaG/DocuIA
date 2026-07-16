@@ -1,0 +1,1 @@
+ALTER TABLE "contract_cases" ADD COLUMN "flow_id" varchar(36);

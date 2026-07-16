@@ -36,3 +36,7 @@ export function FeatureProvider({
 export function useFeature(id: string): boolean {
   return useContext(FeatureContext)[id] ?? false;
 }
+
+export function useFeatures(): Record<string, boolean> {
+  return useContext(FeatureContext);
+}

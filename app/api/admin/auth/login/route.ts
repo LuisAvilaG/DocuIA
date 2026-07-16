@@ -14,7 +14,7 @@ export async function POST(req: NextRequest) {
     req.headers.get("x-real-ip") ??
     "unknown";
 
-  const rl = rateLimit(ip, { max: 5, windowSec: 900 });
+  const rl = await rateLimit(ip, { max: 5, windowSec: 900 });
   if (!rl.ok) {
     return NextResponse.json(
       { error: `Demasiados intentos. Inténtalo en ${Math.ceil((rl.retryAfterSec ?? 900) / 60)} min.` },
@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Credenciales inválidas" }, { status: 401 });
     }
 
-    clearRateLimit(ip);
+    await clearRateLimit(ip);
 
     const sessionId  = randomUUID();
     const tokenNonce = randomBytes(32).toString("hex");

@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  typecheck-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Hard gate: types must be sound. This is the regression net that was missing.
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      # Advisory for now: the codebase has pre-existing `any` lint errors. Keep
+      # lint visible without blocking; tighten to a hard gate once cleaned up.
+      - name: Lint
+        run: npx eslint .
+        continue-on-error: true
+
+  # FOLLOW-UP: an e2e job that spins up postgres+minio (services:), runs the
+  # seeds, boots `next start`, and executes scripts/e2e-*.mjs against it. Left
+  # out of the MVP because it needs seeded data + a running server + secrets.

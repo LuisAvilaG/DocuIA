@@ -24,7 +24,7 @@ export async function POST(_req: NextRequest, { params }: Params) {
 
   const tempPassword = randomUUID().slice(0, 12);
   await db.update(orgUsers)
-    .set({ passwordHash: hashSync(tempPassword, 10), updatedAt: new Date() })
+    .set({ passwordHash: hashSync(tempPassword, 12), updatedAt: new Date() })
     .where(eq(orgUsers.id, userId));
 
   return NextResponse.json({ ok: true, tempPassword });

@@ -5,7 +5,9 @@ import { Document, Page, pdfjs } from "react-pdf";
 import { ZoomIn, ZoomOut, ChevronLeft, ChevronRight, FileX } from "lucide-react";
 import type { BBox } from "@/lib/workflow/types";
 
-pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+// Self-hosted worker (copied from pdfjs-dist to /public) — no external CDN
+// dependency (unpkg) as a single point of failure.
+pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 
 interface DocPreviewProps {
   docId: number;

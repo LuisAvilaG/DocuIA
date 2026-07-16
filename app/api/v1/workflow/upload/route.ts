@@ -3,7 +3,8 @@ import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
 import { organizations, subsidiaries } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
-import { runPipeline } from "@/lib/workflow/pipeline";
+import { runPipeline, createQueuedDocument } from "@/lib/workflow/pipeline";
+import { enqueuePipeline } from "@/lib/queue";
 import { isFeatureEnabled } from "@/lib/features";
 
 const ALLOWED_MIME_TYPES = new Set([
@@ -79,7 +80,7 @@ export async function POST(req: NextRequest) {
 
     const fileBuffer = Buffer.from(await file.arrayBuffer());
 
-    const result = await runPipeline({
+    const pipelineInput = {
       organizationId: session.orgId,
       subsidiaryId,
       documentType,
@@ -88,7 +89,34 @@ export async function POST(req: NextRequest) {
       fileBuffer,
       requestedBy: session.sub,
       autoProcessThreshold: org?.autoProcessThreshold ?? undefined,
-    });
+    };
+
+    // ── Async path: only when the file is durably stored (document_storage).
+    // The pipeline runs off the HTTP thread in a pg-boss worker; the client
+    // polls /status. Falls back to inline processing if enqueue fails.
+    const storageEnabled = await isFeatureEnabled(session.orgId, "document_storage");
+    if (storageEnabled) {
+      try {
+        const { documentId, storageKey } = await createQueuedDocument(pipelineInput);
+        await enqueuePipeline({
+          documentId,
+          storageKey,
+          organizationId: session.orgId,
+          subsidiaryId,
+          documentType,
+          fileName: file.name,
+          mimeType: file.type,
+          requestedBy: session.sub,
+          autoProcessThreshold: org?.autoProcessThreshold ?? undefined,
+        });
+        return NextResponse.json({ ok: true, status: "queued", documentId });
+      } catch (queueErr) {
+        // Enqueue/storage failed — fall through to inline so the doc still processes.
+        console.error("[workflow/upload] queue path failed, processing inline:", queueErr);
+      }
+    }
+
+    const result = await runPipeline(pipelineInput);
 
     if (result.status === "failed") {
       return NextResponse.json(

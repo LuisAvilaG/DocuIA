@@ -28,8 +28,12 @@ export const features = pgTable("features", {
   planRequired:   planRequiredEnum("plan_required").notNull().default("starter"),
   isBeta:         boolean("is_beta").notNull().default(false),
   sortOrder:      smallint("sort_order").notNull().default(0),
+  // Product this feature belongs to (null = platform-wide, always available).
+  // Access is gated by the org having that product active (org_products).
+  productKey:     varchar("product_key", { length: 40 }),
   createdAt:      timestamp("created_at").notNull().defaultNow(),
 }, (t) => [
   index("features_category_idx").on(t.category),
   index("features_plan_idx").on(t.planRequired),
+  index("features_product_idx").on(t.productKey),
 ]);

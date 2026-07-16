@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession } from "@/lib/auth/admin";
 import { db } from "@/lib/db";
 import { orgUsers } from "@/db/schema";
-import { eq, and } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { hashSync } from "bcryptjs";
 import { randomUUID } from "crypto";
 
@@ -38,15 +38,14 @@ export async function POST(req: NextRequest, { params }: Params) {
       return NextResponse.json({ error: "email and password are required" }, { status: 400 });
     }
 
+    // Email is globally unique across the platform (not just per-org).
     const existing = await db.query.orgUsers.findFirst({
-      where: and(
-        eq(orgUsers.organizationId, organizationId),
-        eq(orgUsers.email, email.toLowerCase().trim()),
-      ),
+      where: eq(orgUsers.email, email.toLowerCase().trim()),
+      columns: { id: true },
     });
 
     if (existing) {
-      return NextResponse.json({ error: "A user with this email already exists in this organization" }, { status: 409 });
+      return NextResponse.json({ error: "Ya existe un usuario con ese email en la plataforma" }, { status: 409 });
     }
 
     const userId = randomUUID();
@@ -56,7 +55,7 @@ export async function POST(req: NextRequest, { params }: Params) {
       email: email.toLowerCase().trim(),
       fullName: fullName ?? null,
       role: role ?? "admin",
-      passwordHash: hashSync(password, 10),
+      passwordHash: hashSync(password, 12),
       isActive: true,
       emailVerified: true,
       invitedBy: session!.sub,

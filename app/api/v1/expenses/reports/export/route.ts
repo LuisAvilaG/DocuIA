@@ -22,7 +22,9 @@ const PAYMENT_LABELS: Record<string, string> = {
 };
 
 function csvEscape(v: string | null | undefined): string {
-  const s = String(v ?? "");
+  let s = String(v ?? "");
+  // Neutralize CSV formula injection (Excel/Sheets execute cells starting = + - @).
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
   if (s.includes(",") || s.includes('"') || s.includes("\n")) {
     return `"${s.replace(/"/g, '""')}"`;
   }

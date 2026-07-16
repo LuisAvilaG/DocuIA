@@ -10,9 +10,14 @@ async function getWorkflowData(orgId: string) {
     const [subs, recentDocs] = await Promise.all([
       db.query.subsidiaries.findMany({
         where: eq(subsidiaries.organizationId, orgId),
+        columns: { id: true, name: true },
       }),
       db.query.historyDocuments.findMany({
         where: eq(historyDocuments.organizationId, orgId),
+        columns: {
+          id: true, documentType: true, status: true, vendor: true,
+          numDoc: true, total: true, fallbackUsed: true, createdAt: true,
+        },
         orderBy: [desc(historyDocuments.createdAt)],
         limit: 20,
       }),

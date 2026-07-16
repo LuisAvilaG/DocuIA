@@ -22,6 +22,10 @@ export type PipelineInput = {
   fileBuffer:     Buffer;
   requestedBy?:   string;
   autoProcessThreshold?: number;
+  // Set by the queue path: an already-created history row + already-stored file.
+  // When present, runPipeline processes that document instead of creating a new one.
+  documentId?:    number;
+  storageKey?:    string;
 };
 
 export type PipelineResult =
@@ -38,6 +42,28 @@ async function loadFeatures(organizationId: string) {
     isEnabled: (id: string) => map.get(id)?.isEnabled ?? false,
     getConfig: (id: string) => (map.get(id)?.config ?? {}) as Record<string, unknown>,
   };
+}
+
+/**
+ * Queue path: store the file and create the history row up-front so the HTTP
+ * response can return a documentId immediately. The worker later calls
+ * runPipeline() with { documentId, storageKey } to process it off-thread.
+ */
+export async function createQueuedDocument(input: PipelineInput): Promise<{ documentId: number; storageKey: string }> {
+  const storageKey = `${input.organizationId}/${input.subsidiaryId}/${Date.now()}-${input.fileName}`;
+  await uploadFile(input.fileBuffer, storageKey, input.mimeType);
+  const [doc] = await db
+    .insert(historyDocuments)
+    .values({
+      organizationId: input.organizationId,
+      subsidiaryId:   input.subsidiaryId,
+      documentType:   input.documentType,
+      status:         "uploaded",
+      storageKey,
+      processedBy:    input.requestedBy ?? null,
+    })
+    .returning({ id: historyDocuments.id });
+  return { documentId: doc.id, storageKey };
 }
 
 export async function runPipeline(input: PipelineInput): Promise<PipelineResult> {
@@ -73,27 +99,37 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
     allow_additional_lines?: boolean;
   };
 
-  const storageKey = `${input.organizationId}/${input.subsidiaryId}/${Date.now()}-${input.fileName}`;
+  const storageKey = input.storageKey
+    ?? `${input.organizationId}/${input.subsidiaryId}/${Date.now()}-${input.fileName}`;
 
-  // ── 1. Persist to storage (only if document_storage enabled) ─────────────
-  if (storageEnabled) {
+  // ── 1. Persist to storage ────────────────────────────────────────────────
+  // Skip when the queue path already stored the file (input.storageKey set).
+  if (storageEnabled && !input.storageKey) {
     await uploadFile(input.fileBuffer, storageKey, input.mimeType);
   }
 
-  // ── 2. Create history record ──────────────────────────────────────────────
-  const [doc] = await db
-    .insert(historyDocuments)
-    .values({
-      organizationId: input.organizationId,
-      subsidiaryId:   input.subsidiaryId,
-      documentType:   input.documentType,
-      status:         "extracting",
-      storageKey:     storageEnabled ? storageKey : null,
-      processedBy:    input.requestedBy ?? null,
-    })
-    .returning({ id: historyDocuments.id });
-
-  const docId = doc.id;
+  // ── 2. Create (or reuse) history record ───────────────────────────────────
+  let docId: number;
+  if (input.documentId) {
+    // Queue path: row already exists (status "uploaded") — move it to extracting.
+    docId = input.documentId;
+    await db.update(historyDocuments)
+      .set({ status: "extracting", updatedAt: new Date() })
+      .where(eq(historyDocuments.id, docId));
+  } else {
+    const [doc] = await db
+      .insert(historyDocuments)
+      .values({
+        organizationId: input.organizationId,
+        subsidiaryId:   input.subsidiaryId,
+        documentType:   input.documentType,
+        status:         "extracting",
+        storageKey:     storageEnabled ? storageKey : null,
+        processedBy:    input.requestedBy ?? null,
+      })
+      .returning({ id: historyDocuments.id });
+    docId = doc.id;
+  }
 
   await logWorkflow({
     organizationId: input.organizationId,
@@ -138,7 +174,10 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
           purchaseOrder: "",
           currency:      cfdiData.moneda,
           subtotal:      cfdiData.subTotal,
-          tax:           cfdiData.total - cfdiData.subTotal,
+          // Real transferred taxes (IVA), not the old total − subtotal which
+          // conflated descuento and retenciones. Total stays authoritative from
+          // the CFDI (already nets descuento/retenciones per the SAT formula).
+          tax:           cfdiData.totalTraslados,
           total:         cfdiData.total,
           lines:         cfdiData.lineas.map(l => ({
             description: l.descripcion,
@@ -314,6 +353,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
         dryRun,
         customFormId: customFormId || undefined,
         poConfig,
+        externalId: `docuia:${input.organizationId}:${docId}`,
       })
     );
 
@@ -461,14 +501,16 @@ function buildNsPayload(
   options: {
     dryRun?:       boolean;
     customFormId?: string;
+    externalId?:   string;
     poConfig?:     { apply_to_po_lines?: boolean; set_unselected_po_lines_to_zero?: boolean; allow_additional_lines?: boolean };
   } = {}
 ): Record<string, unknown> {
-  const { dryRun = false, customFormId, poConfig = {} } = options;
+  const { dryRun = false, customFormId, externalId, poConfig = {} } = options;
   return {
     documentType,
     dry_run:                     dryRun,
     ...(customFormId ? { customform_id: customFormId } : {}),
+    ...(externalId ? { external_id: externalId } : {}),
     subsidiary_internal_id:      subsidiaryId,
     vendor_id:                   payload.document.vendor.selected_internal_id,
     document_number:             payload.document.invoice_number,

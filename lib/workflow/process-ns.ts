@@ -44,6 +44,7 @@ function buildRestletBody(payload: Record<string, unknown>): Record<string, unkn
   const memo = normalize(payload.memo || "");
   const locationId = normalize(payload.location_internal_id || "");
   const currency = normalize(payload.currency_internal_id || "");
+  const externalId = normalize(payload.external_id || "");
 
   const lines = Array.isArray(payload.line_items)
     ? (payload.line_items as Record<string, unknown>[])
@@ -71,6 +72,7 @@ function buildRestletBody(payload: Record<string, unknown>): Record<string, unkn
     po_internal_id: poId || null,
     invoice_number: invoiceNumber,
     invoice_date: invoiceDate,
+    external_id: externalId || null,
     due_date: isPoType ? receiptDate || null : null,
     receipt_date: isPoType ? receiptDate || null : null,
     currency_internal_id: currency || null,

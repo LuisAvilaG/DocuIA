@@ -10,7 +10,7 @@ import {
   Trash2, Plus, ExternalLink, XCircle,
 } from "lucide-react";
 import type { BBox } from "@/lib/workflow/types";
-import { DocPreview } from "./doc-preview";
+import { DocPreview } from "./doc-preview-lazy";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 

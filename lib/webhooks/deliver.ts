@@ -2,6 +2,7 @@ import { createHmac } from "crypto";
 import { db } from "@/lib/db";
 import { webhooks } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
+import { assertPublicHttpsUrl } from "./ssrf";
 
 export type WebhookEvent = "document.completed" | "document.review" | "document.failed";
 
@@ -54,6 +55,8 @@ export async function deliverWebhooks(
       const sig = sign(bodyStr, hook.secret);
       let statusCode = 0;
       try {
+        // Re-validate at delivery time to defeat DNS rebinding since save.
+        await assertPublicHttpsUrl(hook.url);
         const res = await fetch(hook.url, {
           method: "POST",
           headers: {

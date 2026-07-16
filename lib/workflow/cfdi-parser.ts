@@ -15,6 +15,9 @@ export type CfdiData = {
   uuid: string;
   tipoComprobante: string;
   subTotal: number;
+  descuento: number;
+  totalTraslados: number;    // TotalImpuestosTrasladados (e.g. IVA)
+  totalRetenciones: number;  // TotalImpuestosRetenidos (retenciones)
   total: number;
   moneda: string;
   emisorRfc: string;
@@ -36,12 +39,14 @@ function num(v: string): number {
 }
 
 function extractTag(xml: string, tag: string): string {
-  const re = new RegExp(`<(?:cfdi:)?${tag}[^>]*>`, "i");
+  // Lookahead (?=[\s/>]) prevents matching a longer sibling tag
+  // (e.g. tag "Concepto" must NOT match "<cfdi:Conceptos>").
+  const re = new RegExp(`<(?:cfdi:)?${tag}(?=[\\s/>])[^>]*>`, "i");
   return re.exec(xml)?.[0] ?? "";
 }
 
 function extractAllTags(xml: string, tag: string): string[] {
-  const re = new RegExp(`<(?:cfdi:)?${tag}[^>]*/?>`, "gi");
+  const re = new RegExp(`<(?:cfdi:)?${tag}(?=[\\s/>])[^>]*/?>`, "gi");
   return xml.match(re) ?? [];
 }
 
@@ -56,15 +61,23 @@ export function parseCfdi(xmlText: string): CfdiData {
   const receptorTag = extractTag(xmlText, "Receptor");
   const conceptos   = extractAllTags(xmlText, "Concepto");
 
-  const lineas: CfdiLine[] = conceptos.map(c => ({
-    claveProdServ:    attr(c, "ClaveProdServ"),
-    noIdentificacion: attr(c, "NoIdentificacion"),
-    cantidad:         num(attr(c, "Cantidad")),
-    claveUnidad:      attr(c, "ClaveUnidad"),
-    descripcion:      attr(c, "Descripcion"),
-    valorUnitario:    num(attr(c, "ValorUnitario")),
-    importe:          num(attr(c, "Importe")),
-  }));
+  const lineas: CfdiLine[] = conceptos
+    .map(c => ({
+      claveProdServ:    attr(c, "ClaveProdServ"),
+      noIdentificacion: attr(c, "NoIdentificacion"),
+      cantidad:         num(attr(c, "Cantidad")),
+      claveUnidad:      attr(c, "ClaveUnidad"),
+      descripcion:      attr(c, "Descripcion"),
+      valorUnitario:    num(attr(c, "ValorUnitario")),
+      importe:          num(attr(c, "Importe")),
+    }))
+    // Defensive: drop any empty phantom line (no description, no amount, no qty)
+    .filter(l => l.descripcion || l.importe || l.cantidad);
+
+  // Global tax totals live only on the Comprobante-level <cfdi:Impuestos> node,
+  // so these attribute names are unique in the document.
+  const totalTraslados   = num(attr(xmlText, "TotalImpuestosTrasladados"));
+  const totalRetenciones = num(attr(xmlText, "TotalImpuestosRetenidos"));
 
   return {
     version:          attr(comprobante, "Version") || attr(comprobante, "version"),
@@ -73,6 +86,9 @@ export function parseCfdi(xmlText: string): CfdiData {
     uuid:             extractUUID(xmlText),
     tipoComprobante:  attr(comprobante, "TipoDeComprobante"),
     subTotal:         num(attr(comprobante, "SubTotal")),
+    descuento:        num(attr(comprobante, "Descuento")),
+    totalTraslados,
+    totalRetenciones,
     total:            num(attr(comprobante, "Total")),
     moneda:           attr(comprobante, "Moneda"),
     emisorRfc:        attr(emisorTag, "Rfc"),

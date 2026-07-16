@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { organizations, nsConnections, subsidiaries, catalogItems, catalogVendors, catalogLocations } from "@/db/schema";
-import { and, eq, max } from "drizzle-orm";
+import { nsConnections, subsidiaries, catalogItems, catalogVendors, catalogLocations } from "@/db/schema";
+import { and, eq, max, sql } from "drizzle-orm";
 import { getFeature } from "@/lib/features";
 import { fetchCatalogPage } from "@/lib/netsuite/client";
 import type { NSCredentials } from "@/lib/netsuite/oauth";
@@ -94,51 +94,63 @@ export async function GET(req: NextRequest) {
             const rows = result.data.results;
             if (!rows.length) break;
 
+            // Batch upsert the whole page in one statement (was one round-trip
+            // per row → 500 per page). set: reads each row's own EXCLUDED values.
             if (type === "items") {
-              for (const row of rows as NSCatalogItem[]) {
-                await db.insert(catalogItems).values({
-                  subsidiaryId: sub.id,
-                  internalId:   row.internal_id,
-                  itemid:       row.itemid || null,
-                  name:         row.name   || null,
-                  type:         row.type   || null,
-                  unit:         row.unit   || null,
-                  drtUnitId:    row.drt_unit_uom_id   || null,
-                  drtUnitName:  row.drt_unit_uom_name || null,
-                  updatedAt:    now,
-                }).onConflictDoUpdate({
+              const values = (rows as NSCatalogItem[]).map(row => ({
+                subsidiaryId: sub.id,
+                internalId:   row.internal_id,
+                itemid:       row.itemid || null,
+                name:         row.name   || null,
+                type:         row.type   || null,
+                unit:         row.unit   || null,
+                drtUnitId:    row.drt_unit_uom_id   || null,
+                drtUnitName:  row.drt_unit_uom_name || null,
+                updatedAt:    now,
+              }));
+              if (values.length) {
+                await db.insert(catalogItems).values(values).onConflictDoUpdate({
                   target: [catalogItems.subsidiaryId, catalogItems.internalId],
-                  set: { itemid: row.itemid || null, name: row.name || null, type: row.type || null,
-                         unit: row.unit || null, drtUnitId: row.drt_unit_uom_id || null,
-                         drtUnitName: row.drt_unit_uom_name || null, updatedAt: now },
+                  set: {
+                    itemid: sql`excluded.itemid`, name: sql`excluded.name`, type: sql`excluded.type`,
+                    unit: sql`excluded.unit`, drtUnitId: sql`excluded.drt_unit_id`,
+                    drtUnitName: sql`excluded.drt_unit_name`, updatedAt: sql`excluded.updated_at`,
+                  },
                 });
               }
             }
             if (type === "vendors") {
-              for (const row of rows as NSVendor[]) {
-                await db.insert(catalogVendors).values({
-                  subsidiaryId: sub.id, internalId: row.internal_id,
-                  entityid: row.entityid || null, name: row.name || null,
-                  email: row.email || null, phone: row.phone || null,
-                  rfc: row.rfc || null, isInactive: row.inactive ?? false, updatedAt: now,
-                }).onConflictDoUpdate({
+              const values = (rows as NSVendor[]).map(row => ({
+                subsidiaryId: sub.id, internalId: row.internal_id,
+                entityid: row.entityid || null, name: row.name || null,
+                email: row.email || null, phone: row.phone || null,
+                rfc: row.rfc || null, isInactive: row.inactive ?? false, updatedAt: now,
+              }));
+              if (values.length) {
+                await db.insert(catalogVendors).values(values).onConflictDoUpdate({
                   target: [catalogVendors.subsidiaryId, catalogVendors.internalId],
-                  set: { entityid: row.entityid || null, name: row.name || null,
-                         email: row.email || null, phone: row.phone || null,
-                         rfc: row.rfc || null, isInactive: row.inactive ?? false, updatedAt: now },
+                  set: {
+                    entityid: sql`excluded.entityid`, name: sql`excluded.name`,
+                    email: sql`excluded.email`, phone: sql`excluded.phone`,
+                    rfc: sql`excluded.rfc`, isInactive: sql`excluded.is_inactive`,
+                    updatedAt: sql`excluded.updated_at`,
+                  },
                 });
               }
             }
             if (type === "locations") {
-              for (const row of rows as NSLocation[]) {
-                await db.insert(catalogLocations).values({
-                  subsidiaryId: sub.id, internalId: row.internal_id,
-                  name: row.name || null, fullName: row.full_name || null,
-                  isInactive: row.inactive ?? false, updatedAt: now,
-                }).onConflictDoUpdate({
+              const values = (rows as NSLocation[]).map(row => ({
+                subsidiaryId: sub.id, internalId: row.internal_id,
+                name: row.name || null, fullName: row.full_name || null,
+                isInactive: row.inactive ?? false, updatedAt: now,
+              }));
+              if (values.length) {
+                await db.insert(catalogLocations).values(values).onConflictDoUpdate({
                   target: [catalogLocations.subsidiaryId, catalogLocations.internalId],
-                  set: { name: row.name || null, fullName: row.full_name || null,
-                         isInactive: row.inactive ?? false, updatedAt: now },
+                  set: {
+                    name: sql`excluded.name`, fullName: sql`excluded.full_name`,
+                    isInactive: sql`excluded.is_inactive`, updatedAt: sql`excluded.updated_at`,
+                  },
                 });
               }
             }

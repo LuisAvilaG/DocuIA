@@ -1,15 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
-
-const secret = () =>
-  new TextEncoder().encode(
-    process.env.JWT_SECRET ?? "docuia-dev-secret-key-for-local-use-only-xxxxxxxx"
-  );
+import { jwtSecret } from "@/lib/env";
 
 const TENANT_ROUTES = [
   "/dashboard", "/workflow", "/history", "/exceptions",
   "/mappings", "/catalogs", "/statistics", "/settings",
-  "/expenses", "/accounting",
+  "/expenses", "/accounting", "/contracts",
 ];
 
 export async function proxy(req: NextRequest) {
@@ -20,7 +16,7 @@ export async function proxy(req: NextRequest) {
     const token = req.cookies.get("admin_access_token")?.value;
     if (token) {
       try {
-        const { payload } = await jwtVerify(token, secret());
+        const { payload } = await jwtVerify(token, jwtSecret(), { algorithms: ["HS256"] });
         if (payload.type === "platform_admin")
           return NextResponse.redirect(new URL("/admin", req.url));
       } catch { /* invalid/expired — let through */ }
@@ -33,7 +29,7 @@ export async function proxy(req: NextRequest) {
     const token = req.cookies.get("admin_access_token")?.value;
     if (!token) return NextResponse.redirect(new URL("/admin/login", req.url));
     try {
-      const { payload } = await jwtVerify(token, secret());
+      const { payload } = await jwtVerify(token, jwtSecret(), { algorithms: ["HS256"] });
       if (payload.type !== "platform_admin") throw new Error();
       return NextResponse.next();
     } catch {
@@ -49,7 +45,7 @@ export async function proxy(req: NextRequest) {
     const token = req.cookies.get("access_token")?.value;
     if (token) {
       try {
-        const { payload } = await jwtVerify(token, secret());
+        const { payload } = await jwtVerify(token, jwtSecret(), { algorithms: ["HS256"] });
         if (payload.type === "org_user")
           return NextResponse.redirect(new URL("/dashboard", req.url));
       } catch { /* let through */ }
@@ -63,7 +59,7 @@ export async function proxy(req: NextRequest) {
     const token = req.cookies.get("access_token")?.value;
     if (!token) return NextResponse.redirect(new URL("/login", req.url));
     try {
-      const { payload } = await jwtVerify(token, secret());
+      const { payload } = await jwtVerify(token, jwtSecret(), { algorithms: ["HS256"] });
       if (payload.type !== "org_user") throw new Error();
       return NextResponse.next();
     } catch {
@@ -90,6 +86,7 @@ export const config = {
     "/settings/:path*",
     "/expenses/:path*",
     "/accounting/:path*",
+    "/contracts/:path*",
     "/login",
   ],
 };

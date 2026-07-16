@@ -1,7 +1,6 @@
 import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
-
-const secret = new TextEncoder().encode(process.env.JWT_SECRET!);
+import { jwtSecret, refreshSecret } from "@/lib/env";
 
 export interface AccessTokenPayload {
   sub: string;          // user id
@@ -23,7 +22,7 @@ export async function signAccessToken(payload: AccessTokenPayload): Promise<stri
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime(process.env.JWT_EXPIRES_IN ?? "15m")
-    .sign(secret);
+    .sign(jwtSecret());
 }
 
 export async function signRefreshToken(payload: RefreshTokenPayload): Promise<string> {
@@ -31,16 +30,16 @@ export async function signRefreshToken(payload: RefreshTokenPayload): Promise<st
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime(process.env.JWT_REFRESH_EXPIRES_IN ?? "7d")
-    .sign(secret);
+    .sign(refreshSecret());
 }
 
 export async function verifyAccessToken(token: string): Promise<AccessTokenPayload> {
-  const { payload } = await jwtVerify(token, secret);
+  const { payload } = await jwtVerify(token, jwtSecret(), { algorithms: ["HS256"] });
   return payload as unknown as AccessTokenPayload;
 }
 
 export async function verifyRefreshToken(token: string): Promise<RefreshTokenPayload> {
-  const { payload } = await jwtVerify(token, secret);
+  const { payload } = await jwtVerify(token, refreshSecret(), { algorithms: ["HS256"] });
   return payload as unknown as RefreshTokenPayload;
 }
 

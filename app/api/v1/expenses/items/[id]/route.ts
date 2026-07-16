@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { isFeatureEnabled } from "@/lib/features";
 import { db } from "@/lib/db";
-import { expenseItems, expenseReports } from "@/db/schema";
-import { eq, and } from "drizzle-orm";
+import { expenseItems } from "@/db/schema";
+import { eq } from "drizzle-orm";
+import { validateExpenseAmounts } from "@/lib/expense/tax-engine";
 
 export async function DELETE(
   req: NextRequest,
@@ -59,6 +60,25 @@ export async function PATCH(
   const updates: Record<string, unknown> = { updatedAt: new Date() };
   for (const key of allowed) {
     if (key in body) updates[key] = body[key];
+  }
+
+  // SECURITY: if any money field is being edited, re-validate the resulting
+  // amounts (merge of stored + incoming) so the persisted total can never
+  // diverge from its components.
+  const moneyFields = ["subtotal", "taxAmount", "retentionAmount", "total"] as const;
+  if (moneyFields.some(f => f in body)) {
+    const amounts = {
+      subtotal:        "subtotal"        in body ? Number(body.subtotal)        : Number(item.subtotal),
+      taxAmount:       "taxAmount"       in body ? Number(body.taxAmount)       : Number(item.taxAmount),
+      retentionAmount: "retentionAmount" in body ? Number(body.retentionAmount) : Number(item.retentionAmount),
+      total:           "total"           in body ? Number(body.total)           : Number(item.total),
+    };
+    const amountCheck = validateExpenseAmounts(amounts);
+    if (!amountCheck.ok) return NextResponse.json({ error: amountCheck.error }, { status: 400 });
+    // Persist coerced numeric strings, never raw client values.
+    for (const f of moneyFields) {
+      if (f in body) updates[f] = String(amounts[f]);
+    }
   }
 
   await db.update(expenseItems).set(updates as any).where(eq(expenseItems.id, id));

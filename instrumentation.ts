@@ -3,6 +3,15 @@
 // request thread. Guarded to the Node.js runtime (pg-boss can't run on Edge).
 export async function register() {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
+
+  // First-boot: create the platform super-admin from env if it doesn't exist.
+  try {
+    const { seedPlatformAdmin } = await import("@/lib/bootstrap/seed-admin");
+    await seedPlatformAdmin();
+  } catch (err) {
+    console.error("[instrumentation] seed admin failed:", err);
+  }
+
   try {
     const { startPipelineWorker } = await import("@/lib/queue");
     await startPipelineWorker();

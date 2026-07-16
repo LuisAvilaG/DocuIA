@@ -4,13 +4,19 @@ services:
     container_name: docuia-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: docuia
-      POSTGRES_USER: docuia_user
-      POSTGRES_PASSWORD: docuia_local_pass
+      POSTGRES_DB: ${POSTGRES_DB:-docuia}
+      POSTGRES_USER: ${POSTGRES_USER:-docuia_user}
+      # Override in any shared/prod environment via .env — the default is LOCAL DEV ONLY.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-docuia_local_pass}
     ports:
       - "5432:5432"
     volumes:
       - docuia_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-docuia_user} -d ${POSTGRES_DB:-docuia}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   minio:
     image: minio/minio:latest
@@ -18,13 +24,19 @@ services:
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin123
+      # Override in any shared/prod environment via .env — defaults are LOCAL DEV ONLY.
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin123}
     ports:
       - "9000:9000"
       - "9001:9001"
     volumes:
       - docuia_minio_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || curl -f http://localhost:9000/minio/health/live || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
 
 volumes:
   docuia_postgres_data:

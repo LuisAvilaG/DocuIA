@@ -2,10 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { isFeatureEnabled } from "@/lib/features";
 import { db } from "@/lib/db";
-import { expenseReports, expenseItems, expenseDocuments, expenseCategories } from "@/db/schema";
-import { eq, and, sum, count } from "drizzle-orm";
+import { expenseReports, expenseItems, expenseDocuments } from "@/db/schema";
+import { eq, and } from "drizzle-orm";
 import { randomUUID } from "crypto";
-import { calculateTaxes } from "@/lib/expense/tax-engine";
+import { validateExpenseAmounts } from "@/lib/expense/tax-engine";
 
 export async function POST(req: NextRequest) {
   const session = await getTenantSession();
@@ -42,7 +42,16 @@ export async function POST(req: NextRequest) {
     };
 
     if (!body.reportId) return NextResponse.json({ error: "reportId requerido" }, { status: 400 });
-    if (!body.subtotal || body.subtotal <= 0) return NextResponse.json({ error: "El subtotal debe ser mayor a 0" }, { status: 400 });
+
+    // SECURITY: never trust client-computed money. Enforce arithmetic + bounds.
+    const amounts = {
+      subtotal:        Number(body.subtotal),
+      taxAmount:       Number(body.taxAmount ?? 0),
+      retentionAmount: Number(body.retentionAmount ?? 0),
+      total:           Number(body.total),
+    };
+    const amountCheck = validateExpenseAmounts(amounts);
+    if (!amountCheck.ok) return NextResponse.json({ error: amountCheck.error }, { status: 400 });
 
     // Verify report belongs to org and is in draft
     const report = await db.query.expenseReports.findFirst({
@@ -86,10 +95,10 @@ export async function POST(req: NextRequest) {
       vendorNit:                body.vendorNit?.trim() || null,
       invoiceNumber:            body.invoiceNumber?.trim() || null,
       invoiceDate:              body.invoiceDate ? new Date(body.invoiceDate) : null,
-      subtotal:                 String(body.subtotal),
-      taxAmount:                String(body.taxAmount ?? 0),
-      retentionAmount:          String(body.retentionAmount ?? 0),
-      total:                    String(body.total),
+      subtotal:                 String(amounts.subtotal),
+      taxAmount:                String(amounts.taxAmount),
+      retentionAmount:          String(amounts.retentionAmount),
+      total:                    String(amounts.total),
       currency:                 body.currency ?? "COP",
       paymentMethod:            body.paymentMethod,
       documentTypeDetected:     docType as any,

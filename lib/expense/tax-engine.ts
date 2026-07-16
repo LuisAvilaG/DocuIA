@@ -35,6 +35,7 @@ export interface TaxCalculationInput {
   categoryId?: string;
   documentType?: string;
   subtotal: number;
+  total?: number;         // known gross — used only by rules whose base is "total"
   vendorRegime?: string;
   orgRules?: TaxRule[];
 }
@@ -54,7 +55,24 @@ export interface TaxCalculationResult {
   total: number;
 }
 
-// ── Default rules (used when no DB rules exist for the org) ───────────
+// Deterministic money rounding (half-up on the cent). Avoids toFixed string
+// artifacts; a single rounding pass per tax and on the final total.
+function roundMoney(n: number): number {
+  return Math.round((n + Number.EPSILON) * 100) / 100;
+}
+
+// Minimum base (COP) above which Colombian source withholding applies.
+// NOTE: this is a UVT-derived threshold frozen for a specific fiscal year —
+// it MUST be reviewed/updated per fiscal year and per client.
+const CO_SERVICES_WITHHOLDING_MIN = 867000;
+
+// ── Default rules — UNVERIFIED TEMPLATES ──────────────────────────────
+//
+// ⚠️ These are starter templates, NOT tax advice. Rates, thresholds and
+// municipalities (e.g. ReteICA Bogotá, Retefuente 11%, UVT thresholds) vary by
+// client, activity and fiscal year. They are used ONLY when the org has no rules
+// configured in `expense_tax_rules`. Each client MUST review and override them.
+// Used only when no DB rules exist for the org.
 
 export const DEFAULT_TAX_RULES: TaxRule[] = [
   // Colombia — IVA 19% general (facturas y cuentas de cobro)
@@ -71,9 +89,9 @@ export const DEFAULT_TAX_RULES: TaxRule[] = [
     name: "Retención en la Fuente CO — Servicios",
     trigger: {
       document_types: ["invoice", "cuenta_cobro"],
-      amount_range: { min: 867000, max: null },
+      amount_range: { min: CO_SERVICES_WITHHOLDING_MIN, max: null },
     },
-    taxes: [{ type: "RETEFUENTE", rate: 0.11, base: "subtotal", condition: "subtotal >= 867000", ns_tax_code: "RETEFUENTE_11" }],
+    taxes: [{ type: "RETEFUENTE", rate: 0.11, base: "subtotal", condition: `subtotal >= ${CO_SERVICES_WITHHOLDING_MIN}`, ns_tax_code: "RETEFUENTE_11" }],
     priority: 20,
   },
   // Colombia — ReteICA Bogotá (0.69% — common default)
@@ -197,18 +215,69 @@ export function calculateTaxes(input: TaxCalculationInput): TaxCalculationResult
   for (const rule of rules) {
     for (const tax of rule.taxes) {
       if (seenTypes.has(tax.type)) continue;
-      const base = tax.base === "subtotal" ? input.subtotal : input.subtotal;
+      const base = tax.base === "total" ? (input.total ?? input.subtotal) : input.subtotal;
       if (tax.condition && !evaluateCondition(tax.condition, input.subtotal)) continue;
-      const amount = parseFloat((base * tax.rate).toFixed(2));
+      const amount = roundMoney(base * tax.rate);
       calculated.push({ type: tax.type, rate: tax.rate, base, amount, nsTaxCode: tax.ns_tax_code });
       seenTypes.add(tax.type);
     }
   }
 
   const retentionTypes = ["RETEFUENTE", "RETEICA", "ISR_RETENCION", "RETEIVA"];
-  const totalTax       = calculated.filter(t => !retentionTypes.includes(t.type)).reduce((s, t) => s + t.amount, 0);
-  const totalRetention = calculated.filter(t =>  retentionTypes.includes(t.type)).reduce((s, t) => s + t.amount, 0);
-  const total          = parseFloat((input.subtotal + totalTax - totalRetention).toFixed(2));
+  const totalTax       = roundMoney(calculated.filter(t => !retentionTypes.includes(t.type)).reduce((s, t) => s + t.amount, 0));
+  const totalRetention = roundMoney(calculated.filter(t =>  retentionTypes.includes(t.type)).reduce((s, t) => s + t.amount, 0));
+  const total          = roundMoney(input.subtotal + totalTax - totalRetention);
 
   return { taxes: calculated, totalTax, totalRetention, total };
+}
+
+// ── Server-side amount validation ─────────────────────────────────────
+//
+// SECURITY: the expense capture UI computes taxes client-side, but the
+// persisted amounts must never be trusted blindly. This validator enforces
+// the arithmetic invariant (total == subtotal + tax − retention) plus sanity
+// bounds, which fully closes the "subtotal: 100, total: 5.000.000" exploit.
+//
+// It deliberately does NOT force the tax-engine's computed tax: OCR and manual
+// entry legitimately produce non-default rates (IVA exento, tasas reducidas),
+// so rejecting on rule divergence would block valid documents.
+
+export interface ExpenseAmounts {
+  subtotal:        number;
+  taxAmount:       number;
+  retentionAmount: number;
+  total:           number;
+}
+
+export interface AmountValidationResult {
+  ok:     boolean;
+  error?: string;
+}
+
+export const MONEY_TOLERANCE = 0.01;
+
+export function validateExpenseAmounts(a: ExpenseAmounts): AmountValidationResult {
+  for (const [name, v] of Object.entries(a)) {
+    if (typeof v !== "number" || !Number.isFinite(v)) {
+      return { ok: false, error: `El campo "${name}" no es un número válido` };
+    }
+  }
+  const { subtotal, taxAmount, retentionAmount, total } = a;
+  if (subtotal <= 0)        return { ok: false, error: "El subtotal debe ser mayor a 0" };
+  if (total <= 0)           return { ok: false, error: "El total debe ser mayor a 0" };
+  if (taxAmount < 0)        return { ok: false, error: "El impuesto no puede ser negativo" };
+  if (retentionAmount < 0)  return { ok: false, error: "La retención no puede ser negativa" };
+  if (taxAmount > subtotal + MONEY_TOLERANCE)
+    return { ok: false, error: "El impuesto no puede superar el subtotal" };
+  if (retentionAmount > subtotal + MONEY_TOLERANCE)
+    return { ok: false, error: "La retención no puede superar el subtotal" };
+
+  const expected = subtotal + taxAmount - retentionAmount;
+  if (Math.abs(expected - total) > MONEY_TOLERANCE) {
+    return {
+      ok: false,
+      error: `El total (${total.toFixed(2)}) no coincide con subtotal + impuesto − retención (${expected.toFixed(2)})`,
+    };
+  }
+  return { ok: true };
 }

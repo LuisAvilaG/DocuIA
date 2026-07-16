@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { organizations, subscriptions } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { getAllFeatures } from "@/lib/features";
+import { getActiveProductKeys } from "@/lib/products";
 import { FeatureProvider } from "@/components/providers/feature-provider";
 import { TenantSidebar } from "@/components/tenant/tenant-sidebar";
 import { DryRunBanner } from "@/components/tenant/dry-run-banner";
@@ -37,10 +38,11 @@ export default async function TenantLayout({ children }: { children: React.React
   // expense_submitter has its own layout under (expenses)
   if (session.role === "expense_submitter") redirect("/expenses");
 
-  const [org, subscription, resolvedFeatures] = await Promise.all([
+  const [org, subscription, resolvedFeatures, activeProducts] = await Promise.all([
     db.query.organizations.findFirst({ where: eq(organizations.id, session.orgId) }),
     db.query.subscriptions.findFirst({ where: eq(subscriptions.organizationId, session.orgId) }),
     getAllFeatures(session.orgId),
+    getActiveProductKeys(session.orgId),
   ]);
 
   if (!org) redirect("/login");
@@ -99,6 +101,7 @@ export default async function TenantLayout({ children }: { children: React.React
           plan={(subscription?.planId ?? "starter") as "starter" | "growth" | "enterprise"}
           userEmail={session.email}
           userRole={session.role ?? "operator"}
+          activeProducts={[...activeProducts]}
           whiteLabel={wlConfig ? {
             companyName:  wlConfig.company_name || undefined,
             logoUrl:      wlConfig.logo_url      || undefined,

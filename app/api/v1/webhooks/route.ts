@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { webhooks } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { randomBytes } from "crypto";
+import { assertPublicHttpsUrl } from "@/lib/webhooks/ssrf";
 
 const MAX_WEBHOOKS = 10;
 const VALID_EVENTS = new Set(["completed", "review", "failed"]);
@@ -47,6 +48,12 @@ export async function POST(req: NextRequest) {
     }
     if (body.url.length > 500) {
       return NextResponse.json({ error: "URL demasiado larga" }, { status: 400 });
+    }
+    // SSRF guard: reject hosts that are (or resolve to) internal addresses.
+    try {
+      await assertPublicHttpsUrl(body.url);
+    } catch (e) {
+      return NextResponse.json({ error: e instanceof Error ? e.message : "URL no permitida" }, { status: 400 });
     }
 
     const events = Array.isArray(body.events) ? body.events : ["completed", "review", "failed"];

@@ -132,14 +132,15 @@ function getInstruction(): string {
     "Do not include markdown, comments, or explanations.",
     "Do not invent values — use null or empty string if unknown.",
     "Vendor must be supplier name only, never address or contact text.",
+    "Dates (invoice_date, due_date) MUST be returned in ISO format YYYY-MM-DD. Never use DD/MM/YYYY or MM/DD/YYYY.",
     "Capture all line items present before subtotal/tax/total.",
     "For each line include bbox: the visual bounding box of that line in the document (page is 1-indexed; x1,y1 are the top-left corner; x2,y2 are the bottom-right corner; all coordinates normalized 0.0-1.0).",
     "Schema:",
     JSON.stringify({
       vendor:         "string",
       invoice_number: "string",
-      invoice_date:   "string",
-      due_date:       "string",
+      invoice_date:   "YYYY-MM-DD",
+      due_date:       "YYYY-MM-DD",
       purchase_order: "string",
       currency:       "string",
       subtotal:       "number|null",
@@ -160,6 +161,15 @@ function getInstruction(): string {
 
 type GeminiPart = Record<string, unknown>;
 
+// Transient Gemini errors worth retrying: rate limits and upstream hiccups.
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+const MAX_ATTEMPTS = 4;
+const GEMINI_TIMEOUT_MS = Number(process.env.GEMINI_TIMEOUT_MS) || 90_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function callModel(model: string, parts: GeminiPart[], apiKeyOverride?: string): Promise<{
   text: string;
   promptTokens: number;
@@ -168,22 +178,41 @@ async function callModel(model: string, parts: GeminiPart[], apiKeyOverride?: st
   const apiKey = getApiKey(apiKeyOverride);
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
-  const response = await fetch(url, {
-    method:  "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents:         [{ role: "user", parts }],
-      generationConfig: { temperature: 0, responseMimeType: "application/json" },
-    }),
-    cache: "no-store",
-  });
-
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`AI extraction failed (${response.status}): ${body}`);
+  let response: Response | null = null;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    if (attempt > 0) {
+      // Exponential backoff with jitter: ~0.5s, 1s, 2s (+ up to 300ms)
+      const backoff = Math.min(8000, 500 * 2 ** (attempt - 1)) + Math.floor(Math.random() * 300);
+      await sleep(backoff);
+    }
+    try {
+      response = await fetch(url, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents:         [{ role: "user", parts }],
+          generationConfig: { temperature: 0, responseMimeType: "application/json" },
+        }),
+        cache: "no-store",
+        signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
+      });
+    } catch (e) {
+      // Network error or timeout (AbortError). Retry unless attempts exhausted.
+      if (attempt === MAX_ATTEMPTS - 1) {
+        const reason = e instanceof Error ? e.message : String(e);
+        throw new Error(`AI extraction request failed (network/timeout): ${reason}`);
+      }
+      continue;
+    }
+    if (response.ok) break;
+    if (!RETRYABLE_STATUS.has(response.status) || attempt === MAX_ATTEMPTS - 1) {
+      const body = await response.text();
+      throw new Error(`AI extraction failed (${response.status}): ${body}`);
+    }
+    // retryable status → loop and back off
   }
 
-  const json = await response.json() as Record<string, unknown>;
+  const json = await response!.json() as Record<string, unknown>;
   const candidates = Array.isArray(json?.candidates) ? json.candidates : [];
   let text = "";
   for (const candidate of candidates) {

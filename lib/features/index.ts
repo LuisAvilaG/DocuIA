@@ -1,6 +1,7 @@
 import { db } from "@/lib/db";
 import { features, orgFeatures } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
+import { productForFeature, getActiveProductKeys } from "@/lib/products";
 
 export type FeatureConfig = Record<string, unknown>;
 
@@ -16,11 +17,12 @@ export interface ResolvedFeature {
 }
 
 export async function getFeature(organizationId: string, featureId: string): Promise<ResolvedFeature> {
-  const [feature, override] = await Promise.all([
+  const [feature, override, activeProducts] = await Promise.all([
     db.query.features.findFirst({ where: eq(features.id, featureId) }),
     db.query.orgFeatures.findFirst({
       where: and(eq(orgFeatures.organizationId, organizationId), eq(orgFeatures.featureId, featureId)),
     }),
+    getActiveProductKeys(organizationId),
   ]);
   if (!feature) throw new Error(`Unknown feature: ${featureId}`);
 
@@ -29,9 +31,12 @@ export async function getFeature(organizationId: string, featureId: string): Pro
 
   const adminGranted = override?.adminGranted ?? feature.defaultEnabled;
   const tenantEnabled = override?.isEnabled ?? false;
-  const isEnabled = TENANT_CONTROLLED.has(featureId)
-    ? adminGranted && tenantEnabled
-    : adminGranted;
+  // Product gate: a feature belonging to a product is only usable if the org has
+  // that product active. Platform features (null) are always allowed.
+  const product = productForFeature(featureId);
+  const productActive = product === null || activeProducts.has(product);
+  const base = TENANT_CONTROLLED.has(featureId) ? adminGranted && tenantEnabled : adminGranted;
+  const isEnabled = productActive && base;
 
   return {
     id: featureId,
@@ -43,9 +48,10 @@ export async function getFeature(organizationId: string, featureId: string): Pro
 }
 
 export async function getAllFeatures(organizationId: string): Promise<ResolvedFeature[]> {
-  const [allFeatures, allOverrides] = await Promise.all([
+  const [allFeatures, allOverrides, activeProducts] = await Promise.all([
     db.query.features.findMany(),
     db.query.orgFeatures.findMany({ where: eq(orgFeatures.organizationId, organizationId) }),
+    getActiveProductKeys(organizationId),
   ]);
 
   const overrideMap = new Map(allOverrides.map((o) => [o.featureId, o]));
@@ -57,9 +63,10 @@ export async function getAllFeatures(organizationId: string): Promise<ResolvedFe
 
     const adminGranted = override?.adminGranted ?? f.defaultEnabled;
     const tenantEnabled = override?.isEnabled ?? false;
-    const isEnabled = TENANT_CONTROLLED.has(f.id)
-      ? adminGranted && tenantEnabled
-      : adminGranted;
+    const product = productForFeature(f.id);
+    const productActive = product === null || activeProducts.has(product);
+    const base = TENANT_CONTROLLED.has(f.id) ? adminGranted && tenantEnabled : adminGranted;
+    const isEnabled = productActive && base;
 
     return {
       id: f.id,

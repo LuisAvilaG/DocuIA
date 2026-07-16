@@ -5,29 +5,18 @@ import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, FileUp, Clock, AlertTriangle,
-  GitMerge, Database, BarChart3, Settings,
-  LogOut, User, Zap, Crown, Receipt,
+  GitMerge, Database, BarChart3, Settings, Workflow, ClipboardCheck,
+  LogOut, User, Zap, Crown, Receipt, ScrollText, FolderOpen,
 } from "lucide-react";
 import Image from "next/image";
-import { useFeature } from "@/components/providers/feature-provider";
+import { useFeatures } from "@/components/providers/feature-provider";
+import { PRODUCTS, PRODUCT_MODULES, PLATFORM_MODULES, type ProductKey, type NavModule } from "@/lib/products/registry";
 
-const NAV_ITEMS: {
-  href: string;
-  label: string;
-  icon: React.ElementType;
-  feature?: string;
-  adminOnly?: boolean;
-}[] = [
-  { href: "/dashboard",             label: "Dashboard",    icon: LayoutDashboard },
-  { href: "/workflow",              label: "Workflow",      icon: FileUp },
-  { href: "/history",              label: "Historial",     icon: Clock },
-  { href: "/exceptions",           label: "Excepciones",   icon: AlertTriangle,  feature: "exception_queue" },
-  { href: "/mappings",             label: "Mapeos",        icon: GitMerge,       feature: "auto_mapping" },
-  { href: "/catalogs",             label: "Catálogos",     icon: Database },
-  { href: "/accounting/expenses",  label: "Gastos",        icon: Receipt,        feature: "expense_management", adminOnly: true },
-  { href: "/statistics",           label: "Estadísticas",  icon: BarChart3,      feature: "advanced_analytics" },
-  { href: "/settings",             label: "Configuración", icon: Settings },
-];
+// lucide icon name → component (registry stores names as strings)
+const ICONS: Record<string, React.ElementType> = {
+  LayoutDashboard, FileUp, Clock, AlertTriangle, GitMerge, Database,
+  BarChart3, Settings, Workflow, ClipboardCheck, Receipt, ScrollText, FolderOpen,
+};
 
 const PLAN_BADGE: Record<string, string> = {
   starter:    "bg-secondary text-muted-foreground",
@@ -48,34 +37,37 @@ interface WhiteLabelConfig {
 }
 
 interface Props {
-  orgName:     string;
-  plan:        "starter" | "growth" | "enterprise";
-  userEmail:   string;
-  userRole:    string;
-  whiteLabel?: WhiteLabelConfig;
+  orgName:        string;
+  plan:           "starter" | "growth" | "enterprise";
+  userEmail:      string;
+  userRole:       string;
+  activeProducts: string[];
+  whiteLabel?:    WhiteLabelConfig;
 }
 
-export function TenantSidebar({ orgName, plan, userEmail, userRole, whiteLabel }: Props) {
+export function TenantSidebar({ orgName, plan, userEmail, userRole, activeProducts, whiteLabel }: Props) {
   const pathname = usePathname();
   const router   = useRouter();
+  const features = useFeatures();
 
-  const exceptionQueue    = useFeature("exception_queue");
-  const autoMapping       = useFeature("auto_mapping");
-  const advancedAnalytics = useFeature("advanced_analytics");
-  const expenseManagement = useFeature("expense_management");
+  const active = new Set(activeProducts);
+  const isVisible = (m: NavModule) =>
+    (!m.feature || features[m.feature]) && (!m.adminOnly || userRole === "admin");
 
-  const featureMap: Record<string, boolean> = {
-    exception_queue:    exceptionQueue,
-    auto_mapping:       autoMapping,
-    advanced_analytics: advancedAnalytics,
-    expense_management: expenseManagement,
-  };
+  // One section per active product; hide products with no visible modules.
+  const sections = PRODUCTS
+    .filter((p) => active.has(p.key))
+    .map((p) => ({ name: p.name, items: PRODUCT_MODULES[p.key as ProductKey].filter(isVisible) }))
+    .filter((s) => s.items.length > 0);
 
-  const visibleItems = NAV_ITEMS.filter(item => {
-    if (item.feature && !featureMap[item.feature]) return false;
-    if (item.adminOnly && userRole !== "admin") return false;
-    return true;
-  });
+  const platformItems = PLATFORM_MODULES.filter(isVisible);
+
+  // Highlight only the most specific matching route (longest href prefix), so a
+  // parent like "/contracts" doesn't stay active on "/contracts/flow".
+  const allHrefs = [...sections.flatMap((s) => s.items), ...platformItems].map((m) => m.href);
+  const activeHref = allHrefs
+    .filter((h) => pathname === h || pathname.startsWith(h + "/"))
+    .sort((a, b) => b.length - a.length)[0];
 
   const displayName = whiteLabel?.companyName || orgName;
   const showDocuIALogo = !whiteLabel?.hideBranding && !whiteLabel?.logoUrl;
@@ -116,26 +108,59 @@ export function TenantSidebar({ orgName, plan, userEmail, userRole, whiteLabel }
         </div>
       </div>
 
-      {/* Navegación */}
-      <nav className="flex-1 px-2 py-3 space-y-0.5 overflow-y-auto">
-        {visibleItems.map(({ href, label, icon: Icon }) => {
-          const active = pathname.startsWith(href);
-          return (
-            <Link
-              key={href}
-              href={href}
-              className={cn(
-                "flex items-center gap-2.5 px-[10px] py-2 rounded-md text-xs transition-all duration-[120ms]",
-                active
-                  ? "bg-accent text-accent-foreground font-semibold"
-                  : "font-medium text-muted-foreground hover:text-foreground hover:bg-secondary"
-              )}
-            >
-              <Icon className="w-3.5 h-3.5 shrink-0" />
-              <span>{label}</span>
-            </Link>
-          );
-        })}
+      {/* Navegación — una sección por producto activo */}
+      <nav className="flex-1 px-2 py-3 space-y-3 overflow-y-auto">
+        {sections.map((section) => (
+          <div key={section.name} className="space-y-0.5">
+            {sections.length > 1 && (
+              <p className="px-[10px] pt-1 pb-1 text-[10px] font-semibold uppercase tracking-[0.06em] text-muted-foreground/60">
+                {section.name}
+              </p>
+            )}
+            {section.items.map((m) => {
+              const Icon = ICONS[m.icon] ?? FolderOpen;
+              const isActive = m.href === activeHref;
+              return (
+                <Link
+                  key={m.href}
+                  href={m.href}
+                  className={cn(
+                    "flex items-center gap-2.5 px-[10px] py-2 rounded-md text-xs transition-all duration-[120ms]",
+                    isActive
+                      ? "bg-accent text-accent-foreground font-semibold"
+                      : "font-medium text-muted-foreground hover:text-foreground hover:bg-secondary"
+                  )}
+                >
+                  <Icon className="w-3.5 h-3.5 shrink-0" />
+                  <span>{m.label}</span>
+                </Link>
+              );
+            })}
+          </div>
+        ))}
+
+        {/* Plataforma (siempre) */}
+        <div className="space-y-0.5 pt-2 border-t border-border/60">
+          {platformItems.map((m) => {
+            const Icon = ICONS[m.icon] ?? Settings;
+            const isActive = pathname.startsWith(m.href);
+            return (
+              <Link
+                key={m.href}
+                href={m.href}
+                className={cn(
+                  "flex items-center gap-2.5 px-[10px] py-2 rounded-md text-xs transition-all duration-[120ms]",
+                  isActive
+                    ? "bg-accent text-accent-foreground font-semibold"
+                    : "font-medium text-muted-foreground hover:text-foreground hover:bg-secondary"
+                )}
+              >
+                <Icon className="w-3.5 h-3.5 shrink-0" />
+                <span>{m.label}</span>
+              </Link>
+            );
+          })}
+        </div>
       </nav>
 
       {/* Usuario */}

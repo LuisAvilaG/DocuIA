@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import { ReviewClient } from "./review-client";
 import { PendingApprovalClient } from "./pending-approval-client";
-import { DocPreview } from "./doc-preview";
+import { DocPreview } from "./doc-preview-lazy";
 import { isFeatureEnabled } from "@/lib/features";
 
 import { DOC_STATUS } from "@/lib/status-config";

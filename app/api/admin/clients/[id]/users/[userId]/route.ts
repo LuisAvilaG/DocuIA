@@ -35,7 +35,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
       updates.fullName = body.fullName || null;
     }
     if (typeof body.password === "string" && body.password.length >= 8) {
-      updates.passwordHash = hashSync(body.password, 10);
+      updates.passwordHash = hashSync(body.password, 12);
     }
 
     await db.update(orgUsers).set(updates).where(eq(orgUsers.id, userId));

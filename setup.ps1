@@ -6,9 +6,10 @@
 $ErrorActionPreference = "Continue"
 $Host.UI.RawUI.WindowTitle = "DocuIA Setup"
 
-# Credenciales fijas de superadmin
+# Superadmin: email fijo, contraseña ALEATORIA por instalación (no commiteada).
+# Se muestra UNA vez al final; el operador debe cambiarla tras el primer login.
 $ADMIN_EMAIL    = "admin@docuia.com"
-$ADMIN_PASSWORD = "DocuIA2024!"
+$ADMIN_PASSWORD = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(18))
 
 function Write-Step  { param($msg) Write-Host "`n  ► $msg" -ForegroundColor Cyan }
 function Write-OK    { param($msg) Write-Host "  ✓ $msg" -ForegroundColor Green }
@@ -100,7 +101,9 @@ NEXT_PUBLIC_APP_URL=http://localhost:3000
 NEXT_PUBLIC_APP_NAME=DocuIA
 
 # ── Base de datos ──────────────────────────────────────────────
-DATABASE_URL=postgresql://docuia_user:docuia_local_pass@localhost:5432/docuia
+# 127.0.0.1 (no 'localhost'): en Windows localhost resuelve a IPv6 ::1 y el
+# Postgres de docker solo escucha IPv4, lo que rompe la conexión del worker.
+DATABASE_URL=postgresql://docuia_user:docuia_local_pass@127.0.0.1:5432/docuia
 
 # ── Auth (generados automáticamente) ──────────────────────────
 JWT_SECRET=$JWT_SECRET
@@ -162,12 +165,13 @@ if (-not $pgReady) {
 }
 Write-OK "PostgreSQL listo"
 
-# ── 8. Drizzle push ───────────────────────────────────────────
+# ── 8. Migraciones ────────────────────────────────────────────
 Write-Step "Creando / actualizando tablas en la base de datos..."
-$env:DATABASE_URL = "postgresql://docuia_user:docuia_local_pass@localhost:5432/docuia"
-npx drizzle-kit push --force
+$env:DATABASE_URL = "postgresql://docuia_user:docuia_local_pass@127.0.0.1:5432/docuia"
+# Migraciones versionadas (crea las tablas y registra el baseline en una DB nueva).
+npx drizzle-kit migrate
 if ($LASTEXITCODE -ne 0) {
-  Write-Fail "drizzle-kit push falló"
+  Write-Fail "drizzle-kit migrate falló"
   Read-Host "Presiona Enter para salir"; exit 1
 }
 Write-OK "Tablas listas"

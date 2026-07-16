@@ -2,6 +2,10 @@ import { buildOAuthHeader, buildRestApiUrl, buildRestletUrl, NSCredentials } fro
 
 export type NSEnvironment = "sandbox" | "production";
 
+// Hard cap on any single NetSuite HTTP call so a slow/hung NS can never block
+// a request (or a queued job) indefinitely.
+const NS_TIMEOUT_MS = Number(process.env.NETSUITE_TIMEOUT_MS) || 30_000;
+
 export interface NSRestletResult<T = unknown> {
   ok: boolean;
   data?: T;
@@ -63,6 +67,7 @@ async function nsGet(url: string, creds: NSCredentials): Promise<Response> {
       "Content-Type": "application/json",
       Accept: "application/json",
     },
+    signal: AbortSignal.timeout(NS_TIMEOUT_MS),
   });
 }
 
@@ -76,6 +81,7 @@ async function nsPost(url: string, body: unknown, creds: NSCredentials): Promise
       Accept: "application/json",
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(NS_TIMEOUT_MS),
   });
 }
 

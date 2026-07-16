@@ -23,9 +23,12 @@ const DOC_LABELS: Record<string, string> = {
   invoice: "Factura", purchase_order: "OC", xml_cfdi: "CFDI",
 };
 
-const TERMINAL = new Set(["completed", "review", "failed"]);
+// Terminal = no longer self-advancing. pending_approval/approved wait on a human,
+// so polling them forever just wastes requests until the tab closes.
+const TERMINAL = new Set(["completed", "review", "failed", "pending_approval", "approved"]);
 const BULK_MAX = 20;
-const POLLING_INTERVAL = 3000;
+const POLL_MIN = 3000;
+const POLL_MAX = 15000;
 
 interface Subsidiary { id: string; name: string; }
 interface DocRow {
@@ -41,7 +44,7 @@ interface DocRow {
 
 type BatchItem = {
   file: File;
-  status: "pending" | "uploading" | "completed" | "review" | "failed";
+  status: "pending" | "uploading" | "completed" | "review" | "failed" | "queued";
   docId?: number;
   error?: string;
 };
@@ -65,35 +68,54 @@ function fmt(n: number | null): string | null {
 function useDocPolling(docs: DocRow[], onUpdate: (updated: DocRow) => void, onStale: (ids: number[]) => void) {
   const active = docs.filter(d => !TERMINAL.has(d.status));
   const failCounts = useRef<Map<number, number>>(new Map());
+  const activeIds = active.map(d => d.id);
+  const key = activeIds.join(",");
 
   useEffect(() => {
-    if (active.length === 0) return;
-    const timer = setInterval(async () => {
+    if (activeIds.length === 0) return;
+    let cancelled = false;
+    let delay = POLL_MIN;
+    let timeout: ReturnType<typeof setTimeout>;
+
+    const bumpFail = (staleIds: number[]) => {
+      for (const id of activeIds) {
+        const fails = (failCounts.current.get(id) ?? 0) + 1;
+        failCounts.current.set(id, fails);
+        if (fails >= 3) staleIds.push(id);
+      }
+    };
+
+    const tick = async () => {
       const staleIds: number[] = [];
-      await Promise.all(
-        active.map(async d => {
-          try {
-            const res = await fetch(`/api/v1/workflow/${d.id}/status`);
-            if (!res.ok) {
-              const fails = (failCounts.current.get(d.id) ?? 0) + 1;
-              failCounts.current.set(d.id, fails);
-              if (fails >= 3) staleIds.push(d.id);
-              return;
-            }
+      let changed = false;
+      try {
+        // One batched request for all active docs instead of N per-doc requests.
+        const res = await fetch(`/api/v1/workflow/status?ids=${activeIds.join(",")}`);
+        if (res.ok) {
+          const { documents } = await res.json() as { documents: Array<{ id: number; status: string; vendor: string | null }> };
+          const byId = new Map(documents.map(d => [d.id, d]));
+          for (const d of active) {
+            const u = byId.get(d.id);
+            if (!u) continue;
             failCounts.current.delete(d.id);
-            const updated = await res.json();
-            onUpdate({ ...d, status: updated.status, vendor: updated.vendor ?? d.vendor });
-          } catch {
-            const fails = (failCounts.current.get(d.id) ?? 0) + 1;
-            failCounts.current.set(d.id, fails);
-            if (fails >= 3) staleIds.push(d.id);
+            if (u.status !== d.status) changed = true;
+            onUpdate({ ...d, status: u.status, vendor: u.vendor ?? d.vendor });
           }
-        })
-      );
+        } else {
+          bumpFail(staleIds);
+        }
+      } catch {
+        bumpFail(staleIds);
+      }
       if (staleIds.length > 0) onStale(staleIds);
-    }, POLLING_INTERVAL);
-    return () => clearInterval(timer);
-  }, [active.map(d => d.id).join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
+      // Backoff: reset to fast polling on any change, otherwise grow toward the cap.
+      delay = changed ? POLL_MIN : Math.min(POLL_MAX, Math.round(delay * 1.5));
+      if (!cancelled) timeout = setTimeout(tick, delay);
+    };
+
+    timeout = setTimeout(tick, delay);
+    return () => { cancelled = true; clearTimeout(timeout); };
+  }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
 }
 
 // ─── Single upload form ──────────────────────────────────────────────────────
@@ -263,7 +285,9 @@ function BulkUpload({
             idx === i ? { ...it, status: "failed", error: data.error ?? "Error" } : it));
         } else {
           const finalStatus = (data.status === "review" ? "review"
-            : data.status === "completed" ? "completed" : "failed") as BatchItem["status"];
+            : data.status === "completed" ? "completed"
+            : data.status === "queued" ? "queued"
+            : "failed") as BatchItem["status"];
           setItems(prev => prev.map((it, idx) =>
             idx === i ? { ...it, status: finalStatus, docId: data.documentId } : it));
         }

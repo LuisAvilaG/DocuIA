@@ -359,23 +359,9 @@ const FEATURES = [
     isBeta: false,
     sortOrder: 80,
   },
-  {
-    id: "sso_saml",
-    name: "SSO / SAML",
-    description: "Autenticación empresarial con Okta, Azure AD, Google Workspace.",
-    category: "security" as const,
-    featureType: "boolean_config" as const,
-    defaultEnabled: false,
-    defaultConfig: { saml_entry_point: "", saml_issuer: "", saml_cert: "" },
-    configSchema: [
-      { key: "saml_entry_point", label: "Entry Point URL del IdP", type: "string" },
-      { key: "saml_issuer", label: "Issuer / Entity ID", type: "string" },
-      { key: "saml_cert", label: "Certificado público (PEM)", type: "string" },
-    ],
-    planRequired: "enterprise" as const,
-    isBeta: false,
-    sortOrder: 81,
-  },
+  // NOTE: `sso_saml` was removed from the seed — it was advertised as an
+  // Enterprise feature with zero implementation (selling a hollow flag is a
+  // reputational risk). Re-add it here only once real SAML auth exists.
   {
     id: "tenant_audit_log",
     name: "Log de auditoría de usuarios",

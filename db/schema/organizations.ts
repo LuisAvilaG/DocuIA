@@ -51,8 +51,9 @@ export const orgUsers = pgTable("org_users", {
   createdAt:      timestamp("created_at").notNull().defaultNow(),
   updatedAt:      timestamp("updated_at").notNull().defaultNow(),
 }, (t) => [
-  uniqueIndex("org_users_org_email_idx").on(t.organizationId, t.email),
-  index("org_users_email_idx").on(t.email),
+  // Email is globally unique across the platform (M-4): a single address maps to
+  // exactly one user, so login-by-email is unambiguous across organizations.
+  uniqueIndex("org_users_email_unique_idx").on(t.email),
 ]);
 
 // -- Auth sessions -------------------------------------------------

@@ -17,6 +17,12 @@ export default async function HistoryPage() {
   try {
     const rows = await db.query.historyDocuments.findMany({
       where: eq(historyDocuments.organizationId, session.orgId),
+      // Only the scalar columns the table renders — never the heavy `products`
+      // JSON (extraction candidates + embedded catalogs, up to 100s of KB/row).
+      columns: {
+        id: true, documentType: true, status: true, vendor: true,
+        numDoc: true, total: true, createdAt: true, updatedAt: true,
+      },
       orderBy: [desc(historyDocuments.createdAt)],
       limit: 200,
     });

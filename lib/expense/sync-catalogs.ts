@@ -247,7 +247,7 @@ export async function syncEmployees(
           email,
           fullName,
           role:               "expense_submitter",
-          passwordHash:       hashSync(tempPassword, 10),
+          passwordHash:       hashSync(tempPassword, 12),
           isActive:           true,
           netsuiteEmployeeId: nsId,
           createdAt:          new Date(),

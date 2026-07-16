@@ -112,3 +112,31 @@
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover { background: oklch(0.55 0.12 182); }
+
+/* ── Native selects: one consistent design app-wide ────────────────
+   Unlayered so it wins over Tailwind utilities; replaces the native
+   arrow with a custom chevron and gives a warm, on-brand control. */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-color: var(--card);
+  color: var(--foreground);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding-block: 0.4rem;
+  padding-inline: 0.65rem 1.85rem;
+  font-size: 0.8125rem;
+  line-height: 1.25;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 0.6rem center;
+  background-size: 0.8rem;
+}
+select:focus-visible {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px oklch(0.48 0.15 182 / 0.15);
+}
+select:disabled { opacity: 0.5; cursor: not-allowed; }
+select option { color: #1a1a1a; background: #fff; }

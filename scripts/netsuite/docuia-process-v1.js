@@ -10,7 +10,10 @@
  *   subsidiary_internal_id:        recommended
  *   invoice_number:                required
  *   invoice_date:                  required — YYYY-MM-DD | DD/MM/YYYY | DD.MM.YYYY
- *   lines:                         array of line objects
+ *   lines:                         array of item line objects (item sublist)
+ *   expense_lines:                 array of expense line objects (expense sublist —
+ *                                  account-based, used for vendor bills without a
+ *                                  catalog item, e.g. employee expenses paid to vendor)
  *   po_internal_id:                optional — if set, transforms PO → Vendor Bill
  *   dry_run:                       true/false (default true) — validate without saving
  *   location_internal_id:          optional
@@ -26,6 +29,14 @@
  *   amount:           number
  *   unit:             string (unit internal id)
  *   description:      string
+ *
+ * Expense line object (expense sublist):
+ *   account_internal_id: required (GL account internal id)
+ *   amount:              number
+ *   memo:                string
+ *   department:          string (internal id)
+ *   class:               string (internal id)
+ *   location:            string (internal id)
  *
  * @NApiVersion 2.1
  * @NScriptType Restlet
@@ -87,6 +98,40 @@ define(["N/record", "N/search", "N/format"], (record, search, format) => {
     });
   }
 
+  // Resolve a currency value to an internal id. Accepts either a numeric
+  // internal id (returned as-is) or an ISO code / symbol (e.g. "USD"),
+  // resolved via a currency search.
+  function resolveCurrency(value) {
+    const raw = s(value);
+    if (!raw) return null;
+    if (/^\d+$/.test(raw)) return raw; // already an internal id
+    try {
+      const rows = search.create({
+        type: "currency",
+        filters: [["symbol", "is", raw.toUpperCase()]],
+        columns: ["internalid"],
+      }).run().getRange({ start: 0, end: 1 });
+      if (rows && rows.length) return s(rows[0].getValue("internalid"));
+    } catch (e) { /* fall through */ }
+    return null;
+  }
+
+  function findByExternalId(typeCode, externalId) {
+    if (!s(externalId)) return null;
+    try {
+      const rows = search.create({
+        type: search.Type.TRANSACTION,
+        filters: [
+          ["type", "anyof", typeCode], "AND",
+          ["mainline", "is", "T"], "AND",
+          ["externalid", "is", String(externalId)],
+        ],
+        columns: ["internalid"],
+      }).run().getRange({ start: 0, end: 1 });
+      return rows && rows.length ? s(rows[0].getValue("internalid")) : null;
+    } catch (e) { return null; }
+  }
+
   function findDuplicate(typeCode, vendorId, tranId, subsidiaryId) {
     const filters = [
       ["type", "anyof", typeCode], "AND",
@@ -118,9 +163,17 @@ define(["N/record", "N/search", "N/format"], (record, search, format) => {
 
     const currency = s(body.currency_internal_id);
     if (currency) {
-      const ok = trySet(rec, "currency", currency);
-      if (!ok) warnings.push({ code: "CURRENCY_NOT_SET" });
+      const resolved = resolveCurrency(currency);
+      if (resolved) {
+        const ok = trySet(rec, "currency", resolved);
+        if (!ok) warnings.push({ code: "CURRENCY_NOT_SET", currency: currency });
+      } else {
+        warnings.push({ code: "CURRENCY_NOT_FOUND", currency: currency });
+      }
     }
+
+    const externalId = s(body.external_id);
+    if (externalId) trySet(rec, "externalid", externalId);
 
     const memo = s(body.memo);
     if (memo) trySet(rec, "memo", memo);
@@ -153,6 +206,31 @@ define(["N/record", "N/search", "N/format"], (record, search, format) => {
 
       const lineIdx = rec.getLineCount({ sublistId: "item" }) - 1;
       repairRate(rec, lineIdx, ln, warnings);
+    }
+  }
+
+  function applyExpenseLines(rec, expenseLines, warnings) {
+    for (const el of expenseLines) {
+      const account = s(el.account_internal_id);
+      if (!account) {
+        warnings.push({ code: "EXPENSE_LINE_SKIPPED_NO_ACCOUNT" });
+        continue;
+      }
+      rec.selectNewLine({ sublistId: "expense" });
+      rec.setCurrentSublistValue({ sublistId: "expense", fieldId: "account", value: account });
+
+      const amt = n(el.amount);
+      if (amt !== null) tryCurrent(rec, "expense", "amount", amt);
+      const memo = s(el.memo);
+      if (memo) tryCurrent(rec, "expense", "memo", memo);
+      const dept = s(el.department);
+      if (dept) tryCurrent(rec, "expense", "department", dept);
+      const cls = s(el.class);
+      if (cls) tryCurrent(rec, "expense", "class", cls);
+      const loc = s(el.location);
+      if (loc) tryCurrent(rec, "expense", "location", loc);
+
+      rec.commitLine({ sublistId: "expense" });
     }
   }
 
@@ -226,13 +304,20 @@ define(["N/record", "N/search", "N/format"], (record, search, format) => {
     const invNumber = s(body.invoice_number || body.invoiceNumber);
     const invDate   = parseDate(body.invoice_date || body.invoiceDate);
     const lines     = Array.isArray(body.lines) ? body.lines : [];
+    const expenseLines = Array.isArray(body.expense_lines) ? body.expense_lines : [];
     const dryRun    = b(body.dry_run, true);
 
     if (!vendorId)  return { ok: false, error: "vendor_internal_id is required" };
     if (!invNumber) return { ok: false, error: "invoice_number is required" };
     if (!invDate)   return { ok: false, error: "invoice_date is required (YYYY-MM-DD)" };
+    if (!lines.length && !expenseLines.length) {
+      return { ok: false, error: "at least one item line or expense line is required" };
+    }
 
-    const existing = findDuplicate("VendBill", vendorId, invNumber, subId);
+    // Idempotency: prefer externalId (atomic, survives tranid edits), fall back to tranid.
+    const externalId = s(body.external_id);
+    const existing = findByExternalId("VendBill", externalId)
+      || findDuplicate("VendBill", vendorId, invNumber, subId);
     if (existing) return { ok: true, dry_run: dryRun, already_exists: true, mode: poId ? "transform" : "standalone", vendor_bill_internal_id: existing, warnings };
 
     const mode = poId ? "transform" : "standalone";
@@ -252,11 +337,12 @@ define(["N/record", "N/search", "N/format"], (record, search, format) => {
           allow_additional_lines:        b(body.allow_additional_lines, true),
         }, warnings);
       }
-    } else {
-      warnings.push({ code: "NO_LINES", message: "No lines provided." });
+    }
+    if (expenseLines.length) {
+      applyExpenseLines(rec, expenseLines, warnings);
     }
 
-    if (dryRun) return { ok: true, dry_run: true, mode, would_create: "vendor_bill", preview: { vendor_internal_id: vendorId, invoice_number: invNumber, lines_count: lines.length }, warnings };
+    if (dryRun) return { ok: true, dry_run: true, mode, would_create: "vendor_bill", preview: { vendor_internal_id: vendorId, invoice_number: invNumber, lines_count: lines.length, expense_lines_count: expenseLines.length }, warnings };
 
     const id = rec.save({ enableSourcing: true, ignoreMandatoryFields: false });
     return { ok: true, dry_run: false, mode, vendor_bill_internal_id: String(id), warnings };
@@ -275,7 +361,9 @@ define(["N/record", "N/search", "N/format"], (record, search, format) => {
     if (!docDate)  return { ok: false, error: "date is required (YYYY-MM-DD)" };
     if (!lines.length) return { ok: false, error: "lines are required for purchase_order" };
 
-    const existing = findDuplicate("PurchOrd", vendorId, docNum, subId);
+    const externalId = s(body.external_id);
+    const existing = findByExternalId("PurchOrd", externalId)
+      || findDuplicate("PurchOrd", vendorId, docNum, subId);
     if (existing) return { ok: true, dry_run: dryRun, already_exists: true, mode: "purchase_order", purchase_order_internal_id: existing, warnings };
 
     const rec = record.create({ type: record.Type.PURCHASE_ORDER, isDynamic: true });

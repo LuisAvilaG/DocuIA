@@ -1,0 +1,220 @@
+  Critique Report — DocuIA Frontend
+
+  Design Health Score
+
+  ┌───────┬────────────────────────┬───────┬────────────────────────────────────────────────────────────────────────┐
+  │   #   │       Heuristic        │ Score │                               Key Issue                                │
+  ├───────┼────────────────────────┼───────┼────────────────────────────────────────────────────────────────────────┤
+  │ 1     │ Visibility of System   │ 3.5/4 │ Doc lifecycle estados muy bien. Falta: retry indicators en webhooks    │
+  │       │ Status                 │       │ fallidos, request counts en API keys                                   │
+  ├───────┼────────────────────────┼───────┼────────────────────────────────────────────────────────────────────────┤
+  │ 2     │ Match System / Real    │ 4/4   │ Terminología en español, fechas relativas, dominio fiscal correcto     │
+  │       │ World                  │       │                                                                        │
+  ├───────┼────────────────────────┼───────┼────────────────────────────────────────────────────────────────────────┤
+  │ 3     │ User Control and       │ 3/4   │ Navegación y logout claros. Falta undo en delete webhook/API key       │
+  │       │ Freedom                │       │                                                                        │
+  ├───────┼────────────────────────┼───────┼────────────────────────────────────────────────────────────────────────┤
+  │ 4     │ Consistency and        │ 3.5/4 │ Sistema OKLCH consistente. Pequeña brecha: inputs en Settings usan     │
+  │       │ Standards              │       │ secondary/50 vs background en login                                    │
+  ├───────┼────────────────────────┼───────┼────────────────────────────────────────────────────────────────────────┤
+  │ 5     │ Error Prevention       │ 2.5/4 │ Sin confirmación antes de borrar webhooks o API keys. Sin advertencia  │
+  │       │                        │       │ si umbral = 100%                                                       │
+  ├───────┼────────────────────────┼───────┼────────────────────────────────────────────────────────────────────────┤
+  │ 6     │ Recognition vs Recall  │ 3.5/4 │ Nav siempre visible con iconos + labels. Features ocultas sin          │
+  │       │                        │       │ explicación de por qué                                                 │
+  ├───────┼────────────────────────┼───────┼────────────────────────────────────────────────────────────────────────┤
+  │ 7     │ Flexibility and        │ 2/4   │ Sin atajos de teclado. Sin acciones bulk en tablas. Settings es un     │
+  │       │ Efficiency             │       │ mega-componente de 1170 líneas                                         │
+  ├───────┼────────────────────────┼───────┼────────────────────────────────────────────────────────────────────────┤
+  │ 8     │ Aesthetic and          │ 4/4   │ Canvas cálido, jerarquía limpia, colores semánticos contenidos. No AI  │
+  │       │ Minimalist Design      │       │ slop                                                                   │
+  ├───────┼────────────────────────┼───────┼────────────────────────────────────────────────────────────────────────┤
+  │ 9     │ Error Recovery         │ 2/4   │ Mensajes de error existen pero sin sugerencias de recuperación ni      │
+  │       │                        │       │ opción de deshacer                                                     │
+  ├───────┼────────────────────────┼───────┼────────────────────────────────────────────────────────────────────────┤
+  │ 10    │ Help and Documentation │ 1/4   │ Cero tooltips, sin glosario, sin links a docs. autoProcessThreshold y  │
+  │       │                        │       │ fields de NetSuite son jargon sin contexto                             │
+  ├───────┼────────────────────────┼───────┼────────────────────────────────────────────────────────────────────────┤
+  │ Total │                        │ 29/40 │ Bueno — sólido visualmente, gaps en UX operacional                     │
+  └───────┴────────────────────────┴───────┴────────────────────────────────────────────────────────────────────────┘
+
+  ---
+  Anti-Patterns Verdict
+
+  ¿Parece generado por IA? No. Esta UI no pasa el AI slop test — falla en ser genérica.
+
+  LLM: El sistema OKLCH con opacidades calculadas (oklch(0.45 0.18 265 / 0.12) en focus rings), el saludo con lógica
+  temporal, la regla de índigo ≤15% de superficie — nada de esto sale de un prompt genérico. La paleta caliente no es
+  "fintech azul" ni "SaaS violeta". Pasa la category-reflex check.
+
+  Detector automático (impeccable 2.1.8): 3 findings, 1 false positive:
+
+  ┌───────────────────────────────────────────────────┬───────┬───────────────────────┬─────────────────────────────┐
+  │                      Archivo                      │ Línea │        Patrón         │           ¿Real?            │
+  ├───────────────────────────────────────────────────┼───────┼───────────────────────┼─────────────────────────────┤
+  │                                                   │       │                       │ Falso positivo — archivo    │
+  │ .agents/skills/impeccable/scripts/live-browser.js │ 3363  │ layout-transition     │ interno del tool, no código │
+  │                                                   │       │                       │  del proyecto               │
+  ├───────────────────────────────────────────────────┼───────┼───────────────────────┼─────────────────────────────┤
+  │ components/ui/dialog.tsx                          │ 34    │ bg-black (pure black  │ Real — overlay backdrop sin │
+  │                                                   │       │ overlay)              │  tinte de marca             │
+  ├───────────────────────────────────────────────────┼───────┼───────────────────────┼─────────────────────────────┤
+  │ components/ui/sheet.tsx                           │ 31    │ bg-black (pure black  │ Real — mismo problema       │
+  │                                                   │       │ overlay)              │                             │
+  └───────────────────────────────────────────────────┴───────┴───────────────────────┴─────────────────────────────┘
+
+  Los dos findings reales son en componentes Shadcn generados. Fix trivial: cambiar bg-black por
+  bg-[oklch(0.18_0.015_258/0.8)] (Carbón Profundo con opacidad) en ambos archivos.
+
+  ---
+  Overall Impression
+
+  La base es genuinamente buena: marca coherente, colores correctos, tipografía medida, feature flags maduros. El
+  problema es de capa operacional, no estética. Seis páginas de tenant llegan a producción sin empty states — el primer
+  login de un operador nuevo ve tablas en blanco y no sabe si el sistema está roto o si falta configuración. Nadie
+  confirma antes de borrar un webhook. No hay un solo tooltip. El producto tiene el diseño de algo terminado pero la UX
+  de un MVP.
+
+  ---
+  What's Working
+
+  1. El color system resiste producción. La regla warm-only (sin chroma 0 en ningún neutral), el índigo como única voz
+  de acción, y los tres semánticos (verde/ámbar/carmesí) contenidos a estados de datos — esto es disciplina real. En
+  pantallas densas como History y Admin Dashboard no hay saturación cromática.
+
+  2. La arquitectura de roles y feature flags es transparente para el usuario. El sidebar filtra ítems según el plan sin
+   mensajes de error — la nav simplemente no muestra lo que no aplica. Settings hace lo mismo con tabs. Esto previene
+  frustración en tiers bajos sin exponer lógica de billing.
+
+  3. El dashboard greeting y el exception alert tienen carácter. El saludo con hora del día (Buenos días, [nombre])
+  humaniza un tool que procesa documentos fiscales. La exception alert con conteo exacto y link directo es el mejor
+  momento de urgencia en toda la app — preciso, accionable, sin drama innecesario.
+
+  ---
+  Priority Issues
+
+  [P0] Empty states ausentes en 6 páginas de tenant
+  - Qué: Workflow, History, Exceptions, Mappings, Catalogs, Statistics no renderizan estado vacío en el server
+  component. Un operador nuevo ve tabla o pantalla en blanco.
+  - Por qué importa: El primer día de uso define adopción. "Sin documentos" vs pantalla en blanco es la diferencia entre
+   "entiendo el sistema" y "esto no funciona, llamo a soporte".
+  - Fix: En cada page.tsx, si el array de datos viene vacío, renderizar un bloque con icono + mensaje contextual + CTA
+  al paso siguiente. Workflow → "Sube tu primer documento". Exceptions → "Sin excepciones, el sistema procesa
+  correctamente". Mappings → "Los mapeos aparecen después de procesar tu primer pedido de compra".
+  - Comando: $impeccable onboard
+
+  [P1] Sin confirmación en acciones destructivas
+  - Qué: Delete webhook (settings/client.tsx ~línea 295) y delete API key (~línea 372) ejecutan inmediatamente sin
+  confirmación. Sin undo.
+  - Por qué importa: Un admin borra un webhook de producción por error. Los documentos dejan de procesarse. No hay forma
+   de restaurarlo — tiene que recrearlo con nueva URL y reconfigurar el receptor.
+  - Fix: <AlertDialog> antes de cada delete con: nombre del recurso, consecuencia específica ("Los eventos dejarán de
+  enviarse a esta URL"), y botón de confirmación destructivo.
+  - Comando: $impeccable harden
+
+  [P1] Cero inline help en campos técnicos
+  - Qué: autoProcessThreshold expuesto como "Umbral de confianza" tiene una línea de explicación en Settings, pero
+  Subsidiary fields (Consumer Key, Token ID, NS Internal ID), Webhook event types, y API key scopes no tienen ningún
+  contexto.
+  - Por qué importa: Los usuarios de Settings son admins, no desarrolladores. "NS Subsidiary Internal ID" requiere ir a
+  NetSuite, navegar por 3 menús, y copiar un número que nadie sabe de memoria. Sin tooltip ni link, esto genera tickets
+  de soporte.
+  - Fix: <Tooltip> en cada label técnico con: qué es el campo, dónde encontrarlo, ejemplo de valor válido. No más de 2
+  líneas por tooltip.
+  - Comando: $impeccable clarify
+
+  [P2] dialog.tsx y sheet.tsx con bg-black puro
+  - Qué: Los overlays de modales y sheets usan Tailwind bg-black (generado por Shadcn). Sobre el canvas cálido esto crea
+   un choque visual — el overlay es frío y rompe la temperatura de la paleta.
+  - Fix: En components/ui/dialog.tsx:34 y components/ui/sheet.tsx:31, cambiar bg-black → bg-[oklch(0.18_0.015_258)] con
+  la misma opacidad existente.
+  - Comando: $impeccable polish
+
+  [P2] Tablas sin filtro ni búsqueda
+  - Qué: History (200 docs), Mappings (500 rows), Catalogs (2000 items por subsidiaria), Admin Dashboard (sin sort por
+  plan/status). No hay campo de búsqueda, filtro por fecha, ni sort clickable en columnas.
+  - Por qué importa: Un contador que busca la factura de ACME del mes pasado tiene que scrollear 200 filas manualmente.
+  En Mappings con 500 vendors, encontrar uno específico es imposible sin búsqueda.
+  - Fix: Search input con debounce + filtro de estado como URL params (?vendor=acme&status=pending) para que los filtros
+   persistan en reload. Columnas de fecha y monto clickables para sort.
+  - Comando: $impeccable harden
+
+  ---
+  Persona Red Flags
+
+  Carla — Contadora que usa el sistema 40+ documentos/día (Power User)
+  El tiempo es su recurso más escaso. En la sesión de hoy:
+  - Quiere ver todos los docs con excepción de ayer — no puede filtrar History por fecha ni por status. Scrollea 200
+  filas.
+  - Borra accidentalmente el webhook de contabilidad creyendo era uno de prueba — no hubo confirmación. Los próximos 3
+  lotes no llegan a NetSuite.
+  - Necesita ver el catálogo de vendors para una subsidiaria específica — Catalogs carga 2000 vendors sin búsqueda.
+  Tarda 45 segundos en encontrar al proveedor correcto.
+
+  Roberto — Operador nuevo, primer día (First-Timer)
+  Acaba de recibir sus credenciales. En su primer login:
+  - Va a Mappings (porque el admin le dijo "aquí vas a confirmar los items"). Ve tabla en blanco. No sabe si debe hacer
+  algo o si hay un error de configuración.
+  - Va a Statistics para mostrar métricas al gerente. Pantalla vacía. Piensa que hay un bug.
+  - Pregunta al admin "¿por qué no veo Webhooks en mi menú?" El admin no sabe cómo explicarle que es por el plan, porque
+   la UI no dice nada.
+
+  ---
+  Minor Observations
+
+  - components/ui/dialog.tsx y sheet.tsx son los únicos archivos con pure black — el resto del proyecto es impecable en
+  ese aspecto.
+  - El plan badge en sidebar (starter/growth/enterprise) usa colores distintos pero ningún icono diferenciador — users
+  no saben cuál es premium.
+  - La página de organizations para admin no existe — hay un link a /admin/clients en el dashboard pero la ruta no está
+  implementada.
+  - Audit log hardcoded a 200 entradas sin paginación (settings/client.tsx ~línea 1128). Para orgs activas esto va a
+  truncar el historial visible.
+  - El score de salud en Admin Dashboard (75+ verde, 50-74 ámbar, <50 rojo) es visible como barra pero el cálculo no
+  está explicado en la UI — admins no saben qué mejorar para subir el score.
+
+  ---
+  Questions to Consider
+
+  ---
+  Persona Red Flags
+
+  Carla — Contadora que usa el sistema 40+ documentos/día (Power User)
+  El tiempo es su recurso más escaso. En la sesión de hoy:
+  - Quiere ver todos los docs con excepción de ayer — no puede filtrar History por fecha ni por status. Scrollea 200 filas.
+  - Borra accidentalmente el webhook de contabilidad creyendo era uno de prueba — no hubo confirmación. Los próximos 3 lotes no llegan a NetSuite.
+  - Necesita ver el catálogo de vendors para una subsidiaria específica — Catalogs carga 2000 vendors sin búsqueda. Tarda 45 segundos en encontrar al proveedor correcto.
+
+  Roberto — Operador nuevo, primer día (First-Timer)
+  Acaba de recibir sus credenciales. En su primer login:
+  - Va a Mappings (porque el admin le dijo "aquí vas a confirmar los items"). Ve tabla en blanco. No sabe si debe hacer algo o si hay un error de configuración.
+  - Va a Statistics para mostrar métricas al gerente. Pantalla vacía. Piensa que hay un bug.
+  - Pregunta al admin "¿por qué no veo Webhooks en mi menú?" El admin no sabe cómo explicarle que es por el plan, porque la UI no dice nada.
+
+  ---
+  Minor Observations
+
+  - components/ui/dialog.tsx y sheet.tsx son los únicos archivos con pure black — el resto del proyecto es impecable en ese aspecto.
+  - El plan badge en sidebar (starter/growth/enterprise) usa colores distintos pero ningún icono diferenciador — users no saben cuál es premium.
+  - La página de organizations para admin no existe — hay un link a /admin/clients en el dashboard pero la ruta no está implementada.
+  - Audit log hardcoded a 200 entradas sin paginación (settings/client.tsx ~línea 1128). Para orgs activas esto va a truncar el historial visible.
+  - El score de salud en Admin Dashboard (75+ verde, 50-74 ámbar, <50 rojo) es visible como barra pero el cálculo no está explicado en la UI — admins no saben qué mejorar para subir el score.
+
+  ---
+  Questions to Consider
+
+  1. ¿El primer login de un operador nuevo tiene un flujo guiado, o cae directamente en el dashboard vacío? Si la respuesta es "dashboard vacío", el onboarding completo falta — no solo empty states.
+  2. ¿Settings debe ser un mega-componente o rutas separadas? Para equipos de 2-5 personas puede funcionar. Pero si el roadmap incluye SSO, billing, y roles granulares, /settings/team, /settings/integrations y
+   /settings/security serán inevitables.
+  3. ¿Qué pasa cuando el threshold de confianza está al 100% y todos los docs van a revisión manual? ¿Hay algún indicador en el dashboard de "cola de revisión manual llena"? Actualmente no existe.
+
+  ---
+  ¿Qué quieres atacar primero?
+
+  Los findings caen en tres categorías:
+
+  - A) Adopción y onboarding — empty states en 6 páginas, first-run flow. Mayor impacto en nuevos usuarios. → $impeccable onboard
+  - B) Seguridad operacional — confirmaciones en delete, inline help en campos técnicos, fix bg-black. Mayor impacto en admins. → $impeccable harden + $impeccable clarify
+  - C) Eficiencia diaria — búsqueda y filtros en tablas, bulk actions. Mayor impacto en power users. → $impeccable harden
+
+  ¿Cuál categoría va primero, o atacamos todo en secuencia?

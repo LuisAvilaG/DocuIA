@@ -1,7 +1,9 @@
 import { db } from "@/lib/db";
 import { tenantAuditLog } from "@/db/schema";
-import { isFeatureEnabled } from "@/lib/features";
 
+// Security auditing is UNCONDITIONAL — it must not depend on a billing feature.
+// The `tenant_audit_log` feature only gates whether the tenant can VIEW the log
+// (enforced in GET /api/v1/audit-log), never whether events are recorded.
 export async function logAudit(opts: {
   orgId:          string;
   userId?:        string;
@@ -13,9 +15,6 @@ export async function logAudit(opts: {
   ipAddress?:     string;
 }) {
   try {
-    const enabled = await isFeatureEnabled(opts.orgId, "tenant_audit_log");
-    if (!enabled) return;
-
     await db.insert(tenantAuditLog).values({
       organizationId: opts.orgId,
       userId:         opts.userId,

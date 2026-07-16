@@ -9,4 +9,7 @@ export * from "./platform";
 export * from "./webhooks";
 export * from "./audit";
 export * from "./expenses";
+export * from "./products";
+export * from "./contracts";
+export * from "./rate-limits";
 export * from "./relations";

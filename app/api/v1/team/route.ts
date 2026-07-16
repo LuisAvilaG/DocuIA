@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
 import { orgUsers, organizations } from "@/db/schema";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { hash } from "bcryptjs";
 import { randomUUID, randomBytes } from "crypto";
 import { sendEmail, buildInviteEmail } from "@/lib/email/send";
@@ -30,11 +30,10 @@ export async function POST(req: NextRequest) {
       ? (role as "admin" | "operator" | "viewer")
       : "operator";
 
+    // Email is globally unique across the platform.
     const existing = await db.query.orgUsers.findFirst({
-      where: and(
-        eq(orgUsers.organizationId, session.orgId),
-        eq(orgUsers.email, normalized)
-      ),
+      where: eq(orgUsers.email, normalized),
+      columns: { id: true },
     });
 
     if (existing) {
@@ -43,7 +42,7 @@ export async function POST(req: NextRequest) {
 
     // Generate a readable temp password: xxxx-xxxx-xxxx
     const tempPassword = `${randomBytes(2).toString("hex")}-${randomBytes(2).toString("hex")}-${randomBytes(2).toString("hex")}`;
-    const passwordHash = await hash(tempPassword, 10);
+    const passwordHash = await hash(tempPassword, 12);
     const userId       = randomUUID();
 
     await db.insert(orgUsers).values({

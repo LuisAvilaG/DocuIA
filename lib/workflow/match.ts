@@ -1,11 +1,11 @@
-import { like, eq, and, or } from "drizzle-orm";
+import { like, eq, and, asc } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   catalogItems, catalogVendors, catalogLocations, itemMappings,
 } from "@/db/schema";
 import { computeSimilarity, normalizeForLookup } from "./similarity";
 import type {
-  ExtractedInvoice, ExtractedLine, ItemOption, VendorOption, LocationOption,
+  ExtractedInvoice, ItemOption, VendorOption, LocationOption,
   MatchedLine, UiPayload,
 } from "./types";
 
@@ -30,6 +30,12 @@ type VendorRow = {
 const itemCache = new Map<string, { rows: ItemRow[]; ts: number }>();
 const vendorCache = new Map<string, { rows: VendorRow[]; ts: number }>();
 const CACHE_TTL = 5 * 60 * 1000;
+// Hard cap on how many catalog rows we load into memory for in-JS scoring.
+// FOLLOW-UP: for catalogs above this size, move scoring to SQL (pg_trgm GIN
+// index) so we never truncate or block the event loop. Until then the load is
+// deterministic (ordered by id) and logs when the cap is hit.
+const ITEM_CAP   = Number(process.env.CATALOG_ITEM_CAP)   || 20000;
+const VENDOR_CAP = Number(process.env.CATALOG_VENDOR_CAP) || 20000;
 
 function normalize(v: unknown): string {
   return String(v ?? "").replace(/ /g, " ").replace(/\s+/g, " ").trim();
@@ -58,8 +64,12 @@ async function getAllItems(subsidiaryId: string): Promise<ItemRow[]> {
     })
     .from(catalogItems)
     .where(eq(catalogItems.subsidiaryId, subsidiaryId))
-    .limit(8000);
+    .orderBy(asc(catalogItems.id))
+    .limit(ITEM_CAP);
 
+  if (rows.length === ITEM_CAP) {
+    console.warn(`[match] item catalog for subsidiary ${subsidiaryId} hit the ${ITEM_CAP} cap — matching may miss items; migrate to pg_trgm SQL scoring.`);
+  }
   itemCache.set(subsidiaryId, { rows, ts: Date.now() });
   return rows;
 }
@@ -177,8 +187,12 @@ async function getAllVendors(subsidiaryId: string): Promise<VendorRow[]> {
         eq(catalogVendors.isInactive, false)
       )
     )
-    .limit(10000);
+    .orderBy(asc(catalogVendors.id))
+    .limit(VENDOR_CAP);
 
+  if (rows.length === VENDOR_CAP) {
+    console.warn(`[match] vendor catalog for subsidiary ${subsidiaryId} hit the ${VENDOR_CAP} cap — matching may miss vendors; migrate to pg_trgm SQL scoring.`);
+  }
   vendorCache.set(subsidiaryId, { rows, ts: Date.now() });
   return rows;
 }
@@ -235,8 +249,7 @@ export async function searchVendors(query: string, subsidiaryId: string, limit =
   })
     .filter((r) => r._score >= 40)
     .sort((a, b) => b._score - a._score || a.name.localeCompare(b.name))
-    .slice(0, limit)
-    .map(({ _score, ...v }) => v);
+    .slice(0, limit);
 
   return scored;
 }
@@ -378,9 +391,13 @@ export async function buildUiPayload(
 
       if (memoryItem) {
         const already = candidates.some((c) => c.internal_id === mappedId);
+        // Honest score: reflect the actual memory similarity (0–100), not a flat
+        // 1000. A fuzzy 0.7 memory hit must NOT read as a certain match — that was
+        // how wrong SKUs got auto-processed.
+        const memScore = Math.round((memorySuggestion.similarity ?? 0) * 100);
         const enriched: ItemOption = {
           ...memoryItem,
-          _score: 1000,
+          _score: memScore,
           memory_source: true,
         };
         if (!already) candidates.unshift(enriched);
@@ -392,7 +409,7 @@ export async function buildUiPayload(
         selectedItem = candidates.find((c) => c.internal_id === mappedId) || enriched;
         matchStatus = "FOUND_SINGLE";
         recSource = "memory";
-        recConfidence = 1;
+        recConfidence = memorySuggestion.similarity;
       }
     }
 
@@ -402,14 +419,21 @@ export async function buildUiPayload(
       candidates.splice(0, candidates.length, ...(sel ? [sel, ...rest] : rest));
     }
 
-    let confidence = Number((
-      (line.description ? 0.45 : 0) +
-      (line.quantity !== null ? 0.15 : 0) +
-      (line.rate !== null ? 0.15 : 0) +
-      (line.amount !== null ? 0.2 : 0) +
-      (candidates.length > 0 ? 0.05 : 0)
-    ).toFixed(4));
-    if (recSource === "memory") confidence = Math.max(confidence, 0.98);
+    // Line confidence blends field completeness (max 0.40) with MATCH QUALITY
+    // (up to 0.60). Match quality is the selected candidate's score (0–100 → 0–1);
+    // with no confident selection it is 0, so weak/ambiguous matches can never
+    // reach the auto-process threshold on field completeness alone.
+    const fieldCompleteness =
+      (line.description ? 0.20 : 0) +
+      (line.quantity !== null ? 0.05 : 0) +
+      (line.rate !== null ? 0.075 : 0) +
+      (line.amount !== null ? 0.075 : 0);
+    const matchQuality = selectedItem ? Math.min(1, (selectedItem._score ?? 0) / 100) : 0;
+    let confidence = Number((fieldCompleteness + matchQuality * 0.60).toFixed(4));
+    // Only near-exact memory matches earn near-certainty.
+    if (recSource === "memory" && recConfidence !== null && recConfidence >= 0.95) {
+      confidence = Math.max(confidence, 0.98);
+    }
     totalLineConfidence += confidence;
 
     const selUnitId = normalize(
@@ -448,13 +472,15 @@ export async function buildUiPayload(
 
   const invoiceDate = extracted.invoiceDate || now;
 
+  // Vendor quality: the top vendor's score (exact name ≈ 220) normalized to 0–1.
+  // A weak vendor match drags header confidence down, gating auto-process — so we
+  // never auto-post a bill to a fuzzy-matched (possibly wrong) vendor.
+  const vendorQuality = selectedVendor ? Math.min(1, (selectedVendor._score ?? 0) / 220) : 0;
   const headerConfidence = Number(
-    ([
-      Boolean(extracted.vendor),
-      Boolean(extracted.invoiceNumber),
-      Boolean(invoiceDate),
-      extracted.total !== null,
-    ].filter(Boolean).length / 4).toFixed(4)
+    ((vendorQuality +
+      (extracted.invoiceNumber ? 1 : 0) +
+      (invoiceDate ? 1 : 0) +
+      (extracted.total !== null ? 1 : 0)) / 4).toFixed(4)
   );
   const linesConfidence = lines.length > 0
     ? Number((totalLineConfidence / lines.length).toFixed(4))

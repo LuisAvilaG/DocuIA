@@ -45,6 +45,7 @@ export type VendorOption = {
   internal_id: string;
   name: string;
   entityid: string;
+  _score?: number;
 };
 
 export type LocationOption = {

@@ -144,6 +144,40 @@ export function buildExpenseRejectedEmail(opts: {
   </div>`;
 }
 
+export function buildDemoRequestEmail(opts: {
+  name: string;
+  email: string;
+  company: string;
+  products: string[];
+  volume: string;
+  message: string;
+}): string {
+  const { name, email, company, products, volume, message } = opts;
+  return `<div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#111">
+    <h2 style="margin:0 0 8px">Nueva solicitud de demo</h2>
+    <p style="color:#555;margin:0 0 24px">
+      Alguien pidió una demo de DocuIA desde la página web.
+    </p>
+    <div style="background:#f5f5f5;border-radius:8px;padding:16px;margin:0 0 24px">
+      <p style="margin:0 0 4px;font-size:11px;color:#888">Nombre</p>
+      <p style="margin:0 0 16px;font-weight:500">${esc(name)}</p>
+      <p style="margin:0 0 4px;font-size:11px;color:#888">Email</p>
+      <p style="margin:0 0 16px">${esc(email)}</p>
+      <p style="margin:0 0 4px;font-size:11px;color:#888">Empresa</p>
+      <p style="margin:0 0 16px;font-weight:500">${esc(company)}</p>
+      <p style="margin:0 0 4px;font-size:11px;color:#888">Productos de interés</p>
+      <p style="margin:0 0 16px">${esc(products.length ? products.join(", ") : "No especificado")}</p>
+      <p style="margin:0 0 4px;font-size:11px;color:#888">Documentos por mes</p>
+      <p style="margin:0 0 16px">${esc(volume || "No especificado")}</p>
+      <p style="margin:0 0 4px;font-size:11px;color:#888">Mensaje</p>
+      <p style="margin:0;white-space:pre-wrap">${esc(message || "Sin mensaje")}</p>
+    </div>
+    <a href="mailto:${esc(email)}" style="display:inline-block;background:#4f46e5;color:#fff;text-decoration:none;padding:10px 20px;border-radius:6px;font-weight:500">
+      Responder a ${esc(name)} →
+    </a>
+  </div>`;
+}
+
 export function buildResetEmail(opts: { email: string; resetUrl: string }): string {
   const { email, resetUrl } = opts;
   return `<div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#111">

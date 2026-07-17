@@ -280,20 +280,37 @@ export default function LandingClient() {
       addEventListener("keydown", onKey);
       cleanups.push(() => removeEventListener("keydown", onKey));
 
-      const onSubmit = (e: Event) => {
+      const onSubmit = async (e: Event) => {
         e.preventDefault();
         const btn = form.querySelector<HTMLButtonElement>(".send")!;
+        const hint = form.querySelector<HTMLElement>(".hint");
+        const val = (id: string) => ($(id) as HTMLInputElement).value.trim();
         btn.disabled = true;
         btn.firstChild!.textContent = "Enviando… ";
-        // Pendiente: conectar a POST /api/v1/contact para enviar el correo real.
-        setTimeout(() => {
-          $("cok-name").textContent = ($("cf-name") as HTMLInputElement).value.trim().split(" ")[0];
+        try {
+          const phone = val("cf-phone");
+          const res = await fetch("/api/v1/contact", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              name: val("cf-name"),
+              email: val("cf-email"),
+              company: val("cf-company"),
+              message: phone ? `Teléfono: ${phone}` : "",
+            }),
+          });
+          const d = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(d.error || "No pudimos enviar tu solicitud.");
+          $("cok-name").textContent = val("cf-name").split(" ")[0];
           (form as HTMLElement).style.display = "none";
           ok.style.display = "block";
           gsap.fromTo(ok, { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.5, ease: "power3.out" });
+        } catch (err) {
+          if (hint) { hint.textContent = err instanceof Error ? err.message : "Ocurrió un error. Inténtalo de nuevo."; hint.style.color = "#c0392b"; }
+        } finally {
           btn.disabled = false;
           btn.firstChild!.textContent = "Enviar ";
-        }, 900);
+        }
       };
       form.addEventListener("submit", onSubmit);
       cleanups.push(() => form.removeEventListener("submit", onSubmit));

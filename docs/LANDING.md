@@ -49,14 +49,30 @@ con IA de 3 productos** (AP Automation, Expense Management, Contract Intelligenc
 - Sin frases tipo "Así se ve por dentro" ni "Sin compromiso".
 - Copy menciona la tecnología: "modelos multimodales", "motor de reglas determinista".
 
+## Efectos de alto impacto (elegidos por Luis del muestrario, jul 2026)
+
+Aplicados en `landing-client.tsx` (todos con guardas `prefers-reduced-motion` y
+`pointer: fine` donde toca el mouse):
+
+- **Preloader orbital**: anillos del logo al cargar, una vez por sesión de pestaña
+  (`sessionStorage 'lp-pre'`). Vive fuera de `gsap.context` a propósito (StrictMode).
+- **Titular por caracteres**: el H1 se divide en `.ch` en runtime y entra letra a letra.
+- **Botones magnéticos**: `.btn-main` (excepto `.send` del modal) atraen el cursor.
+- **Tilt 3D**: la tarjeta del hero (`.doc-card`) se inclina siguiendo el mouse.
+- **Marquee con skew**: la banda tipográfica se inclina con la velocidad de scroll
+  (vía `lenis.velocity`, compuesto con `gsap.set({x})`, no con style.transform directo).
+- **Campo de documentos con física**: canvas en el hero (`#heroField`, z-index entre
+  la retícula y el contenido); 22 documentos con deriva que huyen del cursor.
+
+Descartados a propósito: hilo conductor pinneado (6), fondo que muta (8), demo
+drag-and-drop (9). No los agregues sin preguntar.
+
 ## Pendientes
 
-1. **Conectar el formulario del modal a `POST /api/v1/contact`** (hoy simula el envío;
-   está marcado con comentario en `landing-client.tsx`). Producción necesita
-   `CONTACT_EMAIL` y `RESEND_API_KEY` (fallback en código: `ventas@docuia.com`).
-2. Borrar `public/proto/` antes del deploy.
-3. Commit inicial de todo esto (nada está commiteado).
-4. Futuro discutido: páginas de producto individuales (`/facturas`, `/gastos`, `/contratos`)
+1. Producción necesita `CONTACT_EMAIL` y `RESEND_API_KEY` para que el formulario
+   (ya conectado a `POST /api/v1/contact`) entregue el correo.
+2. Borrar `public/demos.html` (muestrario desechable) antes del deploy.
+3. Futuro discutido: páginas de producto individuales (`/facturas`, `/gastos`, `/contratos`)
    usando el tratamiento del pipeline vivo por producto.
 
 ## Cómo correr

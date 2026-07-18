@@ -32,6 +32,10 @@ function FileIcon({ size = 10, lines = false }: { size?: number; lines?: boolean
   );
 }
 
+// Sobrevive al doble-montaje de StrictMode en dev: la línea de tiempo del
+// preloader corre una sola vez por carga y no debe cancelarse en el remount.
+let preloaderPlayed = false;
+
 function ExtractIcon() {
   return (
     <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
@@ -49,6 +53,7 @@ export default function LandingClient() {
 
     gsap.registerPlugin(ScrollTrigger);
     const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const fine = matchMedia("(hover: hover) and (pointer: fine)").matches;
     const $ = (id: string) => document.getElementById(id)!;
     const cleanups: Array<() => void> = [];
 
@@ -76,6 +81,31 @@ export default function LandingClient() {
       cleanups.push(() => a.removeEventListener("click", onClick));
     });
 
+    /* ── Preloader orbital (una vez por sesión de pestaña) ──
+       Vive FUERA de gsap.context: en dev StrictMode el primer montaje se
+       limpia de inmediato y un ctx.revert() lo dejaría congelado en pantalla. */
+    const pre = $("lpre");
+    let preSeen = true;
+    try { preSeen = !!sessionStorage.getItem("lp-pre"); } catch { preSeen = false; }
+    const showPre = !reduced && !preSeen && !preloaderPlayed;
+    if (showPre) {
+      preloaderPlayed = true;
+      try { sessionStorage.setItem("lp-pre", "1"); } catch { /* modo privado */ }
+      gsap.timeline()
+        .fromTo(".lpre-ring", { scale: 0.6, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.6, ease: "power3.out", stagger: 0.08 }, 0)
+        .to(".lpre-ring.r1", { rotate: 260, duration: 1.7, ease: "power1.inOut" }, 0)
+        .to(".lpre-ring.r2", { rotate: -210, duration: 1.7, ease: "power1.inOut" }, 0)
+        .fromTo(".lpre-wd", { opacity: 0, scale: 0.86, y: 6 }, { opacity: 1, scale: 1, y: 0, duration: 0.6, ease: "power3.out" }, 0.25)
+        .to({}, { duration: 0.7 })
+        .to(".lpre-ring", { scale: 2.6, opacity: 0, duration: 0.75, ease: "power3.in", stagger: 0.05 }, 1.7)
+        .to(".lpre-wd", { opacity: 0, scale: 1.1, duration: 0.4, ease: "power2.in" }, 1.85)
+        .to(pre, { autoAlpha: 0, duration: 0.5, ease: "power2.out",
+          onComplete: () => { pre.style.display = "none"; } }, 2.05);
+    } else if (!preloaderPlayed) {
+      pre.style.display = "none";
+    }
+    const introDelay = showPre ? 2.0 : 0;
+
     const ctx = gsap.context(() => {
       const nav = $("nav");
       ScrollTrigger.create({
@@ -84,13 +114,96 @@ export default function LandingClient() {
         onLeaveBack: () => nav.classList.remove("solid"),
       });
 
-      /* ── Entrada del hero ── */
+      /* ── Scroll-spy: resalta la sección activa en el nav ── */
+      const spy = gsap.utils.toArray<HTMLAnchorElement>(".nav-links a")
+        .map((a) => {
+          const href = a.getAttribute("href") ?? "";
+          const el = href.length > 1 && href.startsWith("#") ? document.querySelector<HTMLElement>(href) : null;
+          return { a, el };
+        })
+        .filter((x): x is { a: HTMLAnchorElement; el: HTMLElement } => !!x.el);
+      if (spy.length) {
+        let activeEl: HTMLAnchorElement | null = null;
+        const updateSpy = () => {
+          const mark = window.innerHeight * 0.4;
+          let active = spy[0].a;
+          for (const s of spy) {
+            if (s.el.getBoundingClientRect().top <= mark) active = s.a;
+          }
+          if (active !== activeEl) {
+            activeEl = active;
+            spy.forEach(({ a }) => a.classList.toggle("active", a === active));
+          }
+        };
+        gsap.ticker.add(updateSpy);
+        cleanups.push(() => gsap.ticker.remove(updateSpy));
+        updateSpy();
+      }
+
+      /* ── Entrada del hero: titular por caracteres ── */
       if (!reduced) {
-        gsap.timeline({ defaults: { ease: "power4.out" } })
-          .to("h1 .w", { y: 0, duration: 1.15, stagger: 0.09 }, 0.15)
-          .to(".sub", { opacity: 1, duration: 0.9 }, 0.65)
-          .to(".ctas", { opacity: 1, duration: 0.9 }, 0.8)
-          .to("#machine", { opacity: 1, y: 0, duration: 1.1, ease: "power3.out" }, 0.55);
+        root.querySelectorAll<HTMLElement>("h1 .w").forEach((w) => {
+          if (w.querySelector(".ch")) return;
+          const split = (node: Node) => {
+            [...node.childNodes].forEach((n) => {
+              if (n.nodeType === 3) {
+                const frag = document.createDocumentFragment();
+                for (const c of n.textContent ?? "") {
+                  const s = document.createElement("span");
+                  s.className = "ch";
+                  s.textContent = c;
+                  frag.appendChild(s);
+                }
+                n.parentNode!.replaceChild(frag, n);
+              } else if (n.nodeType === 1) split(n);
+            });
+          };
+          split(w);
+        });
+        gsap.set("h1 .w", { y: 0 });
+        gsap.timeline({ delay: introDelay, defaults: { ease: "power4.out" } })
+          .fromTo("h1 .ch", { yPercent: 115, rotate: 7 }, { yPercent: 0, rotate: 0, duration: 0.9, stagger: 0.025 }, 0.1)
+          .to(".sub", { opacity: 1, duration: 0.9 }, 0.6)
+          .to(".ctas", { opacity: 1, duration: 0.9 }, 0.75)
+          .to("#machine", { opacity: 1, y: 0, duration: 1.1, ease: "power3.out" }, 0.5);
+      }
+
+      /* ── Botones magnéticos ── */
+      if (!reduced && fine) {
+        root.querySelectorAll<HTMLElement>(".btn-main:not(.send)").forEach((b) => {
+          b.classList.add("mag");
+          const qx = gsap.quickTo(b, "x", { duration: 0.4, ease: "power3.out" });
+          const qy = gsap.quickTo(b, "y", { duration: 0.4, ease: "power3.out" });
+          const onMove = (e: MouseEvent) => {
+            const r = b.getBoundingClientRect();
+            qx((e.clientX - r.left - r.width / 2) * 0.35);
+            qy((e.clientY - r.top - r.height / 2) * 0.45);
+          };
+          const onLeave = () => gsap.to(b, { x: 0, y: 0, duration: 0.9, ease: "elastic.out(1,0.35)" });
+          b.addEventListener("mousemove", onMove);
+          b.addEventListener("mouseleave", onLeave);
+          cleanups.push(() => { b.removeEventListener("mousemove", onMove); b.removeEventListener("mouseleave", onLeave); });
+        });
+      }
+
+      /* ── Tilt 3D en la máquina del hero ── */
+      if (!reduced && fine) {
+        const card = root.querySelector<HTMLElement>(".doc-card");
+        const zone = $("machine");
+        if (card && zone) {
+          gsap.set(card, { transformPerspective: 700 });
+          const rx = gsap.quickTo(card, "rotationX", { duration: 0.5, ease: "power2.out" });
+          const ry = gsap.quickTo(card, "rotationY", { duration: 0.5, ease: "power2.out" });
+          const onMove = (e: MouseEvent) => {
+            const r = zone.getBoundingClientRect();
+            ry(((e.clientX - r.left) / r.width - 0.5) * 14);
+            rx(-((e.clientY - r.top) / r.height - 0.5) * 10);
+          };
+          const onLeave = () => gsap.to(card, { rotationX: 0, rotationY: 0, duration: 1, ease: "elastic.out(1,0.4)" });
+          zone.addEventListener("mousemove", onMove);
+          zone.addEventListener("mouseleave", onLeave);
+          cleanups.push(() => { zone.removeEventListener("mousemove", onMove); zone.removeEventListener("mouseleave", onLeave); });
+        }
       }
 
       /* ── La máquina del hero: cicla factura → gasto → contrato ── */
@@ -149,15 +262,17 @@ export default function LandingClient() {
         },
       });
 
-      /* ── Banda tipográfica ── */
+      /* ── Banda tipográfica: avance + skew por velocidad de scroll ── */
       const track = $("track");
       let bandX = 0;
+      const skewTo = gsap.quickTo(track, "skewX", { duration: 0.5, ease: "power2.out" });
       const bandTick = () => {
         const v = lenis ? lenis.velocity : 0;
         bandX -= 0.55 + Math.min(Math.abs(v) * 0.05, 3.2);
         const half = track.scrollWidth / 2;
         if (-bandX >= half) bandX += half;
-        track.style.transform = `translateX(${bandX}px)`;
+        gsap.set(track, { x: bandX });
+        skewTo(gsap.utils.clamp(-12, 12, -v * 0.32));
       };
       gsap.ticker.add(bandTick);
       cleanups.push(() => gsap.ticker.remove(bandTick));
@@ -245,6 +360,71 @@ export default function LandingClient() {
           scrollTrigger: { trigger: el, start: "top 87%" } });
       });
 
+      /* ── Campo de documentos con física en el hero ── */
+      const heroField = $("heroField") as HTMLCanvasElement;
+      if (!reduced && fine && heroField) {
+        const fctx = heroField.getContext("2d")!;
+        const hero = heroField.parentElement as HTMLElement;
+        const DPR = Math.min(devicePixelRatio || 1, 2);
+        let W = 0, H = 0, mxp = -9999, myp = -9999;
+        const size = () => {
+          W = heroField.clientWidth; H = heroField.clientHeight;
+          heroField.width = W * DPR; heroField.height = H * DPR;
+          fctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+        };
+        size();
+        addEventListener("resize", size);
+        cleanups.push(() => removeEventListener("resize", size));
+        const onFieldMove = (e: MouseEvent) => {
+          const r = heroField.getBoundingClientRect();
+          mxp = e.clientX - r.left; myp = e.clientY - r.top;
+        };
+        const onFieldLeave = () => { mxp = myp = -9999; };
+        hero.addEventListener("mousemove", onFieldMove);
+        hero.addEventListener("mouseleave", onFieldLeave);
+        cleanups.push(() => { hero.removeEventListener("mousemove", onFieldMove); hero.removeEventListener("mouseleave", onFieldLeave); });
+
+        const fdocs = Array.from({ length: 22 }, () => ({
+          x: Math.random(), y: Math.random(), vx: 0, vy: 0,
+          ph: Math.random() * Math.PI * 2, sp: 0.25 + Math.random() * 0.45,
+          w: 18 + Math.random() * 16, rot: (Math.random() - 0.5) * 0.7,
+        }));
+        let rafId = 0;
+        const draw = (t: number) => {
+          fctx.clearRect(0, 0, W, H);
+          const time = t / 1000;
+          for (const d of fdocs) {
+            const hx = d.x * W + Math.sin(time * d.sp + d.ph) * 16;
+            const hy = d.y * H + Math.cos(time * d.sp * 0.8 + d.ph) * 12;
+            const dx = hx + d.vx - mxp, dy = hy + d.vy - myp;
+            const dist = Math.hypot(dx, dy);
+            if (dist < 120) {
+              const f = ((120 - dist) / 120) * 3;
+              d.vx += (dx / (dist || 1)) * f; d.vy += (dy / (dist || 1)) * f;
+            }
+            d.vx *= 0.9; d.vy *= 0.9;
+            const x = hx + d.vx, y = hy + d.vy, w = d.w, h = w * 1.28;
+            fctx.save();
+            fctx.translate(x, y);
+            fctx.rotate(d.rot + Math.sin(time * 0.5 + d.ph) * 0.06);
+            fctx.globalAlpha = 0.45;
+            fctx.fillStyle = "#fff"; fctx.strokeStyle = "#E6E1D6"; fctx.lineWidth = 1;
+            fctx.beginPath();
+            fctx.roundRect(-w / 2, -h / 2, w, h, 4);
+            fctx.fill(); fctx.stroke();
+            fctx.fillStyle = "#3ED3AC";
+            fctx.fillRect(-w / 2 + 4, -h / 2 + 5, w * 0.5, 1.8);
+            fctx.fillStyle = "rgba(30,36,48,.22)";
+            fctx.fillRect(-w / 2 + 4, -h / 2 + 10, w - 8, 1.4);
+            fctx.fillRect(-w / 2 + 4, -h / 2 + 14, w * 0.7, 1.4);
+            fctx.restore();
+          }
+          rafId = requestAnimationFrame(draw);
+        };
+        rafId = requestAnimationFrame(draw);
+        cleanups.push(() => cancelAnimationFrame(rafId));
+      }
+
       /* ── Modal de contacto ── */
       const modal = $("cmodal");
       const veil = modal.querySelector(".veil")!;
@@ -325,6 +505,12 @@ export default function LandingClient() {
 
   return (
     <div className="lp" ref={rootRef}>
+      <div className="lpre" id="lpre" aria-hidden="true">
+        <div className="lpre-ring r1" />
+        <div className="lpre-ring r2" />
+        <span className="lpre-wd">Docu<b>IA</b></span>
+      </div>
+
       <header className="nav" id="nav">
         <a className="logo" href="#" aria-label="DocuIA, inicio">
           <Image src="/logo-full.png" alt="DocuIA" width={1376} height={768} priority />
@@ -343,6 +529,7 @@ export default function LandingClient() {
 
       <section className="hero">
         <div className="hero-grid" />
+        <canvas className="hero-field" id="heroField" aria-hidden="true" />
         <div className="hero-inner">
           <div>
             <span className="eyebrow">Plataforma de documentos con IA</span>

@@ -115,7 +115,7 @@ export default function LandingClient() {
       });
 
       /* ── Scroll-spy: resalta la sección activa en el nav ── */
-      const spy = gsap.utils.toArray<HTMLAnchorElement>(".nav-links a")
+      const spy = gsap.utils.toArray<HTMLAnchorElement>(".nav-links > a, .nav-links .nav-dd > a")
         .map((a) => {
           const href = a.getAttribute("href") ?? "";
           const el = href.length > 1 && href.startsWith("#") ? document.querySelector<HTMLElement>(href) : null;
@@ -517,7 +517,25 @@ export default function LandingClient() {
         </a>
         <nav className="nav-links">
           <a href="#como">Cómo funciona</a>
-          <a href="#productos">Productos</a>
+          <div className="nav-dd">
+            <a href="#productos">Productos
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
+            </a>
+            <div className="nav-dd-panel">
+              <a className="nav-dd-item" href="#productos">
+                <span className="di"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg></span>
+                <span><h5>AP Automation</h5><p>Facturas, OC y CFDI directo a tu ERP.</p></span>
+              </a>
+              <a className="nav-dd-item" href="#productos">
+                <span className="di"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1z" /><path d="M8 7h8M8 11h8" /></svg></span>
+                <span><h5>Expense Management</h5><p>Tickets capturados, aprobados y registrados.</p></span>
+              </a>
+              <a className="nav-dd-item" href="/productos/contratos">
+                <span className="di"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6M9 13h6M9 17h6" /></svg></span>
+                <span><h5>Contract Intelligence</h5><p>Flujos documentales validados con IA.</p></span>
+              </a>
+            </div>
+          </div>
           <a href="#seguridad">Seguridad</a>
           <a href="#" data-contact>Contáctanos</a>
         </nav>
@@ -799,7 +817,7 @@ export default function LandingClient() {
               </ul>
             </div>
           </div>
-          <div className="prow reveal">
+          <a className="prow reveal" href="/productos/contratos">
             <span className="idx">03</span>
             <div>
               <h3>Contract Intelligence</h3>
@@ -812,8 +830,9 @@ export default function LandingClient() {
                 <li><CheckIcon />Alertas de vencimiento y renovación</li>
                 <li><CheckIcon />Generación por plantilla en PDF</li>
               </ul>
+              <span className="more">Conocer más<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg></span>
             </div>
-          </div>
+          </a>
         </div>
       </section>
 
@@ -861,7 +880,7 @@ export default function LandingClient() {
             <div className="fcol">
               <a href="#productos">AP Automation</a>
               <a href="#productos">Expense Management</a>
-              <a href="#productos">Contract Intelligence</a>
+              <a href="/productos/contratos">Contract Intelligence</a>
             </div>
           </div>
           <div>

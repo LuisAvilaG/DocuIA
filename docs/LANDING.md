@@ -67,6 +67,25 @@ Aplicados en `landing-client.tsx` (todos con guardas `prefers-reduced-motion` y
 Descartados a propósito: hilo conductor pinneado (6), fondo que muta (8), demo
 drag-and-drop (9). No los agregues sin preguntar.
 
+## Páginas de producto (jul 2026)
+
+Arquitectura: el home (`/`) es el resumen; cada producto tiene su página de detalle.
+
+- **Contract Intelligence** ya existe: ruta `app/productos/contratos/page.tsx` →
+  `components/landing/contract-intelligence-client.tsx`. Reusa `landing.css` (scope `.lp`)
+  y el lienzo de flujos (`.fcanvas/.fnode/.fedges`). Secciones: hero con trazabilidad
+  animada (campo ↔ cita literal), "cómo funciona" (5 pasos), el constructor de flujo que
+  se dibuja al scroll, casos/playbooks, CTA y footer. Modal de contacto propio (→ /api/v1/contact).
+- **AP Automation** (`/productos/facturas`) y **Expense Management** (`/productos/gastos`)
+  aún NO existen. Por eso el dropdown del nav y los footers apuntan esos dos a `#productos`
+  (home) para no dar 404; solo Contract Intelligence enlaza a su página. Al crearlas, cambiar
+  esos hrefs a `/productos/facturas` y `/productos/gastos`.
+- Accesos a las páginas: dropdown "Productos" en el nav (hover), la fila del producto en el
+  home (clicable, con "Conocer más →"), y la columna Productos del footer.
+- Deuda técnica: nav, footer y modal de contacto están duplicados entre `landing-client.tsx`
+  y `contract-intelligence-client.tsx`. Al construir las otras 2 páginas, extraer componentes
+  compartidos (SiteNav, SiteFooter, ContactModal) en vez de re-copiar.
+
 ## Pendientes
 
 1. Producción necesita `CONTACT_EMAIL` y `RESEND_API_KEY` para que el formulario

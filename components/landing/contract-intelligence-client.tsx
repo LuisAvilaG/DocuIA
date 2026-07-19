@@ -87,17 +87,17 @@ export default function ContractIntelligenceClient() {
         gsap.set([".pp-sub", ".pp-ctas", "#trace"], { opacity: 1, y: 0 });
       }
 
-      /* Trazabilidad del hero: el campo se conecta con su cita */
+      /* Trazabilidad del hero: la cita aparece una vez y se queda;
+         el campo pulsa sutil su vínculo con la cita, sin dejar huecos. */
       if (!reduced) {
-        gsap.timeline({ repeat: -1, repeatDelay: 2.4 })
-          .to("#fld", { duration: 1.2 })
-          .set("#fld", { className: "fld hot" }, 1.2)
-          .to("#cite", { opacity: 1, y: 0, duration: 0.6, ease: "power3.out" }, 1.35)
-          .to({}, { duration: 2.6 })
-          .to("#cite", { opacity: 0, y: 8, duration: 0.4 })
-          .set("#fld", { className: "fld" });
+        gsap.timeline({ delay: 0.9 })
+          .set("#fld", { className: "fld hot" })
+          .to("#cite", { opacity: 1, y: 0, duration: 0.7, ease: "power3.out" });
+        gsap.to("#fld", { duration: 1.4, repeat: -1, yoyo: true, repeatDelay: 1.6, ease: "sine.inOut",
+          onRepeat: () => {} , keyframes: [{ boxShadow: "0 0 0 0 rgba(18,144,127,0)" }, { boxShadow: "0 0 0 4px rgba(18,144,127,.14)" }, { boxShadow: "0 0 0 0 rgba(18,144,127,0)" }] });
       } else {
         gsap.set("#cite", { opacity: 1, y: 0 });
+        gsap.set("#fld", { className: "fld hot" });
       }
 
       /* Botones magnéticos */

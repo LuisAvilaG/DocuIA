@@ -41,6 +41,7 @@
 
 /* ── Página de producto ── */
 .lp .pp-hero{position:relative;min-height:88vh;display:flex;align-items:center;overflow:hidden}
+.lp .pp-hero .hero-inner{align-items:center;padding-top:96px;padding-bottom:96px}
 .lp .pp-hero::before{content:"";position:absolute;inset:0;background:radial-gradient(50% 40% at 80% 15%,rgba(62,211,172,.10),transparent 70%)}
 .lp .pp-hero h1{font-size:clamp(2.3rem,4.8vw,4.3rem)}
 .lp .back{display:inline-flex;align-items:center;gap:7px;font-size:13px;font-weight:500;color:var(--slate);text-decoration:none;transition:color .3s}

@@ -876,7 +876,6 @@ export default function LandingClient() {
         </div>
         <div className="fbot">
           <span>© {new Date().getFullYear()} DocuIA · Todos los derechos reservados</span>
-          <a href="/admin/login">Administración</a>
         </div>
       </footer>
 

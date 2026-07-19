@@ -130,13 +130,6 @@ export default function TenantLoginPage() {
           </button>
         </form>
       </div>
-
-      <p className="mt-5 text-[0.6875rem] text-muted-foreground/60">
-        ¿Eres administrador?{" "}
-        <a href="/admin/login" className="hover:text-primary transition-colors duration-[120ms] text-muted-foreground">
-          Panel de plataforma →
-        </a>
-      </p>
     </div>
   );
 }

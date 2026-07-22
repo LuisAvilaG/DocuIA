@@ -335,6 +335,45 @@
 .lp .doc-card{transform-style:preserve-3d;will-change:transform}
 .lp .btn-main.mag{transition:box-shadow .3s}
 
+/* ── Planes ── */
+.lp .pp-hero.tight{min-height:auto}
+.lp .pp-hero.tight .hero-inner{grid-template-columns:1fr;padding-top:120px;padding-bottom:40px}
+.lp .plans{background:#fff;padding:10px 0 60px}
+.lp .plangrid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:20px;align-items:start}
+.lp .plan{border:1px solid var(--lline);border-radius:16px;padding:24px 20px;background:var(--lcard);display:flex;flex-direction:column;height:100%}
+.lp .plan.feat{border:2px solid var(--lteal);box-shadow:0 24px 50px rgba(14,38,71,.08)}
+.lp .plan .badge2{align-self:flex-start;font-size:10.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--lteal-dark);background:var(--lteal-bg);border-radius:6px;padding:3px 9px;margin-bottom:12px}
+.lp .plan h3{font-size:16px;font-weight:600;letter-spacing:-.01em}
+.lp .plan .price{margin-top:10px;font-size:28px;font-weight:700;letter-spacing:-.02em;color:var(--ink)}
+.lp .plan .price small{font-size:13px;font-weight:500;color:var(--slate)}
+.lp .plan .per{font-size:12px;color:var(--sand);margin-top:2px}
+.lp .plan .vol{margin-top:12px;font-size:13px;font-weight:600;color:var(--lteal-dark)}
+.lp .plan ul{list-style:none;margin-top:14px;padding:0;display:flex;flex-direction:column;gap:9px;flex:1}
+.lp .plan li{position:relative;padding-left:22px;font-size:12.5px;line-height:1.5;color:var(--slate)}
+.lp .plan li svg{position:absolute;left:0;top:2px;color:var(--lteal)}
+.lp .plan .pcta{margin-top:18px;text-align:center;font-size:13px;font-weight:600;padding:11px;border-radius:10px;cursor:pointer;transition:all .3s;text-decoration:none;display:block}
+.lp .plan .pcta.solid{background:var(--lteal);color:#fff;border:none}
+.lp .plan .pcta.ghost{background:transparent;color:var(--ink);border:1px solid var(--lline)}
+.lp .plan .pcta.ghost:hover{border-color:var(--sand)}
+.lp .bundle{margin-top:26px;text-align:center;font-size:14px;color:var(--slate)}
+.lp .bundle b{color:var(--lteal-dark)}
+.lp .plannote{margin-top:10px;text-align:center;font-size:12.5px;color:var(--sand)}
+@media (max-width:960px){.lp .plangrid{grid-template-columns:1fr 1fr}}
+@media (max-width:560px){.lp .plangrid{grid-template-columns:1fr}}
+
+/* ── Páginas legales (prosa) ── */
+.lp .legal{max-width:760px;margin:0 auto;padding:130px 40px 100px}
+.lp .legal .kicker{margin-bottom:12px}
+.lp .legal h1{font-size:clamp(2rem,4vw,2.8rem);font-weight:700;letter-spacing:-.03em;line-height:1.1}
+.lp .legal .updated{margin-top:12px;font-size:13px;color:var(--sand)}
+.lp .legal h2{font-size:1.15rem;font-weight:600;letter-spacing:-.01em;margin-top:38px;color:var(--ink)}
+.lp .legal p,.lp .legal li{font-size:15px;line-height:1.75;color:var(--slate);margin-top:12px}
+.lp .legal ul{margin-top:8px;padding-left:22px}
+.lp .legal li{margin-top:6px}
+.lp .legal a{color:var(--lteal-dark);font-weight:500}
+.lp .legal strong{color:var(--ink);font-weight:600}
+.lp .legal .note{margin-top:38px;padding:16px 18px;background:var(--lamber-bg);border-radius:12px;font-size:13.5px;color:var(--lamber);line-height:1.6}
+
 .lp .reveal{opacity:0;transform:translateY(36px)}
 @media (max-width:960px){.lp .hero-inner{grid-template-columns:1fr;gap:50px;padding-top:110px}}
 @media (prefers-reduced-motion:reduce){

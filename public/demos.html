@@ -1,0 +1,455 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DocuIA — Muestrario de efectos (desechable)</title>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{--paper:#FAF7F1;--line:#E6E1D6;--ink:#1E2430;--slate:#6E7280;--sand:#9A937F;
+    --teal:#12907F;--teal-dark:#0F6E56;--teal-bg:#E1F5EE;--mint:#3ED3AC;--navy:#0E2647}
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Plus Jakarta Sans',system-ui,sans-serif;background:var(--paper);color:var(--ink);overflow-x:hidden}
+  .head{max-width:900px;margin:0 auto;padding:60px 32px 10px}
+  .head h1{font-size:clamp(1.8rem,4vw,2.6rem);font-weight:700;letter-spacing:-.03em}
+  .head p{margin-top:10px;color:var(--slate);font-size:14.5px;line-height:1.6}
+  .demo{max-width:900px;margin:0 auto;padding:55px 32px}
+  .demo .tag{display:inline-flex;gap:8px;align-items:center;font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--teal)}
+  .demo .tag b{background:var(--ink);color:#fff;border-radius:6px;padding:2px 8px;font-variant-numeric:tabular-nums}
+  .demo h2{margin-top:8px;font-size:22px;font-weight:700;letter-spacing:-.02em}
+  .demo .desc{margin-top:6px;font-size:13.5px;color:var(--slate);line-height:1.6;max-width:64ch}
+  .stage{margin-top:22px;border:1px solid var(--line);border-radius:16px;background:#fff;min-height:200px;display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden}
+  .replay{margin-top:12px;font:600 12px 'Plus Jakarta Sans';color:var(--teal-dark);background:var(--teal-bg);border:none;border-radius:8px;padding:8px 14px;cursor:pointer}
+  hr{border:none;border-top:1px solid var(--line);max-width:900px;margin:0 auto}
+
+  .btn-m{display:inline-flex;align-items:center;gap:14px;background:var(--ink);color:#F4F6FA;border:none;cursor:pointer;font:600 15px 'Plus Jakarta Sans';padding:12px 12px 12px 26px;border-radius:14px}
+  .btn-m .arr{width:38px;height:38px;border-radius:10px;background:var(--mint);color:var(--navy);display:flex;align-items:center;justify-content:center;font-size:16px}
+  .mzone{padding:70px 90px}
+
+  .tiltcard{width:300px;background:#FFFEFC;border:1px solid var(--line);border-radius:16px;padding:20px;box-shadow:0 24px 50px rgba(14,38,71,.10);transform-style:preserve-3d;will-change:transform}
+  .tiltcard .tr{display:flex;justify-content:space-between;font-size:12.5px;padding:9px 0;border-bottom:1px solid #F1EDE4;transform:translateZ(24px)}
+  .tiltcard .tr:last-child{border-bottom:0}
+  .tiltcard .tr b{font-variant-numeric:tabular-nums}
+  .tiltcard .bdg{font-size:11px;font-weight:600;color:var(--teal-dark);background:var(--teal-bg);border-radius:6px;padding:2px 8px}
+
+  .mq{width:100%;overflow:hidden;padding:22px 0}
+  .mq .trk{display:flex;gap:50px;white-space:nowrap;font-size:64px;font-weight:700;letter-spacing:-.04em;color:transparent;-webkit-text-stroke:1.2px rgba(30,36,48,.3);will-change:transform}
+  .mq .trk em{font-style:normal;color:var(--teal);-webkit-text-stroke:0}
+
+  .chz{font-size:clamp(2rem,5vw,3.4rem);font-weight:700;letter-spacing:-.03em;text-align:center;line-height:1.1;padding:44px 20px}
+  .chz .ch{display:inline-block;white-space:pre}
+  .chz em{font-style:normal;color:var(--teal)}
+
+  .kwrap{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;padding:40px;width:100%}
+  .kbox{border:1px solid var(--line);border-radius:12px;padding:18px;text-align:center}
+  .kbox .n{font-size:34px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+  .kbox .l{margin-top:4px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--sand);font-weight:600}
+
+  .pinsec{height:260vh;position:relative}
+  .pinstage{height:100vh;display:flex;align-items:center;justify-content:center;background:#fff;border-block:1px solid var(--line)}
+  .journey{position:relative;width:min(860px,92%);height:340px}
+  .stations{position:absolute;inset:auto 0 20px;display:flex;justify-content:space-between}
+  .stn{width:31%;border:1px dashed var(--line);border-radius:14px;padding:14px;text-align:center;font-size:12.5px;color:var(--slate);transition:all .3s;background:var(--paper)}
+  .stn.on{border-style:solid;border-color:var(--teal);color:var(--ink);background:var(--teal-bg)}
+  .stn b{display:block;font-size:13.5px;margin-bottom:3px}
+  .traveler{position:absolute;left:6%;top:20px;width:120px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px;box-shadow:0 14px 30px rgba(14,38,71,.12);z-index:2}
+  .traveler i{display:block;height:4px;border-radius:2px;background:#D8DCE4;margin-top:6px}
+  .traveler i:first-child{background:var(--mint);width:55%;margin-top:0}
+  .tscan{position:absolute;left:0;right:0;top:0;height:2px;background:var(--teal);opacity:0}
+  .tcheck{position:absolute;right:-8px;top:-8px;width:22px;height:22px;border-radius:50%;background:var(--teal);color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;transform:scale(0)}
+  .pinhint{position:absolute;top:24px;left:0;font-size:12px;color:var(--sand);letter-spacing:.08em;text-transform:uppercase;font-weight:600}
+
+  .pre{position:relative;width:100%;height:280px;display:flex;align-items:center;justify-content:center;background:var(--navy);border-radius:0}
+  .pre .ring{position:absolute;border:1.5px dashed rgba(62,211,172,.5);border-radius:50%}
+  .pre .r1{width:130px;height:130px}
+  .pre .r2{width:90px;height:90px;border-color:rgba(159,176,204,.4)}
+  .pre .wd{font-size:26px;font-weight:700;color:#F4F6FA;opacity:0}
+  .pre .wd b{color:var(--mint)}
+  .pre .content{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:#F4F6FA;opacity:0}
+  .pre .content em{font-style:normal;color:var(--mint);margin-left:8px}
+
+  .bgmut{height:220vh}
+  .bgpin{height:100vh;display:flex;align-items:center;justify-content:center;transition:none}
+  .bgpin p{font-size:clamp(1.6rem,3.6vw,2.6rem);font-weight:700;letter-spacing:-.03em;max-width:20ch;text-align:center;line-height:1.2}
+
+  .dz{display:grid;grid-template-columns:1fr 1.2fr;gap:20px;padding:30px;width:100%;align-items:center}
+  .chipdoc{width:120px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px;box-shadow:0 10px 24px rgba(14,38,71,.12);cursor:grab;user-select:none;touch-action:none;margin:0 auto;position:relative;z-index:3}
+  .chipdoc:active{cursor:grabbing}
+  .chipdoc i{display:block;height:4px;border-radius:2px;background:#D8DCE4;margin-top:6px}
+  .chipdoc i:first-child{background:var(--mint);width:55%;margin-top:0}
+  .chipdoc p{font-size:10px;color:var(--slate);margin-top:8px;text-align:center}
+  .dropzone{position:relative;border:1.5px dashed var(--line);border-radius:14px;min-height:210px;padding:18px;transition:border-color .3s,background .3s}
+  .dropzone.hot{border-color:var(--teal);background:var(--teal-bg)}
+  .dropzone .ph{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:13px;color:var(--sand);text-align:center;padding:0 30px}
+  .dropzone .row{display:flex;justify-content:space-between;font-size:12.5px;padding:9px 2px;border-bottom:1px solid #F1EDE4;opacity:0}
+  .dropzone .row b{font-variant-numeric:tabular-nums}
+  .dropzone .fin{display:inline-flex;margin-top:12px;font-size:11.5px;font-weight:600;color:var(--teal-dark);background:var(--teal-bg);border-radius:7px;padding:5px 11px;opacity:0}
+  .dzscan{position:absolute;left:0;right:0;top:0;height:2px;background:var(--teal);box-shadow:0 0 12px rgba(18,144,127,.5);opacity:0}
+
+  .fieldwrap{width:100%;height:300px;position:relative}
+  #pfield{width:100%;height:100%;display:block}
+  .fieldwrap p{position:absolute;left:0;right:0;bottom:12px;text-align:center;font-size:12px;color:var(--sand)}
+
+  .foot{max-width:900px;margin:0 auto;padding:40px 32px 80px;font-size:13px;color:var(--slate)}
+</style>
+</head>
+<body>
+
+<div class="head">
+  <h1>Muestrario de efectos</h1>
+  <p>Cada bloque es un ejemplo vivo del efecto propuesto, con la estética de DocuIA. Pruébalos con el mouse y el scroll. Esta página es desechable: no toca la landing.</p>
+</div>
+
+<section class="demo">
+  <span class="tag"><b>1</b> Nivel 1</span>
+  <h2>Botón magnético</h2>
+  <p class="desc">Acerca el cursor al botón sin tocarlo: lo atrae con un resorte y regresa con inercia al alejarte. Se sentiría en todos los CTAs de la landing.</p>
+  <div class="stage"><div class="mzone" id="mzone"><button class="btn-m" id="mbtn">Solicitar una demo<span class="arr">→</span></button></div></div>
+</section>
+<hr>
+
+<section class="demo">
+  <span class="tag"><b>2</b> Nivel 1</span>
+  <h2>Tilt 3D en la máquina del hero</h2>
+  <p class="desc">Mueve el mouse sobre la tarjeta: se inclina en perspectiva como si la sostuvieras, y los datos flotan a distinta profundidad.</p>
+  <div class="stage" style="padding:40px">
+    <div class="tiltcard" id="tilt">
+      <div class="tr"><span style="color:var(--slate)">factura_0044.pdf</span><span class="bdg">Factura</span></div>
+      <div class="tr"><span style="color:var(--slate)">Proveedor</span><b>Fran John Corp.</b></div>
+      <div class="tr"><span style="color:var(--slate)">Total</span><b>$1,610.20</b></div>
+      <div class="tr"><span style="color:var(--slate)">Estado</span><span class="bdg">Completado</span></div>
+    </div>
+  </div>
+</section>
+<hr>
+
+<section class="demo">
+  <span class="tag"><b>3</b> Nivel 1</span>
+  <h2>Marquee con skew de velocidad</h2>
+  <p class="desc">Haz scroll rápido hacia arriba y abajo: las letras gigantes se inclinan con tu velocidad y se enderezan solas con inercia.</p>
+  <div class="stage" style="padding:0">
+    <div class="mq"><div class="trk" id="mqtrk">
+      <span>Facturas <em>·</em> Gastos <em>·</em> Contratos <em>·</em>&nbsp;</span>
+      <span>Facturas <em>·</em> Gastos <em>·</em> Contratos <em>·</em>&nbsp;</span>
+    </div></div>
+  </div>
+</section>
+<hr>
+
+<section class="demo">
+  <span class="tag"><b>4</b> Nivel 1</span>
+  <h2>Titular por caracteres</h2>
+  <p class="desc">El H1 entra letra por letra con rotación sutil, en vez de por palabras. Compara con el actual dándole a repetir.</p>
+  <div class="stage"><div class="chz" id="chz">La contabilidad<br>que se hace <em>sola</em>.</div></div>
+  <button class="replay" id="chz-replay">Repetir</button>
+</section>
+<hr>
+
+<section class="demo">
+  <span class="tag"><b>5</b> Nivel 1</span>
+  <h2>Contadores al entrar en pantalla</h2>
+  <p class="desc">Los números cuentan desde cero cuando la sección aparece. (Si ya corrió, dale a repetir.)</p>
+  <div class="stage"><div class="kwrap">
+    <div class="kbox"><p class="n" data-count="128">0</p><p class="l">Docs este mes</p></div>
+    <div class="kbox"><p class="n" data-count="99.2" data-dec="1" data-suf="%">0</p><p class="l">Sin captura manual</p></div>
+    <div class="kbox"><p class="n" data-count="14" data-suf=" hrs">0</p><p class="l">Ahorradas por semana</p></div>
+  </div></div>
+  <button class="replay" id="k-replay">Repetir</button>
+</section>
+<hr>
+
+<section class="demo" style="padding-bottom:20px">
+  <span class="tag"><b>6</b> Nivel 2</span>
+  <h2>El hilo conductor (sección pinneada)</h2>
+  <p class="desc">La joya de la propuesta, en miniatura: al llegar aquí la página se detiene y <b>tu scroll conduce al documento</b> por sus tres estaciones. En la landing real, este documento sería el mismo del hero viajando por toda la página.</p>
+</section>
+<div class="pinsec" id="pinsec">
+  <div class="pinstage">
+    <div class="journey">
+      <p class="pinhint">Sigue haciendo scroll · tú controlas el documento</p>
+      <div class="traveler" id="trav">
+        <div class="tscan" id="tscan"></div>
+        <div class="tcheck" id="tcheck">✓</div>
+        <i></i><i></i><i style="width:80%"></i><i style="width:60%"></i>
+      </div>
+      <div class="stations">
+        <div class="stn" data-stn><b>1 · Sube</b>El documento entra</div>
+        <div class="stn" data-stn><b>2 · Se procesa</b>La IA lo lee y valida</div>
+        <div class="stn" data-stn><b>3 · Tu ERP</b>Transacción lista</div>
+      </div>
+    </div>
+  </div>
+</div>
+<hr>
+
+<section class="demo">
+  <span class="tag"><b>7</b> Nivel 2</span>
+  <h2>Preloader con el logo orbital</h2>
+  <p class="desc">Al cargar la página: los anillos del logo giran un instante, se expanden y se disuelven revelando el hero. Dale a reproducir.</p>
+  <div class="stage" style="padding:0;background:var(--navy);border-color:var(--navy)">
+    <div class="pre" id="pre">
+      <div class="ring r1" id="pr1"></div>
+      <div class="ring r2" id="pr2"></div>
+      <div class="wd" id="pwd">Docu<b>IA</b></div>
+      <div class="content" id="pcontent">La contabilidad que se hace<em>sola.</em></div>
+    </div>
+  </div>
+  <button class="replay" id="pre-replay">Reproducir</button>
+</section>
+<hr>
+
+<section class="demo" style="padding-bottom:20px">
+  <span class="tag"><b>8</b> Nivel 2</span>
+  <h2>Fondo que muta con el scroll</h2>
+  <p class="desc">En vez de cortes entre secciones, el color del fondo se funde gradualmente (papel → blanco → navy) mientras bajas por este tramo.</p>
+</section>
+<div class="bgmut" id="bgmut">
+  <div class="bgpin" id="bgpin"><p id="bgtxt">El fondo cambia contigo,<br>no contra ti.</p></div>
+</div>
+<hr>
+
+<section class="demo">
+  <span class="tag"><b>9</b> Nivel 3</span>
+  <h2>La demo tocable</h2>
+  <p class="desc"><b>Arrastra el documento</b> y suéltalo dentro de la zona: se procesa frente a ti. En la landing real aceptaría también tu propio PDF.</p>
+  <div class="stage"><div class="dz">
+    <div>
+      <div class="chipdoc" id="chip"><i></i><i></i><i style="width:75%"></i><p>factura_0044.pdf<br>arrástrame</p></div>
+    </div>
+    <div class="dropzone" id="dzone">
+      <div class="dzscan" id="dzscan"></div>
+      <p class="ph" id="dzph">Suelta aquí el documento<br>para procesarlo</p>
+      <div class="row"><span style="color:var(--slate)">Proveedor</span><b>Fran John Corp.</b></div>
+      <div class="row"><span style="color:var(--slate)">Líneas</span><b>9</b></div>
+      <div class="row"><span style="color:var(--slate)">Total</span><b>$1,610.20</b></div>
+      <span class="fin">✓ Vendor bill lista en tu ERP</span>
+    </div>
+  </div></div>
+  <button class="replay" id="dz-replay">Reiniciar</button>
+</section>
+<hr>
+
+<section class="demo">
+  <span class="tag"><b>10</b> Nivel 3</span>
+  <h2>Campo de documentos con física (sabor WebGL)</h2>
+  <p class="desc">Mueve el mouse dentro del área: los documentos flotan con deriva orgánica y huyen del cursor. Esta versión es canvas 2D ligero; la versión Three.js agregaría profundidad, luz y papel real, a costa de más peso.</p>
+  <div class="stage" style="padding:0"><div class="fieldwrap"><canvas id="pfield"></canvas><p>El hero podría respirar así detrás del titular</p></div></div>
+</section>
+
+<p class="foot">Dime los números que sí (por ejemplo: "1, 3, 6 y 9") y los aplico a la landing real con calidad de producción. Esta página se borra después.</p>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
+<script>
+(function(){
+  gsap.registerPlugin(ScrollTrigger);
+
+  /* 1 · Botón magnético */
+  const mzone = document.getElementById("mzone"), mbtn = document.getElementById("mbtn");
+  const mx = gsap.quickTo(mbtn, "x", { duration: 0.4, ease: "power3.out" });
+  const my = gsap.quickTo(mbtn, "y", { duration: 0.4, ease: "power3.out" });
+  mzone.addEventListener("mousemove", (e) => {
+    const r = mzone.getBoundingClientRect();
+    mx((e.clientX - r.left - r.width / 2) * 0.35);
+    my((e.clientY - r.top - r.height / 2) * 0.35);
+  });
+  mzone.addEventListener("mouseleave", () => {
+    gsap.to(mbtn, { x: 0, y: 0, duration: 0.9, ease: "elastic.out(1,0.35)" });
+  });
+
+  /* 2 · Tilt 3D */
+  const tilt = document.getElementById("tilt");
+  const rx = gsap.quickTo(tilt, "rotationX", { duration: 0.5, ease: "power2.out" });
+  const ry = gsap.quickTo(tilt, "rotationY", { duration: 0.5, ease: "power2.out" });
+  gsap.set(tilt, { transformPerspective: 700 });
+  tilt.parentElement.addEventListener("mousemove", (e) => {
+    const r = tilt.getBoundingClientRect();
+    ry(((e.clientX - r.left) / r.width - 0.5) * 22);
+    rx(-((e.clientY - r.top) / r.height - 0.5) * 16);
+  });
+  tilt.parentElement.addEventListener("mouseleave", () => {
+    gsap.to(tilt, { rotationX: 0, rotationY: 0, duration: 1, ease: "elastic.out(1,0.4)" });
+  });
+
+  /* 3 · Marquee con skew */
+  const trk = document.getElementById("mqtrk");
+  let mqx = 0;
+  const skewTo = gsap.quickTo(trk, "skewX", { duration: 0.5, ease: "power2.out" });
+  gsap.ticker.add(() => {
+    mqx -= 1.1;
+    const half = trk.scrollWidth / 2;
+    if (-mqx >= half) mqx += half;
+    gsap.set(trk, { x: mqx });
+  });
+  ScrollTrigger.create({
+    onUpdate: (self) => skewTo(gsap.utils.clamp(-14, 14, self.getVelocity() / -220)),
+  });
+
+  /* 4 · Titular por caracteres */
+  const chz = document.getElementById("chz");
+  (function split(node) {
+    [...node.childNodes].forEach((n) => {
+      if (n.nodeType === 3) {
+        const frag = document.createDocumentFragment();
+        for (const c of n.textContent) {
+          const s = document.createElement("span");
+          s.className = "ch"; s.textContent = c;
+          frag.appendChild(s);
+        }
+        node.replaceChild(frag, n);
+      } else if (n.nodeType === 1 && n.tagName !== "BR") split(n);
+    });
+  })(chz);
+  function playChars() {
+    gsap.fromTo(".chz .ch", { yPercent: 115, rotate: 7, opacity: 0 },
+      { yPercent: 0, rotate: 0, opacity: 1, duration: 0.7, stagger: 0.022, ease: "power4.out" });
+  }
+  document.getElementById("chz-replay").addEventListener("click", playChars);
+  ScrollTrigger.create({ trigger: chz, start: "top 85%", once: true, onEnter: playChars });
+
+  /* 5 · Contadores */
+  function playCounters() {
+    document.querySelectorAll("[data-count]").forEach((el) => {
+      const target = parseFloat(el.dataset.count), dec = +(el.dataset.dec || 0), suf = el.dataset.suf || "";
+      const o = { v: 0 };
+      gsap.to(o, { v: target, duration: 1.6, ease: "power2.out",
+        onUpdate: () => { el.textContent = o.v.toFixed(dec) + suf; } });
+    });
+  }
+  document.getElementById("k-replay").addEventListener("click", playCounters);
+  ScrollTrigger.create({ trigger: ".kwrap", start: "top 85%", once: true, onEnter: playCounters });
+
+  /* 6 · Hilo conductor pinneado */
+  const stns = gsap.utils.toArray("[data-stn]");
+  const tl6 = gsap.timeline({
+    scrollTrigger: {
+      trigger: "#pinsec", start: "top top", end: "bottom bottom", scrub: 0.6, pin: ".pinstage",
+      onUpdate: (self) => stns.forEach((s, i) => s.classList.toggle("on", self.progress > 0.1 + i * 0.3)),
+    },
+    defaults: { ease: "none" },
+  });
+  const jw = () => document.querySelector(".journey").clientWidth;
+  tl6.fromTo("#trav", { x: 0, y: 0, rotate: -4 }, { x: () => jw() * 0.36, y: 40, rotate: 3, duration: 3 })
+     .to("#tscan", { opacity: 1, duration: 0.2 }, 3)
+     .to("#tscan", { top: "92%", duration: 1.6 }, 3.2)
+     .to("#tscan", { opacity: 0, duration: 0.3 }, 4.8)
+     .to("#trav", { x: () => jw() * 0.72, y: 20, rotate: -2, duration: 3 }, 5)
+     .to("#tcheck", { scale: 1, duration: 0.4, ease: "back.out(2.5)" }, 8)
+     .to({}, { duration: 0.6 });
+
+  /* 7 · Preloader */
+  function playPre() {
+    const tl = gsap.timeline();
+    tl.set(["#pr1", "#pr2"], { scale: 1, opacity: 1, rotate: 0 })
+      .set("#pwd", { opacity: 0, scale: 0.9 })
+      .set("#pcontent", { opacity: 0, y: 14 })
+      .to("#pr1", { rotate: 200, duration: 1.1, ease: "power2.inOut" }, 0)
+      .to("#pr2", { rotate: -160, duration: 1.1, ease: "power2.inOut" }, 0)
+      .to("#pwd", { opacity: 1, scale: 1, duration: 0.5 }, 0.25)
+      .to(["#pr1", "#pr2"], { scale: 2.6, opacity: 0, duration: 0.8, ease: "power3.in", stagger: 0.06 }, 1.1)
+      .to("#pwd", { opacity: 0, scale: 1.15, duration: 0.4 }, 1.35)
+      .to("#pcontent", { opacity: 1, y: 0, duration: 0.7, ease: "power3.out" }, 1.75);
+  }
+  document.getElementById("pre-replay").addEventListener("click", playPre);
+  ScrollTrigger.create({ trigger: "#pre", start: "top 80%", once: true, onEnter: playPre });
+
+  /* 8 · Fondo que muta */
+  const stops = ["#FAF7F1", "#FFFFFF", "#0E2647"];
+  const bgpin = document.getElementById("bgpin"), bgtxt = document.getElementById("bgtxt");
+  ScrollTrigger.create({
+    trigger: "#bgmut", start: "top bottom", end: "bottom top", scrub: true, pin: "#bgpin", pinSpacing: false,
+    onUpdate: (self) => {
+      const p = self.progress * (stops.length - 1);
+      const i = Math.min(Math.floor(p), stops.length - 2);
+      const c = gsap.utils.interpolate(stops[i], stops[i + 1], p - i);
+      bgpin.style.background = c;
+      bgtxt.style.color = p > 1.35 ? "#F4F6FA" : "#1E2430";
+    },
+  });
+
+  /* 9 · Demo tocable (drag) */
+  const chip = document.getElementById("chip"), dzone = document.getElementById("dzone");
+  let dragging = false, sx = 0, sy = 0, done = false;
+  const cx = gsap.quickTo(chip, "x", { duration: 0.15 }), cy = gsap.quickTo(chip, "y", { duration: 0.15 });
+  chip.addEventListener("pointerdown", (e) => {
+    if (done) return;
+    dragging = true; sx = e.clientX - (gsap.getProperty(chip, "x") || 0); sy = e.clientY - (gsap.getProperty(chip, "y") || 0);
+    chip.setPointerCapture(e.pointerId);
+    gsap.to(chip, { scale: 1.06, rotate: 3, duration: 0.25 });
+  });
+  chip.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    cx(e.clientX - sx); cy(e.clientY - sy);
+    const r = dzone.getBoundingClientRect();
+    dzone.classList.toggle("hot", e.clientX > r.left && e.clientX < r.right && e.clientY > r.top && e.clientY < r.bottom);
+  });
+  chip.addEventListener("pointerup", (e) => {
+    if (!dragging) return;
+    dragging = false;
+    const r = dzone.getBoundingClientRect();
+    const inside = e.clientX > r.left && e.clientX < r.right && e.clientY > r.top && e.clientY < r.bottom;
+    if (inside && !done) {
+      done = true;
+      dzone.classList.remove("hot");
+      gsap.to(chip, { opacity: 0, scale: 0.6, duration: 0.3 });
+      gsap.timeline()
+        .to("#dzph", { opacity: 0, duration: 0.25 })
+        .set("#dzscan", { opacity: 1, top: 6 })
+        .to("#dzscan", { top: "94%", duration: 1.1, ease: "power1.inOut" })
+        .set("#dzscan", { opacity: 0 })
+        .fromTo(".dropzone .row", { opacity: 0, y: 8 }, { opacity: 1, y: 0, duration: 0.4, stagger: 0.25 }, 0.5)
+        .fromTo(".dropzone .fin", { opacity: 0, scale: 0.7 }, { opacity: 1, scale: 1, duration: 0.4, ease: "back.out(2)" });
+    } else {
+      gsap.to(chip, { x: 0, y: 0, scale: 1, rotate: 0, duration: 0.8, ease: "elastic.out(1,0.4)" });
+    }
+  });
+  document.getElementById("dz-replay").addEventListener("click", () => {
+    done = false;
+    gsap.set(chip, { x: 0, y: 0, opacity: 1, scale: 1, rotate: 0 });
+    gsap.set(".dropzone .row, .dropzone .fin", { opacity: 0 });
+    gsap.to("#dzph", { opacity: 1, duration: 0.3 });
+  });
+
+  /* 10 · Campo de documentos con física */
+  const cv = document.getElementById("pfield"), ctx2 = cv.getContext("2d");
+  let W = 0, H = 0, mxp = -999, myp = -999;
+  const DPR = Math.min(devicePixelRatio || 1, 2);
+  function size() {
+    W = cv.clientWidth; H = cv.clientHeight;
+    cv.width = W * DPR; cv.height = H * DPR;
+    ctx2.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+  size(); addEventListener("resize", size);
+  cv.addEventListener("mousemove", (e) => { const r = cv.getBoundingClientRect(); mxp = e.clientX - r.left; myp = e.clientY - r.top; });
+  cv.addEventListener("mouseleave", () => { mxp = myp = -999; });
+  const docs = Array.from({ length: 26 }, () => ({
+    x: Math.random(), y: Math.random(), vx: 0, vy: 0,
+    ph: Math.random() * Math.PI * 2, sp: 0.3 + Math.random() * 0.5, w: 22 + Math.random() * 18, rot: (Math.random() - 0.5) * 0.8,
+  }));
+  (function draw(t) {
+    ctx2.clearRect(0, 0, W, H);
+    const time = t / 1000;
+    for (const d of docs) {
+      const hx = d.x * W + Math.sin(time * d.sp + d.ph) * 18;
+      const hy = d.y * H + Math.cos(time * d.sp * 0.8 + d.ph) * 14;
+      const dx = hx + d.vx - mxp, dy = hy + d.vy - myp;
+      const dist = Math.hypot(dx, dy);
+      if (dist < 110) { const f = (110 - dist) / 110 * 3.2; d.vx += (dx / (dist || 1)) * f; d.vy += (dy / (dist || 1)) * f; }
+      d.vx *= 0.9; d.vy *= 0.9;
+      const x = hx + d.vx, y = hy + d.vy, w = d.w, h = w * 1.28;
+      ctx2.save(); ctx2.translate(x, y); ctx2.rotate(d.rot + Math.sin(time * 0.5 + d.ph) * 0.06);
+      ctx2.globalAlpha = 0.85;
+      ctx2.fillStyle = "#fff"; ctx2.strokeStyle = "#E6E1D6"; ctx2.lineWidth = 1;
+      ctx2.beginPath(); ctx2.roundRect(-w / 2, -h / 2, w, h, 4); ctx2.fill(); ctx2.stroke();
+      ctx2.fillStyle = "#3ED3AC"; ctx2.fillRect(-w / 2 + 5, -h / 2 + 6, w * 0.5, 2);
+      ctx2.fillStyle = "rgba(30,36,48,.25)";
+      ctx2.fillRect(-w / 2 + 5, -h / 2 + 12, w - 10, 1.6);
+      ctx2.fillRect(-w / 2 + 5, -h / 2 + 17, w * 0.7, 1.6);
+      ctx2.restore();
+    }
+    requestAnimationFrame(draw);
+  })(0);
+})();
+</script>
+</body>
+</html>

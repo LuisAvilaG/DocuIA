@@ -87,9 +87,29 @@ Arquitectura: el home (`/`) es el resumen; cada producto tiene su página de det
   Dropdown, filas del home y footers ahora enlazan a las tres páginas reales.
 - Accesos a las páginas: dropdown "Productos" en el nav (hover), la fila del producto en el
   home (clicable, con "Conocer más →"), y la columna Productos del footer.
-- Deuda técnica: nav, footer y modal de contacto están duplicados entre `landing-client.tsx`
-  y `contract-intelligence-client.tsx`. Al construir las otras 2 páginas, extraer componentes
-  compartidos (SiteNav, SiteFooter, ContactModal) en vez de re-copiar.
+## Chrome compartido (jul 2026)
+
+El nav, footer y modal de contacto están extraídos en `components/landing/site-chrome.tsx`:
+`SiteNav` (dropdown de productos, Planes, Contáctanos), `SiteFooter` (con columna Legal),
+`ContactModal` (se abre por evento global: cualquier `[data-contact]` lo dispara vía un
+listener delegado) y `SiteMotion` (Lenis + nav sólido + botones magnéticos + reveals, para
+páginas sin animación de hero propia como /planes y /legal). Las 4 páginas de producto/home
+ya los consumen. IMPORTANTE: las páginas server (planes, legal) deben `import
+"@/components/landing/landing.css"` directamente — el import dentro de site-chrome no basta.
+
+## Planes y legales
+
+- `/planes` (`app/planes/page.tsx`): 4 tiers à la carte (Arranque $149, Crecimiento $499
+  destacado, Escala $1,199, Enterprise a la medida), precios USD calibrados a LatAm. Son
+  PROPUESTA: validar willingness-to-pay antes de fijarlos.
+- `/legal/privacidad` y `/legal/terminos`: base en español (LFPDPPP). Tienen PLACEHOLDERS
+  ([Razón social], [RFC], [domicilio], [jurisdicción]) y una nota de que requieren completar
+  datos de la entidad y revisión jurídica antes de publicar.
+
+## Favicon / OG
+
+`app/icon.png` (ícono orbital recortado) reemplaza el favicon default. `app/opengraph-image.png`
+y `app/twitter-image.png` (1200x630, generados con sharp). `metadataBase` en el layout raíz.
 
 ## Pendientes
 

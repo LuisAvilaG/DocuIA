@@ -522,11 +522,11 @@ export default function LandingClient() {
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
             </a>
             <div className="nav-dd-panel">
-              <a className="nav-dd-item" href="#productos">
+              <a className="nav-dd-item" href="/productos/facturas">
                 <span className="di"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg></span>
                 <span><h5>AP Automation</h5><p>Facturas, OC y CFDI directo a tu ERP.</p></span>
               </a>
-              <a className="nav-dd-item" href="#productos">
+              <a className="nav-dd-item" href="/productos/gastos">
                 <span className="di"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1z" /><path d="M8 7h8M8 11h8" /></svg></span>
                 <span><h5>Expense Management</h5><p>Tickets capturados, aprobados y registrados.</p></span>
               </a>
@@ -790,7 +790,7 @@ export default function LandingClient() {
         <div className="wrap">
           <p className="kicker reveal">Tres productos, una plataforma</p>
           <h2 className="h2 reveal">Activa solo lo que tu operación necesita.</h2>
-          <div className="prow reveal">
+          <a className="prow reveal" href="/productos/facturas">
             <span className="idx">01</span>
             <div>
               <h3>AP Automation</h3>
@@ -802,9 +802,10 @@ export default function LandingClient() {
                 <li><CheckIcon />Mapeos que se aprenden una vez, se aplican siempre</li>
                 <li><CheckIcon />Modo de prueba sin tocar tu ERP</li>
               </ul>
+              <span className="more">Conocer más<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg></span>
             </div>
-          </div>
-          <div className="prow reveal">
+          </a>
+          <a className="prow reveal" href="/productos/gastos">
             <span className="idx">02</span>
             <div>
               <h3>Expense Management</h3>
@@ -815,8 +816,9 @@ export default function LandingClient() {
                 <li><CheckIcon />Categorías y políticas de tu empresa</li>
                 <li><CheckIcon />Flujo de aprobación con avisos por correo</li>
               </ul>
+              <span className="more">Conocer más<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg></span>
             </div>
-          </div>
+          </a>
           <a className="prow reveal" href="/productos/contratos">
             <span className="idx">03</span>
             <div>
@@ -878,8 +880,8 @@ export default function LandingClient() {
           <div>
             <h4>Productos</h4>
             <div className="fcol">
-              <a href="#productos">AP Automation</a>
-              <a href="#productos">Expense Management</a>
+              <a href="/productos/facturas">AP Automation</a>
+              <a href="/productos/gastos">Expense Management</a>
               <a href="/productos/contratos">Contract Intelligence</a>
             </div>
           </div>

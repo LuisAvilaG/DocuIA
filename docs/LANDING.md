@@ -76,10 +76,15 @@ Arquitectura: el home (`/`) es el resumen; cada producto tiene su página de det
   y el lienzo de flujos (`.fcanvas/.fnode/.fedges`). Secciones: hero con trazabilidad
   animada (campo ↔ cita literal), "cómo funciona" (5 pasos), el constructor de flujo que
   se dibuja al scroll, casos/playbooks, CTA y footer. Modal de contacto propio (→ /api/v1/contact).
-- **AP Automation** (`/productos/facturas`) y **Expense Management** (`/productos/gastos`)
-  aún NO existen. Por eso el dropdown del nav y los footers apuntan esos dos a `#productos`
-  (home) para no dar 404; solo Contract Intelligence enlaza a su página. Al crearlas, cambiar
-  esos hrefs a `/productos/facturas` y `/productos/gastos`.
+- **AP Automation** (`/productos/facturas` → `ap-automation-client.tsx`) y **Expense
+  Management** (`/productos/gastos` → `expense-management-client.tsx`) ya existen. Cada una
+  con FIRMA VISUAL PROPIA (decisión del usuario: no clonar la landing):
+  - Facturas: tarjeta de **cotejo (3-way match)** — líneas que cuadran contra la OC con
+    checks + un **duplicado atrapado** (alerta ámbar). Loop.
+  - Gastos: **teléfono** que captura el ticket (flash + scan → campos) + **cadena de
+    aprobación** (Ana envía → Laura aprueba → registrado en ERP) que se enciende por pasos.
+  - Contratos: lienzo de nodos (ya descrito).
+  Dropdown, filas del home y footers ahora enlazan a las tres páginas reales.
 - Accesos a las páginas: dropdown "Productos" en el nav (hover), la fila del producto en el
   home (clicable, con "Conocer más →"), y la columna Productos del footer.
 - Deuda técnica: nav, footer y modal de contacto están duplicados entre `landing-client.tsx`

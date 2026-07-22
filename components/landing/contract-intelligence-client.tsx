@@ -32,8 +32,8 @@ function FileIcon({ lines = false }: { lines?: boolean }) {
 }
 
 const PRODUCTS = [
-  { href: "/#productos", title: "AP Automation", desc: "Facturas, OC y CFDI directo a tu ERP.", d: "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z M14 2v6h6" },
-  { href: "/#productos", title: "Expense Management", desc: "Tickets capturados, aprobados y registrados.", d: "M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1z M8 7h8 M8 11h8" },
+  { href: "/productos/facturas", title: "AP Automation", desc: "Facturas, OC y CFDI directo a tu ERP.", d: "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z M14 2v6h6" },
+  { href: "/productos/gastos", title: "Expense Management", desc: "Tickets capturados, aprobados y registrados.", d: "M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1z M8 7h8 M8 11h8" },
   { href: "/productos/contratos", title: "Contract Intelligence", desc: "Flujos documentales validados con IA.", d: "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z M14 2v6h6 M9 13h6 M9 17h6" },
 ];
 
@@ -356,8 +356,8 @@ export default function ContractIntelligenceClient() {
           <div>
             <h4>Productos</h4>
             <div className="fcol">
-              <a href="/#productos">AP Automation</a>
-              <a href="/#productos">Expense Management</a>
+              <Link href="/productos/facturas">AP Automation</Link>
+              <Link href="/productos/gastos">Expense Management</Link>
               <Link href="/productos/contratos">Contract Intelligence</Link>
             </div>
           </div>

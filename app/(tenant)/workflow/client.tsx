@@ -5,8 +5,8 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import {
-  FileUp, FileText, Upload, CheckCircle2, XCircle,
-  Clock, Loader2, AlertTriangle, ChevronRight, X,
+  FileUp, FileText, Upload, CheckCircle2, Loader2,
+  AlertTriangle, ChevronRight, X,
   Files, ArrowRight,
 } from "lucide-react";
 import { useFeature } from "@/components/providers/feature-provider";
@@ -36,6 +36,7 @@ interface DocRow {
   documentType: string;
   status: string;
   vendor: string | null;
+  fileName?: string;
   numDoc: string | null;
   total: number | null;
   fallbackUsed: boolean;
@@ -120,13 +121,13 @@ function useDocPolling(docs: DocRow[], onUpdate: (updated: DocRow) => void, onSt
 
 // ─── Single upload form ──────────────────────────────────────────────────────
 function SingleUpload({
-  docType, setDocType, subsidiary, setSubsidiary, subsidiaries,
+  docType, setDocType, subsidiary, setSubsidiary, subsidiaries, onDocumentCreated,
 }: {
   docType: string; setDocType: (v: string) => void;
   subsidiary: string; setSubsidiary: (v: string) => void;
   subsidiaries: Subsidiary[];
+  onDocumentCreated: (document: DocRow) => void;
 }) {
-  const router  = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
   const [file,      setFile]      = useState<File | null>(null);
   const [dragging,  setDragging]  = useState(false);
@@ -154,13 +155,27 @@ function SingleUpload({
       fd.append("documentType", docType);
       const res  = await fetch("/api/v1/workflow/upload", { method: "POST", body: fd });
       const data = await res.json();
-      if (!res.ok) { setError(data.error ?? "Error al procesar"); return; }
-      if (data.status === "review" || data.status === "pending_approval") {
-        router.push(`/history/${data.documentId}`); return;
+
+      // A document row may already exist even if inline processing failed. Show it
+      // immediately so the user can open it from the same list as every other item.
+      if (Number.isFinite(data.documentId)) {
+        onDocumentCreated({
+          id:           data.documentId,
+          documentType: docType,
+          // Queued documents are persisted as "uploaded" before the worker starts.
+          status:       data.status === "queued" ? "uploaded" : (data.status ?? "failed"),
+          vendor:       null,
+          fileName:     file.name,
+          numDoc:       null,
+          total:        null,
+          fallbackUsed: false,
+          createdAt:    new Date().toISOString(),
+        });
       }
+
+      if (!res.ok) { setError(data.error ?? "Error al procesar"); return; }
       setFile(null);
       if (fileRef.current) fileRef.current.value = "";
-      router.refresh();
     } catch {
       setError("No se pudo conectar al servidor");
     } finally {
@@ -239,7 +254,6 @@ function BulkUpload({
   const fileRef  = useRef<HTMLInputElement>(null);
   const [items,   setItems]   = useState<BatchItem[]>([]);
   const [running, setRunning] = useState(false);
-  const [done,    setDone]    = useState(false);
 
   const [dragging, setDragging] = useState(false);
 
@@ -264,7 +278,7 @@ function BulkUpload({
 
   async function runBatch() {
     if (!subsidiary || items.length === 0 || running) return;
-    setRunning(true); setDone(false);
+    setRunning(true);
 
     for (let i = 0; i < items.length; i++) {
       if (items[i].status !== "pending") continue;
@@ -297,7 +311,7 @@ function BulkUpload({
       }
     }
 
-    setRunning(false); setDone(true);
+    setRunning(false);
     router.refresh();
   }
 
@@ -409,7 +423,7 @@ function BulkUpload({
       </button>
 
       {allDone && (
-        <button type="button" onClick={() => { setItems([]); setDone(false); }}
+        <button type="button" onClick={() => setItems([])}
           className="w-full text-xs text-muted-foreground hover:text-foreground transition-colors py-1">
           Nuevo lote
         </button>
@@ -493,6 +507,11 @@ export function WorkflowUploadClient({
     setDocs(prev => prev.map(d => d.id === updated.id ? { ...d, ...updated } : d));
   }, []);
 
+  const addDocument = useCallback((document: DocRow) => {
+    setStalePollIds(prev => prev.filter(id => id !== document.id));
+    setDocs(prev => [document, ...prev.filter(d => d.id !== document.id)].slice(0, 20));
+  }, []);
+
   const handleStale = useCallback((ids: number[]) => {
     setStalePollIds(prev => [...new Set([...prev, ...ids])]);
   }, []);
@@ -546,6 +565,7 @@ export function WorkflowUploadClient({
                 docType={docType} setDocType={setDocType}
                 subsidiary={subsidiary} setSubsidiary={setSubsidiary}
                 subsidiaries={subsidiaries}
+                onDocumentCreated={addDocument}
               />
             )}
           </div>
@@ -597,7 +617,7 @@ export function WorkflowUploadClient({
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
                           <span className="text-xs font-medium text-foreground">
-                            {doc.vendor ?? "Proveedor desconocido"}
+                            {doc.vendor ?? doc.fileName ?? "Documento recién subido"}
                           </span>
                           <span className="text-[10px] text-muted-foreground/60 bg-secondary/80 px-1.5 py-0.5 rounded">
                             {DOC_LABELS[doc.documentType] ?? doc.documentType}

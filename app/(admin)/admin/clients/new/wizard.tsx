@@ -644,7 +644,7 @@ export function ClientWizard() {
                       <p className="text-[11px] text-muted-foreground">Subsidiarias, catálogo de ítems, proveedores y ubicaciones</p>
                     </div>
                     <a
-                      href="/scripts/netsuite/docuia-catalog-v1.js"
+                      href="/api/scripts/netsuite/docuia-catalog-v1.js"
                       download
                       className="flex items-center gap-1 text-xs text-primary hover:text-primary/80 transition-colors"
                     >
@@ -658,7 +658,7 @@ export function ClientWizard() {
                       <p className="text-[11px] text-muted-foreground">Creación de Vendor Bills y Purchase Orders</p>
                     </div>
                     <a
-                      href="/scripts/netsuite/docuia-process-v1.js"
+                      href="/api/scripts/netsuite/docuia-process-v1.js"
                       download
                       className="flex items-center gap-1 text-xs text-primary hover:text-primary/80 transition-colors"
                     >

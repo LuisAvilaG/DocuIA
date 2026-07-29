@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { FeatureToggle } from "@/components/admin/feature-toggle";
@@ -120,8 +121,39 @@ interface Props {
 }
 
 export function ClientDetailContent({ org, features, subsidiaries }: Props) {
+  const router = useRouter();
   const [tab, setTab]                       = useState("overview");
   const [featureCategory, setFeatureCategory] = useState("all");
+
+  // Catalog re-sync (items/vendors/locations) per subsidiary
+  const [catalogSyncingSub, setCatalogSyncingSub] = useState<string | null>(null);
+  const [catalogSyncMsg, setCatalogSyncMsg] = useState<{ subId: string; text: string; ok: boolean } | null>(null);
+  async function handleCatalogSync(subId: string) {
+    setCatalogSyncingSub(subId);
+    setCatalogSyncMsg(null);
+    try {
+      const res = await fetch(`/api/admin/clients/${org.id}/sync`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subsidiaryId: subId }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setCatalogSyncMsg({ subId, ok: false, text: data.error ?? "Error al sincronizar" });
+        return;
+      }
+      const s = data.summary ?? data;
+      const parts = ["items", "vendors", "locations"]
+        .filter(k => typeof s?.[k] === "number")
+        .map(k => `${k === "locations" ? "ubicaciones" : k}: ${s[k]}`);
+      setCatalogSyncMsg({ subId, ok: true, text: parts.length ? parts.join(" · ") : "Catálogo sincronizado" });
+      router.refresh();
+    } catch {
+      setCatalogSyncMsg({ subId, ok: false, text: "No se pudo conectar al servidor" });
+    } finally {
+      setCatalogSyncingSub(null);
+    }
+  }
 
   // Mapa sincronizado con server data para el contador "Activados"
   const [featureEnabledMap, setFeatureEnabledMap] = useState<Map<string, boolean>>(
@@ -857,6 +889,35 @@ export function ClientDetailContent({ org, features, subsidiaries }: Props) {
                             </div>
                           ))}
                         </div>
+
+                        {/* Catalog re-sync from NetSuite */}
+                        <div className="mt-3 flex items-center justify-between gap-3">
+                          <p className="text-[0.6875rem] text-muted-foreground">
+                            Trae ítems, proveedores y ubicaciones de esta subsidiaria desde NetSuite.
+                          </p>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={catalogSyncingSub !== null}
+                            onClick={() => handleCatalogSync(s.id)}
+                          >
+                            {catalogSyncingSub === s.id
+                              ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Sincronizando…</>
+                              : <><RefreshCw className="w-3.5 h-3.5" /> Sincronizar catálogo</>
+                            }
+                          </Button>
+                        </div>
+                        {catalogSyncMsg?.subId === s.id && (
+                          <p className={cn(
+                            "mt-2 text-[0.6875rem] flex items-center gap-1.5",
+                            catalogSyncMsg.ok ? "text-success" : "text-destructive",
+                          )}>
+                            {catalogSyncMsg.ok
+                              ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                              : <AlertTriangle className="w-3.5 h-3.5 shrink-0" />}
+                            {catalogSyncMsg.text}
+                          </p>
+                        )}
                       </>
                     )}
                   </div>

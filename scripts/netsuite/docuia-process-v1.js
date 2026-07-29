@@ -41,7 +41,13 @@
  * @NApiVersion 2.1
  * @NScriptType Restlet
  */
-define(["N/record", "N/search", "N/format"], (record, search, format) => {
+define(["N/record", "N/search", "N/format", "N/log"], (record, search, format, log) => {
+
+  // Safe JSON for logs (NetSuite log details cap ~4000 chars).
+  function j(v, max) {
+    try { return JSON.stringify(v).slice(0, max || 3800); }
+    catch (e) { return String(v); }
+  }
 
   function s(v) { return v == null ? "" : String(v).trim(); }
   function n(v) { if (v == null || v === "") return null; const x = Number(v); return Number.isFinite(x) ? x : null; }
@@ -344,6 +350,7 @@ define(["N/record", "N/search", "N/format"], (record, search, format) => {
 
     if (dryRun) return { ok: true, dry_run: true, mode, would_create: "vendor_bill", preview: { vendor_internal_id: vendorId, invoice_number: invNumber, lines_count: lines.length, expense_lines_count: expenseLines.length }, warnings };
 
+    log.audit({ title: "docuia-process:saving", details: "vendor_bill mode=" + mode + " lines=" + lines.length + " expense=" + expenseLines.length + " warnings=" + j(warnings, 1000) });
     const id = rec.save({ enableSourcing: true, ignoreMandatoryFields: false });
     return { ok: true, dry_run: false, mode, vendor_bill_internal_id: String(id), warnings };
   }
@@ -376,6 +383,7 @@ define(["N/record", "N/search", "N/format"], (record, search, format) => {
 
     if (dryRun) return { ok: true, dry_run: true, mode: "purchase_order", would_create: "purchase_order", preview: { vendor_internal_id: vendorId, document_number: docNum, lines_count: lines.length }, warnings };
 
+    log.audit({ title: "docuia-process:saving", details: "purchase_order lines=" + lines.length + " warnings=" + j(warnings, 1000) });
     const id = rec.save({ enableSourcing: true, ignoreMandatoryFields: false });
     return { ok: true, dry_run: false, mode: "purchase_order", purchase_order_internal_id: String(id), warnings };
   }
@@ -383,12 +391,43 @@ define(["N/record", "N/search", "N/format"], (record, search, format) => {
   function post(body) {
     body = body || {};
     const warnings = [];
+    const docType = s(body.document_type || body.documentType).toLowerCase();
+
+    log.audit({
+      title: "docuia-process:request",
+      details: "docType=" + (docType || "invoice")
+        + " vendor=" + s(body.vendor_internal_id)
+        + " subsidiary=" + s(body.subsidiary_internal_id)
+        + " location=" + s(body.location_internal_id)
+        + " currency=" + s(body.currency_internal_id)
+        + " dry_run=" + s(body.dry_run)
+        + " lines=" + (Array.isArray(body.lines) ? body.lines.length : 0)
+        + " | body=" + j(body),
+    });
+
     try {
-      const docType = s(body.document_type || body.documentType).toLowerCase();
-      if (docType === "purchase_order") return createPurchaseOrder(body, warnings);
-      return createVendorBill(body, warnings);
+      const result = docType === "purchase_order"
+        ? createPurchaseOrder(body, warnings)
+        : createVendorBill(body, warnings);
+
+      if (!result.ok) {
+        log.error({ title: "docuia-process:validation_failed", details: j(result) });
+      } else {
+        log.audit({ title: "docuia-process:ok", details: j(result) });
+      }
+      return result;
     } catch (err) {
-      return { ok: false, error: err && err.message ? err.message : String(err), warnings };
+      // NetSuite throws rich error objects — surface name + message + the fields
+      // it complained about, and log the full thing for the execution log.
+      const name = err && err.name ? String(err.name) : "";
+      const msg  = err && err.message ? String(err.message) : String(err);
+      log.error({
+        title: "docuia-process:exception",
+        details: "name=" + name + " message=" + msg
+          + " | stack=" + (err && err.stack ? String(err.stack).slice(0, 1500) : "n/a")
+          + " | body=" + j(body, 1500),
+      });
+      return { ok: false, error: name ? (name + ": " + msg) : msg, error_name: name, warnings };
     }
   }
 

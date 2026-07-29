@@ -4,6 +4,15 @@
 export async function register() {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
 
+  // First-boot: seed the products/features catalog so the feature guard has a
+  // catalog to resolve against (otherwise isFeatureEnabled throws on a fresh DB).
+  try {
+    const { seedCatalog } = await import("@/lib/bootstrap/seed-catalog");
+    await seedCatalog();
+  } catch (err) {
+    console.error("[instrumentation] seed catalog failed:", err);
+  }
+
   // First-boot: create the platform super-admin from env if it doesn't exist.
   try {
     const { seedPlatformAdmin } = await import("@/lib/bootstrap/seed-admin");

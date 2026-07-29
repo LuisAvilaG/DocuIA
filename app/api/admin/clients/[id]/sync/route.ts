@@ -146,6 +146,12 @@ export async function POST(req: NextRequest, { params }: Params) {
         }
 
         if (type === "locations") {
+          // Clear this subsidiary's locations once before repopulating, so rows
+          // that were wrongly stored for other subsidiaries (before the
+          // subsidiary filter existed) get removed rather than lingering.
+          if (page === 0) {
+            await db.delete(catalogLocations).where(eq(catalogLocations.subsidiaryId, subsidiaryId));
+          }
           for (const row of rows as NSLocation[]) {
             await db.insert(catalogLocations).values({
               subsidiaryId,

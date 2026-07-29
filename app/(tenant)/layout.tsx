@@ -7,6 +7,7 @@ import { eq } from "drizzle-orm";
 import { getAllFeatures } from "@/lib/features";
 import { getActiveProductKeys } from "@/lib/products";
 import { FeatureProvider } from "@/components/providers/feature-provider";
+import { SessionRefresh } from "@/components/providers/session-refresh";
 import { TenantSidebar } from "@/components/tenant/tenant-sidebar";
 import { DryRunBanner } from "@/components/tenant/dry-run-banner";
 
@@ -95,6 +96,7 @@ export default async function TenantLayout({ children }: { children: React.React
 
   return (
     <FeatureProvider features={featuresMap}>
+      <SessionRefresh />
       <div className="flex h-screen bg-background text-foreground overflow-hidden">
         <TenantSidebar
           orgName={org.name}

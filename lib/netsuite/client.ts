@@ -176,6 +176,21 @@ export async function fetchCatalogPage(
   }
 }
 
+// Pulls a human-readable message out of a RESTlet error reply, which may be a
+// string, { error: "..." }, { message: "..." }, or the NetSuite-native shape
+// { error: { code, message } }.
+function extractNsError(json: unknown): string {
+  const j = json as Record<string, unknown> | null;
+  const e = j?.error ?? j?.message ?? j;
+  if (typeof e === "string" && e.trim()) return e;
+  if (e && typeof e === "object") {
+    const o = e as Record<string, unknown>;
+    const msg = [o.message, o.code, o.detail].find(v => typeof v === "string" && v.trim());
+    if (typeof msg === "string") return msg;
+  }
+  try { return JSON.stringify(json).slice(0, 300); } catch { return "NetSuite process restlet returned error"; }
+}
+
 export async function processDocument(
   creds: NSCredentials,
   scriptId: string,
@@ -190,6 +205,11 @@ export async function processDocument(
       return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 200)}`, status: res.status };
     }
     const json = await res.json();
+    // A 200 can still carry a RESTlet-level failure ({ ok:false, error/message }).
+    // Surface that message instead of losing it behind a generic error.
+    if (json && json.ok === false) {
+      return { ok: false, error: extractNsError(json), status: res.status, data: json };
+    }
     return { ok: json.ok ?? true, data: json };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };

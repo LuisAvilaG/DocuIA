@@ -93,5 +93,13 @@ export default async function CatalogsPage() {
     console.error("[catalogs]", err);
   }
 
-  return <CatalogsClient subsidiaries={subs} items={items} vendors={vendors} locations={locations} />;
+  return (
+    <CatalogsClient
+      subsidiaries={subs}
+      items={items}
+      vendors={vendors}
+      locations={locations}
+      isAdmin={session.role === "admin"}
+    />
+  );
 }

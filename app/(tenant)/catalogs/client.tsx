@@ -1,7 +1,8 @@
 ﻿"use client";
 
 import { useState, useMemo } from "react";
-import { Search, Package, Users, MapPin } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Search, Package, Users, MapPin, RefreshCw, Loader2, CheckCircle2, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { CatalogItem, CatalogVendor, CatalogLocation } from "./page";
 
@@ -10,6 +11,7 @@ interface Props {
   items: Record<string, CatalogItem[]>;
   vendors: Record<string, CatalogVendor[]>;
   locations: Record<string, CatalogLocation[]>;
+  isAdmin: boolean;
 }
 
 type Tab = "items" | "vendors" | "locations";
@@ -20,10 +22,38 @@ const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
   { id: "locations", label: "Ubicaciones",  icon: MapPin },
 ];
 
-export function CatalogsClient({ subsidiaries, items, vendors, locations }: Props) {
+export function CatalogsClient({ subsidiaries, items, vendors, locations, isAdmin }: Props) {
+  const router = useRouter();
   const [selectedSub, setSelectedSub] = useState<string>(subsidiaries[0]?.id ?? "");
   const [tab, setTab]     = useState<Tab>("items");
   const [search, setSearch] = useState("");
+
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  async function handleSync() {
+    if (!selectedSub) return;
+    setSyncing(true);
+    setSyncMsg(null);
+    try {
+      const res = await fetch("/api/v1/catalogs/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subsidiaryId: selectedSub }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setSyncMsg({ ok: false, text: data.error ?? "Error al sincronizar" }); return; }
+      const s = data.summary ?? {};
+      const parts = ["items", "vendors", "locations"]
+        .filter(k => typeof s[k] === "number")
+        .map(k => `${k === "locations" ? "ubicaciones" : k === "vendors" ? "proveedores" : "ítems"}: ${s[k]}`);
+      setSyncMsg({ ok: true, text: parts.length ? parts.join(" · ") : "Catálogo sincronizado" });
+      router.refresh();
+    } catch {
+      setSyncMsg({ ok: false, text: "No se pudo conectar al servidor" });
+    } finally {
+      setSyncing(false);
+    }
+  }
 
   const currentItems     = items[selectedSub] ?? [];
   const currentVendors   = vendors[selectedSub] ?? [];
@@ -78,6 +108,31 @@ export function CatalogsClient({ subsidiaries, items, vendors, locations }: Prop
           <h1 className="text-sm font-semibold tracking-[-0.01em] text-foreground">Catálogos NetSuite</h1>
           <p className="text-xs text-muted-foreground">Ítems, proveedores y ubicaciones sincronizados</p>
         </div>
+        {isAdmin && (
+          <div className="flex items-center gap-3">
+            {syncMsg && (
+              <span className={cn(
+                "text-xs flex items-center gap-1.5",
+                syncMsg.ok ? "text-success" : "text-destructive",
+              )}>
+                {syncMsg.ok
+                  ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                  : <AlertTriangle className="w-3.5 h-3.5 shrink-0" />}
+                {syncMsg.text}
+              </span>
+            )}
+            <button
+              onClick={handleSync}
+              disabled={syncing || !selectedSub}
+              className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border border-border text-foreground hover:bg-secondary disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+            >
+              {syncing
+                ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Sincronizando…</>
+                : <><RefreshCw className="w-3.5 h-3.5" /> Sincronizar catálogo</>
+              }
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Subsidiary selector */}

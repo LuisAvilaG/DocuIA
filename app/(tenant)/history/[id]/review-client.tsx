@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import type { BBox } from "@/lib/workflow/types";
 import { DocPreview } from "./doc-preview-lazy";
+import { SelectMenu } from "@/components/ui/select-menu";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -837,16 +838,19 @@ export function ReviewClient({
                       Ubicación
                       <span className="normal-case font-normal text-muted-foreground/50">(opcional)</span>
                     </p>
-                    <select
+                    <SelectMenu
                       value={locationId}
-                      onChange={e => setLocationId(e.target.value)}
-                      className="w-full bg-background border border-border rounded-lg px-2.5 py-1.5 text-xs text-foreground focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 transition-[border-color,box-shadow]"
-                    >
-                      <option value="">— Sin ubicación —</option>
-                      {payload.catalogs.locations.map(loc => (
-                        <option key={loc.internal_id} value={loc.internal_id}>{loc.name}</option>
-                      ))}
-                    </select>
+                      onChange={setLocationId}
+                      ariaLabel="Ubicación"
+                      placeholder="— Sin ubicación —"
+                      options={[
+                        { value: "", label: "— Sin ubicación —" },
+                        ...payload.catalogs.locations.map(loc => ({
+                          value: loc.internal_id,
+                          label: loc.name,
+                        })),
+                      ]}
+                    />
                   </div>
                 </>
               )}
@@ -1049,20 +1053,32 @@ export function ReviewClient({
 
                       {/* Unit selector */}
                       {showUnitSelect && candidateItem && (
-                        <select
+                        <SelectMenu
                           value={line.confirmed_unit_id ?? ""}
-                          onChange={e => setLineUnit(idx, e.target.value)}
-                          className="shrink-0 bg-background border border-border rounded-lg px-2 py-1.5 text-xs text-foreground focus:outline-none focus:border-primary transition-[border-color]"
-                        >
-                          {candidateItem.unit_ids.map((uid, i) => (
-                            <option key={uid} value={uid}>{candidateItem.unit_names[i] || uid}</option>
-                          ))}
-                        </select>
+                          onChange={(v) => setLineUnit(idx, v)}
+                          leadingLabel="Unidad"
+                          ariaLabel="Unidad de medida"
+                          align="right"
+                          className="shrink-0 w-52"
+                          options={candidateItem.unit_ids.map((uid, i) => ({
+                            value: uid,
+                            label: candidateItem.unit_names[i] || uid,
+                          }))}
+                        />
                       )}
 
-                      {/* Catalog unit display */}
+                      {/* Single fixed unit from a candidate (only one option) */}
+                      {candidateItem && candidateItem.unit_ids.length === 1 && candidateItem.unit_names[0] && (
+                        <div className="shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 bg-secondary/50 border border-border rounded-lg text-xs text-foreground">
+                          <span className="text-[10px] font-semibold uppercase tracking-[0.06em] text-muted-foreground/70">Unidad</span>
+                          {candidateItem.unit_names[0]}
+                        </div>
+                      )}
+
+                      {/* Catalog unit display (single fixed unit — not selectable) */}
                       {fromSearch && line.catalog_unit_name && (
-                        <div className="shrink-0 px-2 py-1.5 bg-secondary/50 border border-border rounded-lg text-xs text-foreground">
+                        <div className="shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 bg-secondary/50 border border-border rounded-lg text-xs text-foreground">
+                          <span className="text-[10px] font-semibold uppercase tracking-[0.06em] text-muted-foreground/70">Unidad</span>
                           {line.catalog_unit_name}
                         </div>
                       )}

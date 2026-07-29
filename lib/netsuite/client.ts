@@ -153,7 +153,15 @@ export async function fetchCatalogPage(
   pageSize = 500,
 ): Promise<NSRestletResult<NSPagedResult<NSCatalogItem | NSVendor | NSLocation>>> {
   const url = buildRestletUrl(creds.accountId, scriptId, deployId);
-  const body = { type, subsidiary_id: subsidiaryId, page_index: pageIndex, page_size: pageSize };
+  const body = {
+    type,
+    subsidiary_id: subsidiaryId,
+    page_index: pageIndex,
+    page_size: pageSize,
+    // Locations in NetSuite are account-wide unless we ask the RESTlet to filter
+    // them by subsidiary; without this every subsidiary would pull the full list.
+    filter_locations_by_subsidiary: true,
+  };
   try {
     const res = await nsPost(url, body, creds);
     if (!res.ok) {

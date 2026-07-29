@@ -139,6 +139,12 @@ export async function GET(req: NextRequest) {
               }
             }
             if (type === "locations") {
+              // Drop this subsidiary's locations once before repopulating, to
+              // clear rows wrongly stored for other subsidiaries before the
+              // subsidiary filter existed.
+              if (page === 0) {
+                await db.delete(catalogLocations).where(eq(catalogLocations.subsidiaryId, sub.id));
+              }
               const values = (rows as NSLocation[]).map(row => ({
                 subsidiaryId: sub.id, internalId: row.internal_id,
                 name: row.name || null, fullName: row.full_name || null,

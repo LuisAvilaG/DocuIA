@@ -4,7 +4,7 @@ import { db } from "@/lib/db";
 import { historyDocuments, subsidiaries } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import { processInNetSuite } from "@/lib/workflow/process-ns";
-import { isFeatureEnabled } from "@/lib/features";
+import { isFeatureEnabled, getFeature } from "@/lib/features";
 import { upsertItemMappings } from "@/lib/workflow/mappings";
 
 type Params = { params: Promise<{ docId: string }> };
@@ -28,6 +28,18 @@ export async function POST(req: NextRequest, { params }: Params) {
     });
 
     if (!doc) return NextResponse.json({ error: "Documento no encontrado" }, { status: 404 });
+
+    // Custom NetSuite form configured by the admin for this org. Localization
+    // forms (e.g. CFDI) carry defaults for otherwise-mandatory fields, so this
+    // must travel with the manual-approve flow too — not only the auto pipeline.
+    const formsFeat = await getFeature(session.orgId, "custom_netsuite_forms");
+    const forms = (formsFeat.isEnabled ? formsFeat.config : {}) as {
+      invoice_customform_id?: string;
+      po_customform_id?: string;
+    };
+    const customFormId = (doc.documentType === "purchase_order"
+      ? forms.po_customform_id
+      : forms.invoice_customform_id) || "";
 
     // ── Pending approval flow (admin-only, uses saved payload) ────────────
     if (doc.status === "pending_approval") {
@@ -79,6 +91,7 @@ export async function POST(req: NextRequest, { params }: Params) {
         date:                   document.invoice_date ?? "",
         due_date:               document.due_date ?? null,
         currency_internal_id:   document.currency ?? null,
+        customform_id:          customFormId || undefined,
         line_items:             validLines,
       };
 
@@ -177,6 +190,7 @@ export async function POST(req: NextRequest, { params }: Params) {
       due_date:               body.due_date,
       currency_internal_id:   body.currency,
       location_internal_id:   body.location_internal_id ?? null,
+      customform_id:          customFormId || undefined,
       external_id:            `docuia:${session.orgId}:${docIdNum}`,
       line_items:             validLines,
     };

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { readFile } from "fs/promises";
 import { join } from "path";
+import { requireAdminSession } from "@/lib/auth/admin";
 
 const ALLOWED = new Set(["docuia-catalog-v1.js", "docuia-process-v1.js"]);
 
@@ -8,6 +9,9 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ filename: string }> },
 ) {
+  const { error } = await requireAdminSession();
+  if (error) return error;
+
   const { filename } = await params;
 
   if (!ALLOWED.has(filename)) {

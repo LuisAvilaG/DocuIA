@@ -32,8 +32,10 @@ export async function POST(req: NextRequest, { params }: Params) {
     // Custom NetSuite form configured by the admin for this org. Localization
     // forms (e.g. CFDI) carry defaults for otherwise-mandatory fields, so this
     // must travel with the manual-approve flow too — not only the auto pipeline.
+    // Read the configured id directly (same as the auto pipeline): if an admin
+    // set a form id, honor it regardless of the on/off toggle.
     const formsFeat = await getFeature(session.orgId, "custom_netsuite_forms");
-    const forms = (formsFeat.isEnabled ? formsFeat.config : {}) as {
+    const forms = formsFeat.config as {
       invoice_customform_id?: string;
       po_customform_id?: string;
     };

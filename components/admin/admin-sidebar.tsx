@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
-  LayoutDashboard, Building2, Settings, LogOut, Cpu,
+  LayoutDashboard, Building2, Settings, LogOut, Cpu, ShieldCheck,
 } from "lucide-react";
 import Image from "next/image";
 
@@ -12,6 +12,7 @@ const NAV = [
   { href: "/admin",          label: "Dashboard", icon: LayoutDashboard, exact: true },
   { href: "/admin/clients",  label: "Clientes",  icon: Building2 },
   { href: "/admin/features", label: "Features",  icon: Cpu },
+  { href: "/admin/administrators", label: "Administradores", icon: ShieldCheck },
 ];
 
 export function AdminSidebar() {

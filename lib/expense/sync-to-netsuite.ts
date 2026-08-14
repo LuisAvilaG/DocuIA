@@ -3,6 +3,7 @@ import { expenseReports, expenseItems, nsConnections, subsidiaries } from "@/db/
 import { eq, and } from "drizzle-orm";
 import { decryptField } from "@/lib/crypto/encrypt";
 import { buildOAuthHeader, buildRestApiUrl, NSCredentials } from "@/lib/netsuite/oauth";
+import { getExpenseManagementConfig } from "@/lib/expense/config";
 
 const NS_TIMEOUT_MS = Number(process.env.NETSUITE_TIMEOUT_MS) || 30_000;
 
@@ -150,6 +151,7 @@ async function createNSVendorBill(
     amount:           number;
     department?:      string | null;
     class?:           string | null;
+    customFormId?:     string | null;
   },
 ): Promise<string> {
   const { processDocument } = await import("@/lib/netsuite/client");
@@ -174,6 +176,7 @@ async function createNSVendorBill(
     currency_internal_id:   opts.currency,
     memo:                   opts.memo,
     expense_lines:          [expenseLine],
+    ...(opts.customFormId ? { customform: opts.customFormId } : {}),
   });
   if (!result.ok) throw new Error(result.error ?? "Error en NS al crear Vendor Bill");
   const d = result.data as Record<string, unknown>;
@@ -192,6 +195,8 @@ export interface SyncToNSResult {
 // ── Main sync function ────────────────────────────────────────────────
 
 export async function syncReportToNetsuite(reportId: string, orgId: string): Promise<SyncToNSResult> {
+
+  const expenseConfig = await getExpenseManagementConfig(orgId);
 
   // ── 1. Load report ─────────────────────────────────────────────────
   const report = await db.query.expenseReports.findFirst({
@@ -277,18 +282,25 @@ export async function syncReportToNetsuite(reportId: string, orgId: string): Pro
     }
   }
 
-  // A3. Vendor Bill items need NIT, invoice number, and the category's GL account
+  // A3. Vendor Bill items need NIT, a reference (documents equivalent receive a
+  // deterministic one below), and the category's GL account.
   //     (the expense line on the bill is account-based, not item-based).
   for (const item of vendorBillItems) {
     if (!item.vendorNit) {
       preErrors.push(`Línea ${item.lineNumber}: Vendor Bill requiere NIT/RFC del proveedor`);
     }
-    if (!item.invoiceNumber) {
+    if (!item.invoiceNumber && !item.needsDocumentoEquivalente) {
       preErrors.push(`Línea ${item.lineNumber}: Vendor Bill requiere número de factura`);
     }
     if (!item.category?.netsuiteAccountId) {
       preErrors.push(`Línea ${item.lineNumber}: la categoría no tiene cuenta contable de NetSuite (re-sincroniza catálogos)`);
     }
+  }
+
+  if (vendorBillItems.some(item => item.needsDocumentoEquivalente)
+    && expenseConfig.documentoEquivalenteFormId
+    && !/^\d+$/.test(expenseConfig.documentoEquivalenteFormId)) {
+    preErrors.push("El Custom Form ID de Documento Equivalente debe ser el Internal ID numérico de NetSuite.");
   }
 
   if (preErrors.length > 0) {
@@ -316,14 +328,18 @@ export async function syncReportToNetsuite(reportId: string, orgId: string): Pro
       const found = await lookupVendor(creds, nit);
       if (found) {
         vendorMap.set(nit, found);
-      } else {
-        // Auto-create vendor
+      } else if (expenseConfig.autoCreateVendor) {
+        // The feature explicitly allows creating a missing vendor in NetSuite.
         const nsId = await createVendor(creds, nit, item.vendorName ?? nit, subsidiaryNsId);
         vendorMap.set(nit, nsId);
         // Persist vendor NS ID so future syncs skip the lookup
         await db.update(expenseItems)
           .set({ vendorNsInternalId: nsId, updatedAt: new Date() })
           .where(and(eq(expenseItems.reportId, reportId), eq(expenseItems.vendorNit, nit)));
+      } else {
+        vendorErrors.push(
+          `Línea ${item.lineNumber}: el proveedor ${nit} no existe en NetSuite y la creación automática de proveedores está desactivada.`
+        );
       }
     } catch (e) {
       vendorErrors.push(
@@ -369,7 +385,7 @@ export async function syncReportToNetsuite(reportId: string, orgId: string): Pro
         processDeployId: conn.processDeployId!,
         vendorNsId,
         subsidiaryNsId,
-        invoiceNumber:   item.invoiceNumber ?? "",
+        invoiceNumber:   item.invoiceNumber ?? `DE-${item.id}`,
         invoiceDate,
         memo:            item.description ?? report.purpose,
         externalId:      `docuia-exp:${reportId}:${item.id}`,
@@ -378,6 +394,9 @@ export async function syncReportToNetsuite(reportId: string, orgId: string): Pro
         amount:          Number(item.total),
         department:      item.department?.netsuiteId ?? null,
         class:           item.class?.netsuiteId ?? null,
+        customFormId:    item.needsDocumentoEquivalente
+          ? expenseConfig.documentoEquivalenteFormId || null
+          : null,
       });
 
       await db.update(expenseItems)

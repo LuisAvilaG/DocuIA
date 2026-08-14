@@ -30,22 +30,15 @@ const PLAN_ICON: Record<string, React.ElementType | null> = {
   enterprise: Crown,
 };
 
-interface WhiteLabelConfig {
-  companyName?:  string;
-  logoUrl?:      string;
-  hideBranding?: boolean;
-}
-
 interface Props {
   orgName:        string;
   plan:           "starter" | "growth" | "enterprise";
   userEmail:      string;
   userRole:       string;
   activeProducts: string[];
-  whiteLabel?:    WhiteLabelConfig;
 }
 
-export function TenantSidebar({ orgName, plan, userEmail, userRole, activeProducts, whiteLabel }: Props) {
+export function TenantSidebar({ orgName, plan, userEmail, userRole, activeProducts }: Props) {
   const pathname = usePathname();
   const router   = useRouter();
   const features = useFeatures();
@@ -69,10 +62,6 @@ export function TenantSidebar({ orgName, plan, userEmail, userRole, activeProduc
     .filter((h) => pathname === h || pathname.startsWith(h + "/"))
     .sort((a, b) => b.length - a.length)[0];
 
-  const displayName = whiteLabel?.companyName || orgName;
-  const showDocuIALogo = !whiteLabel?.hideBranding && !whiteLabel?.logoUrl;
-  const customLogoUrl  = whiteLabel?.logoUrl;
-
   async function logout() {
     await fetch("/api/v1/auth/logout", { method: "POST" });
     router.push("/login");
@@ -82,20 +71,11 @@ export function TenantSidebar({ orgName, plan, userEmail, userRole, activeProduc
     <aside className="fixed inset-y-0 left-0 w-56 bg-card border-r border-border flex flex-col z-40">
       {/* Marca / Org */}
       <div className="h-14 px-4 flex items-center gap-3 border-b border-border shrink-0">
-        {(showDocuIALogo || customLogoUrl) && (
-          <div className="w-8 h-8 shrink-0 flex items-center justify-center">
-            <Image
-              src={customLogoUrl ?? "/logo-icon.png"}
-              alt={displayName}
-              width={32}
-              height={32}
-              className="object-contain"
-              unoptimized={!!customLogoUrl}
-            />
-          </div>
-        )}
+        <div className="w-8 h-8 shrink-0 flex items-center justify-center">
+          <Image src="/logo-icon.png" alt="DocuIA" width={32} height={32} className="object-contain" />
+        </div>
         <div className="flex-1 min-w-0">
-          <p className="text-xs font-semibold tracking-[-0.01em] text-foreground truncate">{displayName}</p>
+          <p className="text-xs font-semibold tracking-[-0.01em] text-foreground truncate">{orgName}</p>
           {(() => {
             const PlanIcon = PLAN_ICON[plan];
             return (

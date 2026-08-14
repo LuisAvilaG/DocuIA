@@ -420,23 +420,4 @@ export const FEATURE_CATALOG = [
     isBeta: false,
     sortOrder: 102,
   },
-  // ── ENTERPRISE ──────────────────────────────────────────────────
-  {
-    id: "white_label",
-    name: "White Label / Marca personalizada",
-    description: "Personaliza logo, colores y oculta referencias a DocuIA.",
-    category: "enterprise" as const,
-    featureType: "boolean_config" as const,
-    defaultEnabled: false,
-    defaultConfig: { company_name: "", logo_url: "", primary_color: "#1E3A8A", hide_branding: false },
-    configSchema: [
-      { key: "company_name", label: "Nombre de la empresa", type: "string" },
-      { key: "logo_url", label: "URL del logo", type: "string" },
-      { key: "primary_color", label: "Color primario (hex)", type: "string" },
-      { key: "hide_branding", label: "Ocultar branding de DocuIA", type: "boolean" },
-    ],
-    planRequired: "enterprise" as const,
-    isBeta: false,
-    sortOrder: 90,
-  },
 ] as const;

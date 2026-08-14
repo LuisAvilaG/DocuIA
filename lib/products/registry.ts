@@ -67,7 +67,7 @@ export const FEATURE_PRODUCT: Record<string, ProductKey> = {
 
 // Platform features (product_key = null): webhook_system, api_keys,
 // scheduled_reports, advanced_analytics, data_export, data_retention,
-// document_storage, ip_allowlist, tenant_audit_log, white_label.
+// document_storage, ip_allowlist, tenant_audit_log.
 
 export function productForFeature(featureId: string): ProductKey | null {
   return FEATURE_PRODUCT[featureId] ?? null;

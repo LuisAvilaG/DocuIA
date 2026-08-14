@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { expenseReports, expenseCategories, catalogDepartments, catalogClasses } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import { ItemCaptureClient } from "./item-capture-client";
+import { getExpenseManagementConfig } from "@/lib/expense/config";
 
 export default async function NewItemPage({ params }: { params: Promise<{ id: string }> }) {
   const session = await getTenantSession();
@@ -11,7 +12,7 @@ export default async function NewItemPage({ params }: { params: Promise<{ id: st
 
   const { id } = await params;
 
-  const [report, categories, departments, classes] = await Promise.all([
+  const [report, categories, departments, classes, expenseConfig] = await Promise.all([
     db.query.expenseReports.findFirst({
       where: and(eq(expenseReports.id, id), eq(expenseReports.organizationId, session.orgId)),
       columns: { id: true, purpose: true, status: true, submitterId: true },
@@ -31,6 +32,7 @@ export default async function NewItemPage({ params }: { params: Promise<{ id: st
       columns: { id: true, name: true },
       orderBy: (t, { asc }) => [asc(t.name)],
     }),
+    getExpenseManagementConfig(session.orgId),
   ]);
 
   if (!report) notFound();
@@ -41,9 +43,10 @@ export default async function NewItemPage({ params }: { params: Promise<{ id: st
     <ItemCaptureClient
       reportId={id}
       reportPurpose={report.purpose}
-      categories={categories as any}
+      categories={categories}
       departments={departments}
       classes={classes}
+      countryCode={expenseConfig.countryCode}
     />
   );
 }

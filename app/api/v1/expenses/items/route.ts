@@ -7,6 +7,15 @@ import { eq, and } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { validateExpenseAmounts } from "@/lib/expense/tax-engine";
 
+const EXPENSE_DOCUMENT_TYPES = ["invoice", "receipt", "cuenta_cobro", "documento_equivalente", "unknown"] as const;
+type ExpenseDocumentType = typeof EXPENSE_DOCUMENT_TYPES[number];
+
+function toExpenseDocumentType(value: string): ExpenseDocumentType {
+  return (EXPENSE_DOCUMENT_TYPES as readonly string[]).includes(value)
+    ? value as ExpenseDocumentType
+    : "unknown";
+}
+
 export async function POST(req: NextRequest) {
   const session = await getTenantSession();
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
@@ -71,12 +80,15 @@ export async function POST(req: NextRequest) {
     const nextLine = (report.items.reduce((max, i) => Math.max(max, i.lineNumber), 0)) + 1;
 
     // Auto-detect if needs documento equivalente
-    const docType = (body.documentTypeDetected ?? "unknown") as string;
+    const docType = toExpenseDocumentType(body.documentTypeDetected ?? "unknown");
     const needsDE = body.needsDocumentoEquivalente ??
       (docType === "receipt" || docType === "cuenta_cobro");
 
     // Determine NS record type
-    const nsRecordType = body.paymentMethod === "company_pays_vendor" && docType === "invoice"
+    // Company-paid receipts and cuentas de cobro become Vendor Bills when they
+    // need a Documento Equivalente, so the configured NetSuite Custom Form can
+    // be applied during sync.
+    const nsRecordType = body.paymentMethod === "company_pays_vendor" && (docType === "invoice" || needsDE)
       ? "vendor_bill" as const
       : "expense_report" as const;
 
@@ -101,7 +113,7 @@ export async function POST(req: NextRequest) {
       total:                    String(amounts.total),
       currency:                 body.currency ?? "COP",
       paymentMethod:            body.paymentMethod,
-      documentTypeDetected:     docType as any,
+      documentTypeDetected:     docType,
       needsDocumentoEquivalente: needsDE,
       nsRecordType,
     });
@@ -114,7 +126,7 @@ export async function POST(req: NextRequest) {
         originalName:         body.originalName || null,
         ocrRaw:               body.ocrRaw ?? null,
         ocrConfidence:        body.ocrConfidence != null ? String(body.ocrConfidence) : null,
-        documentTypeDetected: docType as any,
+        documentTypeDetected: docType,
       });
     }
 

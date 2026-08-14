@@ -4,6 +4,9 @@ import { setAdminGrant, getAllFeatures } from "@/lib/features";
 import { db } from "@/lib/db";
 import { adminAuditLog } from "@/db/schema";
 import { ensureBucket } from "@/lib/storage/minio";
+import { subsidiaries } from "@/db/schema";
+import { eq } from "drizzle-orm";
+import { validateCustomFormsConfig } from "@/lib/netsuite/custom-forms";
 
 export async function GET(
   _req: NextRequest,
@@ -25,6 +28,17 @@ export async function PATCH(
 
   const { id: orgId, featureId } = await params;
   const { adminGranted, config, notes } = await req.json();
+
+  if (typeof adminGranted !== "boolean" || !config || typeof config !== "object") {
+    return NextResponse.json({ error: "Configuración inválida" }, { status: 400 });
+  }
+  if (featureId === "custom_netsuite_forms") {
+    const rows = await db.query.subsidiaries.findMany({
+      where: eq(subsidiaries.organizationId, orgId), columns: { id: true },
+    });
+    const validationError = validateCustomFormsConfig(config, new Set(rows.map(row => row.id)));
+    if (validationError) return NextResponse.json({ error: validationError }, { status: 400 });
+  }
 
   await setAdminGrant(orgId, featureId, adminGranted, config, session.sub, notes);
 

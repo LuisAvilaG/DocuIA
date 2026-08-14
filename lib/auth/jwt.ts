@@ -1,6 +1,7 @@
 import { SignJWT, jwtVerify } from "jose";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { jwtSecret, refreshSecret } from "@/lib/env";
+import { isTenantIpAllowed } from "@/lib/security/ip-allowlist";
 
 export interface AccessTokenPayload {
   sub: string;          // user id
@@ -70,5 +71,7 @@ export async function getTenantSession(): Promise<
 > {
   const session = await getSessionFromCookies();
   if (!session || session.type !== "org_user" || !session.orgId) return null;
+  const requestHeaders = await headers();
+  if (!await isTenantIpAllowed(session.orgId, requestHeaders)) return null;
   return session as AccessTokenPayload & { orgId: string; role: string };
 }

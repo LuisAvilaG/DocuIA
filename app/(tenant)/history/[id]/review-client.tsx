@@ -84,6 +84,15 @@ interface CatalogSearchItem {
   drtUnitName: string | null;
 }
 
+interface PurchaseOrderOption {
+  internal_id: string;
+  tranid: string;
+  date: string;
+  total: string;
+  currency: string;
+  status: string;
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function fmt(n: number) {
@@ -97,12 +106,14 @@ export function ReviewClient({
   subsidiaryId,
   storageKey,
   fileExt,
+  poProcessingEnabled = false,
   payload,
 }: {
   docId: number;
   subsidiaryId: string;
   storageKey: string | null;
   fileExt: string;
+  poProcessingEnabled?: boolean;
   payload: ReviewPayload;
 }) {
   const router = useRouter();
@@ -114,6 +125,10 @@ export function ReviewClient({
     return found?.name ?? doc.vendor.name ?? "";
   });
   const [locationId, setLocationId] = useState("");
+  const [poId, setPoId] = useState("");
+  const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrderOption[]>([]);
+  const [purchaseOrdersLoading, setPurchaseOrdersLoading] = useState(false);
+  const [purchaseOrdersError, setPurchaseOrdersError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [submitResult, setSubmitResult] = useState<{ netsuiteId: string | null; recordUrl: string | null } | null>(null);
@@ -218,9 +233,30 @@ export function ReviewClient({
   function selectVendor(id: string, name: string) {
     setVendorId(id);
     setVendorName(name);
+    setPoId("");
+    setPurchaseOrders([]);
+    setPurchaseOrdersError("");
     setVendorSearchOpen(false);
     setVendorCandidatesOpen(false);
   }
+
+  useEffect(() => {
+    if (!poProcessingEnabled || !vendorId) return;
+    let cancelled = false;
+    setPurchaseOrdersLoading(true);
+    setPurchaseOrdersError("");
+    void fetch(`/api/v1/catalog/open-purchase-orders?subsidiaryId=${encodeURIComponent(subsidiaryId)}&vendorId=${encodeURIComponent(vendorId)}`)
+      .then(async res => {
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error ?? "No se pudieron cargar las POs abiertas");
+        if (!cancelled) setPurchaseOrders(data.purchaseOrders ?? []);
+      })
+      .catch(err => {
+        if (!cancelled) setPurchaseOrdersError(err instanceof Error ? err.message : "No se pudieron cargar las POs abiertas");
+      })
+      .finally(() => { if (!cancelled) setPurchaseOrdersLoading(false); });
+    return () => { cancelled = true; };
+  }, [poProcessingEnabled, subsidiaryId, vendorId]);
 
   // Focus + prefill when search dialog opens
   useEffect(() => {
@@ -364,6 +400,7 @@ export function ReviewClient({
           due_date:             doc.due_date,
           currency:             doc.currency,
           location_internal_id: locationId || null,
+          po_internal_id:       poId || null,
           line_items: validLines.map(l => ({
             internal_id:        l.confirmed_item_id,
             item_document_name: l.description,
@@ -851,6 +888,45 @@ export function ReviewClient({
                         })),
                       ]}
                     />
+                  </div>
+                </>
+              )}
+
+              {poProcessingEnabled && (
+                <>
+                  <div className="h-px bg-border" />
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground flex items-center gap-1.5 mb-2">
+                      <Package className="w-3 h-3" />
+                      Orden de compra
+                    </p>
+                    {!vendorId ? (
+                      <p className="text-xs text-muted-foreground">Selecciona un proveedor para consultar sus POs abiertas.</p>
+                    ) : purchaseOrdersLoading ? (
+                      <p className="flex items-center gap-1.5 text-xs text-muted-foreground"><Loader2 className="w-3 h-3 animate-spin" /> Consultando POs abiertas...</p>
+                    ) : purchaseOrdersError ? (
+                      <p className="text-xs text-destructive">{purchaseOrdersError}</p>
+                    ) : (
+                      <>
+                        <SelectMenu
+                          value={poId}
+                          onChange={setPoId}
+                          ariaLabel="Orden de compra abierta"
+                          placeholder="— Sin PO, factura independiente —"
+                          options={[
+                            { value: "", label: "— Sin PO, factura independiente —" },
+                            ...purchaseOrders.map(po => ({
+                              value: po.internal_id,
+                              label: `${po.tranid || `PO #${po.internal_id}`} · ${po.total || "Sin total"} ${po.currency}`,
+                              hint: [po.date, po.status].filter(Boolean).join(" · ") || undefined,
+                            })),
+                          ]}
+                        />
+                        {purchaseOrders.length === 0 && (
+                          <p className="mt-1.5 text-[11px] text-muted-foreground">Este proveedor no tiene POs abiertas en esta subsidiaria.</p>
+                        )}
+                      </>
+                    )}
                   </div>
                 </>
               )}

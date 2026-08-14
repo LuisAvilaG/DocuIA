@@ -58,6 +58,15 @@ export interface NSPagedResult<T> {
   results: T[];
 }
 
+export interface NSOpenPurchaseOrder {
+  internal_id: string;
+  tranid: string;
+  date: string;
+  total: string;
+  currency: string;
+  status: string;
+}
+
 async function nsGet(url: string, creds: NSCredentials): Promise<Response> {
   const authHeader = buildOAuthHeader(url, "GET", creds);
   return fetch(url, {
@@ -71,7 +80,7 @@ async function nsGet(url: string, creds: NSCredentials): Promise<Response> {
   });
 }
 
-async function nsPost(url: string, body: unknown, creds: NSCredentials): Promise<Response> {
+async function nsPost(url: string, body: unknown, creds: NSCredentials, timeoutMs = NS_TIMEOUT_MS): Promise<Response> {
   const authHeader = buildOAuthHeader(url, "POST", creds);
   return fetch(url, {
     method: "POST",
@@ -81,7 +90,7 @@ async function nsPost(url: string, body: unknown, creds: NSCredentials): Promise
       Accept: "application/json",
     },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(NS_TIMEOUT_MS),
+    signal: AbortSignal.timeout(timeoutMs),
   });
 }
 
@@ -151,6 +160,8 @@ export async function fetchCatalogPage(
   subsidiaryId: string,
   pageIndex: number,
   pageSize = 500,
+  timeoutMs = NS_TIMEOUT_MS,
+  serviceCategoryId?: string,
 ): Promise<NSRestletResult<NSPagedResult<NSCatalogItem | NSVendor | NSLocation>>> {
   const url = buildRestletUrl(creds.accountId, scriptId, deployId);
   const body = {
@@ -161,9 +172,10 @@ export async function fetchCatalogPage(
     // Locations in NetSuite are account-wide unless we ask the RESTlet to filter
     // them by subsidiary; without this every subsidiary would pull the full list.
     filter_locations_by_subsidiary: true,
+    ...(serviceCategoryId ? { service_category_id: serviceCategoryId } : {}),
   };
   try {
-    const res = await nsPost(url, body, creds);
+    const res = await nsPost(url, body, creds, timeoutMs);
     if (!res.ok) {
       const text = await res.text().catch(() => "");
       return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 200)}`, status: res.status };
@@ -171,6 +183,34 @@ export async function fetchCatalogPage(
     const json = await res.json();
     if (!json.ok) return { ok: false, error: json.message || json.error || "Catalog script error" };
     return { ok: true, data: json };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function fetchOpenPurchaseOrders(
+  creds: NSCredentials,
+  scriptId: string,
+  deployId: string,
+  subsidiaryId: string,
+  vendorId: string,
+): Promise<NSRestletResult<NSOpenPurchaseOrder[]>> {
+  const url = buildRestletUrl(creds.accountId, scriptId, deployId);
+  try {
+    const res = await nsPost(url, {
+      type: "open_purchase_orders",
+      subsidiary_id: subsidiaryId,
+      vendor_id: vendorId,
+      page_index: 0,
+      page_size: 100,
+    }, creds);
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 200)}`, status: res.status };
+    }
+    const json = await res.json();
+    if (!json.ok) return { ok: false, error: json.message || json.error || "Catalog script error" };
+    return { ok: true, data: json.results ?? [] };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }

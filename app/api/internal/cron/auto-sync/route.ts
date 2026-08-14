@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { nsConnections, subsidiaries, catalogItems, catalogVendors, catalogLocations } from "@/db/schema";
+import { nsConnections, subsidiaries, catalogItems, catalogVendors, catalogLocations, orgFeatures } from "@/db/schema";
 import { and, eq, max, sql } from "drizzle-orm";
 import { getFeature } from "@/lib/features";
 import { fetchCatalogPage } from "@/lib/netsuite/client";
@@ -32,15 +32,50 @@ export async function GET(req: NextRequest) {
       }
       if (!feat.isEnabled) continue;
 
-      const config = feat.config as { interval_hours?: number };
+      const config = feat.config as { interval_hours?: number; check_every_minutes?: number; start_delay_seconds?: number; last_check_at?: string };
       const intervalMs = (config.interval_hours ?? 24) * 3600_000;
+      const checkEveryMs = Math.max(1, config.check_every_minutes ?? 5) * 60_000;
+      const lastCheckAt = config.last_check_at ? new Date(config.last_check_at).getTime() : 0;
+      if (lastCheckAt && Date.now() - lastCheckAt < checkEveryMs) {
+        summary[org.id] = { skipped: "check interval not reached" };
+        continue;
+      }
 
-      const subs = await db.query.subsidiaries.findMany({
+      const [featureOverride] = await db.select({ configJson: orgFeatures.configJson, updatedAt: orgFeatures.updatedAt })
+        .from(orgFeatures)
+        .where(and(eq(orgFeatures.organizationId, org.id), eq(orgFeatures.featureId, "auto_sync")));
+      const startDelayMs = Math.max(0, config.start_delay_seconds ?? 20) * 1000;
+      if (featureOverride?.updatedAt && Date.now() - featureOverride.updatedAt.getTime() < startDelayMs) {
+        summary[org.id] = { skipped: "initial delay not reached" };
+        continue;
+      }
+
+      // `check_every_minutes` controls the tenant's effective cadence even when
+      // the deployment invokes this endpoint more frequently.
+      await db.update(orgFeatures).set({
+        configJson: { ...((featureOverride?.configJson ?? {}) as Record<string, unknown>), last_check_at: new Date().toISOString() },
+      }).where(and(eq(orgFeatures.organizationId, org.id), eq(orgFeatures.featureId, "auto_sync")));
+
+      const advancedFeature = await getFeature(org.id, "sync_advanced");
+      const advanced = advancedFeature.config as {
+        page_size?: number;
+        mx_max_subsidiaries_per_run?: number;
+        mx_service_category_id?: number;
+        request_timeout_ms?: number;
+      };
+      const pageSize = Math.min(1000, Math.max(50, Math.round(advanced.page_size ?? 500)));
+      const timeoutMs = Math.min(120_000, Math.max(5_000, Math.round(advanced.request_timeout_ms ?? 45_000)));
+
+      const allSubs = await db.query.subsidiaries.findMany({
         where: and(
           eq(subsidiaries.organizationId, org.id),
           eq(subsidiaries.isActive, true),
         ),
       });
+      const mxLimit = Math.max(0, Math.round(advanced.mx_max_subsidiaries_per_run ?? 0));
+      const mxSubs = allSubs.filter(sub => sub.currency === "MXN");
+      const otherSubs = allSubs.filter(sub => sub.currency !== "MXN");
+      const subs = mxLimit > 0 ? [...otherSubs, ...mxSubs.slice(0, mxLimit)] : allSubs;
 
       const conn = await db.query.nsConnections.findFirst({
         where: and(
@@ -88,7 +123,8 @@ export async function GET(req: NextRequest) {
           while (true) {
             const result = await fetchCatalogPage(
               creds, conn.catalogScriptId, conn.catalogDeployId,
-              type, sub.nsSubsidiaryId, page, 500,
+              type, sub.nsSubsidiaryId, page, pageSize, timeoutMs,
+              type === "items" && sub.currency === "MXN" ? String(advanced.mx_service_category_id ?? "") : undefined,
             );
             if (!result.ok || !result.data) break;
             const rows = result.data.results;

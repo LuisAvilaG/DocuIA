@@ -736,6 +736,7 @@ export function ClientDetailContent({ org, features, subsidiaries }: Props) {
                   <FeatureToggle
                     feature={f as any}
                     orgId={org.id}
+                    subsidiaries={subsList.map(s => ({ id: s.id, name: s.name }))}
                     onEnabledChange={handleFeatureEnabledChange}
                   />
                 </div>

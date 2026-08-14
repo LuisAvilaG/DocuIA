@@ -14,7 +14,7 @@ async function main() {
       target: features.id,
       set: {
         name: f.name, description: f.description, defaultEnabled: f.defaultEnabled,
-        defaultConfig: f.defaultConfig, configSchema: f.configSchema,
+        featureType: f.featureType, defaultConfig: f.defaultConfig, configSchema: f.configSchema,
         planRequired: f.planRequired, isBeta: f.isBeta, sortOrder: f.sortOrder,
       },
     });

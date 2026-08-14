@@ -6,6 +6,7 @@ import { eq, and } from "drizzle-orm";
 import { processInNetSuite } from "@/lib/workflow/process-ns";
 import { isFeatureEnabled, getFeature } from "@/lib/features";
 import { upsertItemMappings } from "@/lib/workflow/mappings";
+import { resolveCustomFormId } from "@/lib/netsuite/custom-forms";
 
 type Params = { params: Promise<{ docId: string }> };
 
@@ -35,13 +36,7 @@ export async function POST(req: NextRequest, { params }: Params) {
     // Read the configured id directly (same as the auto pipeline): if an admin
     // set a form id, honor it regardless of the on/off toggle.
     const formsFeat = await getFeature(session.orgId, "custom_netsuite_forms");
-    const forms = formsFeat.config as {
-      invoice_customform_id?: string;
-      po_customform_id?: string;
-    };
-    const customFormId = (doc.documentType === "purchase_order"
-      ? forms.po_customform_id
-      : forms.invoice_customform_id) || "";
+    const customFormId = resolveCustomFormId(formsFeat.config, doc.subsidiaryId, doc.documentType);
 
     // ── Pending approval flow (admin-only, uses saved payload) ────────────
     if (doc.status === "pending_approval") {
@@ -148,6 +143,7 @@ export async function POST(req: NextRequest, { params }: Params) {
       due_date:            string | null;
       currency:            string;
       location_internal_id?: string | null;
+      po_internal_id?: string | null;
       line_items: Array<{
         internal_id:        string;
         item_document_name: string;
@@ -160,6 +156,12 @@ export async function POST(req: NextRequest, { params }: Params) {
 
     if (!body.vendor_internal_id) {
       return NextResponse.json({ error: "Selecciona un proveedor de NetSuite" }, { status: 400 });
+    }
+    if (body.po_internal_id) {
+      const poProcessingEnabled = await isFeatureEnabled(session.orgId, "po_processing");
+      if (!poProcessingEnabled || doc.documentType !== "invoice") {
+        return NextResponse.json({ error: "El procesamiento con PO no está habilitado para este documento" }, { status: 403 });
+      }
     }
     const validLines = body.line_items?.filter((l) => l.internal_id) ?? [];
     if (!validLines.length) {
@@ -176,7 +178,15 @@ export async function POST(req: NextRequest, { params }: Params) {
       );
     }
 
-    const dryRun = await isFeatureEnabled(session.orgId, "netsuite_dry_run");
+    const [dryRun, poFeature] = await Promise.all([
+      isFeatureEnabled(session.orgId, "netsuite_dry_run"),
+      getFeature(session.orgId, "po_processing"),
+    ]);
+    const poConfig = poFeature.config as {
+      apply_to_po_lines?: boolean;
+      set_unselected_po_lines_to_zero?: boolean;
+      allow_additional_lines?: boolean;
+    };
 
     await db.update(historyDocuments)
       .set({ status: "processing", updatedAt: new Date() })
@@ -192,6 +202,10 @@ export async function POST(req: NextRequest, { params }: Params) {
       due_date:               body.due_date,
       currency_internal_id:   body.currency,
       location_internal_id:   body.location_internal_id ?? null,
+      po_internal_id:         body.po_internal_id ?? null,
+      apply_to_po_lines:      poConfig.apply_to_po_lines ?? true,
+      set_unselected_po_lines_to_zero: poConfig.set_unselected_po_lines_to_zero ?? false,
+      allow_additional_lines: poConfig.allow_additional_lines ?? true,
       customform_id:          customFormId || undefined,
       external_id:            `docuia:${session.orgId}:${docIdNum}`,
       line_items:             validLines,

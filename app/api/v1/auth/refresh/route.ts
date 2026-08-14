@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { authSessions, orgUsers } from "@/db/schema";
 import { and, eq, isNull } from "drizzle-orm";
 import { randomBytes } from "crypto";
+import { isTenantIpAllowed } from "@/lib/security/ip-allowlist";
 
 export async function POST(req: NextRequest) {
   const refreshCookie = req.cookies.get("refresh_token")?.value;
@@ -42,6 +43,9 @@ export async function POST(req: NextRequest) {
     const user = await db.query.orgUsers.findFirst({ where: eq(orgUsers.id, sub) });
     if (!user || !user.isActive) {
       return NextResponse.json({ error: "Usuario inactivo" }, { status: 401 });
+    }
+    if (!await isTenantIpAllowed(user.organizationId, req.headers)) {
+      return NextResponse.json({ error: "Acceso restringido por IP" }, { status: 403 });
     }
 
     const newNonce     = randomBytes(32).toString("hex");

@@ -21,8 +21,11 @@ export type DayRow = {
 export default async function StatisticsPage() {
   const session = await getTenantSession();
   if (!session) redirect("/login");
+  if (!await isFeatureEnabled(session.orgId, "advanced_analytics")) redirect("/dashboard");
 
-  const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+  const thirtyDaysAgoDate = new Date();
+  thirtyDaysAgoDate.setDate(thirtyDaysAgoDate.getDate() - 30);
+  const thirtyDaysAgo = thirtyDaysAgoDate.toISOString().slice(0, 10);
 
   let rows: DayRow[] = [];
 

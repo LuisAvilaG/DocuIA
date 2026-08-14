@@ -10,6 +10,7 @@ import { logWorkflow } from "./log";
 import { parseCfdi } from "./cfdi-parser";
 import { deliverWebhooks } from "@/lib/webhooks/deliver";
 import { getAllFeatures, isFeatureEnabled } from "@/lib/features";
+import { validateExtraction, type ExtractionValidationConfig } from "./validation";
 import { decryptField } from "@/lib/crypto/encrypt";
 import { upsertItemMappings } from "./mappings";
 import { resolveCustomFormId, type CustomFormsConfig } from "@/lib/netsuite/custom-forms";
@@ -92,6 +93,22 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   const exceptionQueueEnabled = feat.isEnabled("exception_queue");
   const customForms = feat.isEnabled("custom_netsuite_forms")
     ? feat.getConfig("custom_netsuite_forms") as CustomFormsConfig
+    : undefined;
+  const modelSelection = feat.isEnabled("ai_model_selection")
+    ? feat.getConfig("ai_model_selection") as {
+        primary_model?: string;
+        secondary_model?: string;
+        max_chars?: number;
+      }
+    : undefined;
+  const validationConfig = feat.isEnabled("ai_validation_thresholds")
+    ? feat.getConfig("ai_validation_thresholds") as ExtractionValidationConfig
+    : undefined;
+  const autoMapping = feat.isEnabled("auto_mapping")
+    ? feat.getConfig("auto_mapping") as {
+        min_confirmations?: number;
+        merge_similarity?: number;
+      }
     : undefined;
   const poConfig = feat.getConfig("po_processing") as {
     apply_to_po_lines?: boolean;
@@ -200,7 +217,14 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
         fileName:      input.fileName,
         mimeType:      input.mimeType,
         base64Content,
-        options: { fallbackEnabled, forceSecondary, apiKey: orgApiKey },
+        options: {
+          fallbackEnabled,
+          forceSecondary,
+          apiKey: orgApiKey,
+          primaryModel: modelSelection?.primary_model,
+          secondaryModel: modelSelection?.secondary_model,
+          maxChars: modelSelection?.max_chars,
+        },
       });
     }
 
@@ -220,6 +244,24 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
       fallbackUsed:   extraction.fallbackUsed,
       metaJson:       { promptTokens: extraction.promptTokens, completionTokens: extraction.completionTokens },
     });
+
+    if (validationConfig) {
+      const validation = validateExtraction(extraction.invoice, validationConfig);
+      if (validation.level === "error") {
+        throw new Error(
+          `Validación de extracción falló: diferencia total/líneas de ${validation.difference.toFixed(2)} (${(validation.percentage * 100).toFixed(2)}%)`
+        );
+      }
+      await logWorkflow({
+        organizationId: input.organizationId,
+        requestId,
+        stage: "validation",
+        step: "totals",
+        status: validation.level === "warning" ? "INFO" : "SUCCESS",
+        documentType: input.documentType,
+        metaJson: validation.level === "warning" ? validation : undefined,
+      });
+    }
 
     if (!isCfdiXml) {
       usageDelta.aiPrimaryCalls  = extraction.fallbackUsed ? 0 : 1;
@@ -262,6 +304,11 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
     const payload = await buildUiPayload(extraction.invoice, input.subsidiaryId, {
       engine: extraction.fallbackUsed ? "secondary" : "primary",
       meta:   { requestId, documentId: docId },
+      autoMapping: {
+        enabled: Boolean(autoMapping),
+        minConfirmations: autoMapping?.min_confirmations,
+        similarityThreshold: autoMapping?.merge_similarity,
+      },
     });
 
     await logWorkflow({

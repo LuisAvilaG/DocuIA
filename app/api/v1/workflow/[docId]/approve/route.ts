@@ -1,14 +1,58 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
-import { historyDocuments, subsidiaries } from "@/db/schema";
+import { historyDocuments, nsConnections, organizations, subsidiaries } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import { processInNetSuite } from "@/lib/workflow/process-ns";
 import { isFeatureEnabled, getFeature } from "@/lib/features";
 import { upsertItemMappings } from "@/lib/workflow/mappings";
 import { resolveCustomFormId } from "@/lib/netsuite/custom-forms";
+import { fetchOpenPurchaseOrders } from "@/lib/netsuite/client";
+import type { NSCredentials } from "@/lib/netsuite/oauth";
+import { decryptField } from "@/lib/crypto/encrypt";
 
 type Params = { params: Promise<{ docId: string }> };
+
+type PendingApprovalLine = {
+  selected_item_id?: unknown;
+  selected_unit_id?: unknown;
+  description?: unknown;
+  quantity?: unknown;
+  rate?: unknown;
+  amount?: unknown;
+};
+
+type PendingApprovalDocument = {
+  vendor?: { selected_internal_id?: unknown };
+  invoice_number?: unknown;
+  invoice_date?: unknown;
+  due_date?: unknown;
+  currency?: unknown;
+  lines?: PendingApprovalLine[];
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function pendingDocument(value: unknown): PendingApprovalDocument {
+  if (!isRecord(value) || !isRecord(value.document)) return {};
+  const document = value.document;
+  return {
+    vendor: isRecord(document.vendor) ? document.vendor : undefined,
+    invoice_number: document.invoice_number,
+    invoice_date: document.invoice_date,
+    due_date: document.due_date,
+    currency: document.currency,
+    lines: Array.isArray(document.lines)
+      ? document.lines.filter(isRecord)
+      : [],
+  };
+}
 
 export async function POST(req: NextRequest, { params }: Params) {
   const session = await getTenantSession();
@@ -33,10 +77,12 @@ export async function POST(req: NextRequest, { params }: Params) {
     // Custom NetSuite form configured by the admin for this org. Localization
     // forms (e.g. CFDI) carry defaults for otherwise-mandatory fields, so this
     // must travel with the manual-approve flow too — not only the auto pipeline.
-    // Read the configured id directly (same as the auto pipeline): if an admin
-    // set a form id, honor it regardless of the on/off toggle.
+    // The configuration is retained when the feature is turned off, but must
+    // only affect NetSuite requests while the feature itself is enabled.
     const formsFeat = await getFeature(session.orgId, "custom_netsuite_forms");
-    const customFormId = resolveCustomFormId(formsFeat.config, doc.subsidiaryId, doc.documentType);
+    const customFormId = formsFeat.isEnabled
+      ? resolveCustomFormId(formsFeat.config, doc.subsidiaryId, doc.documentType)
+      : "";
 
     // ── Pending approval flow (admin-only, uses saved payload) ────────────
     if (doc.status === "pending_approval") {
@@ -47,20 +93,19 @@ export async function POST(req: NextRequest, { params }: Params) {
         return NextResponse.json({ error: "Payload no disponible" }, { status: 422 });
       }
 
-      const uiPayload = doc.products as Record<string, unknown>;
-      const document  = (uiPayload as any)?.document ?? {};
-      const lines     = Array.isArray(document.lines) ? document.lines : [];
+      const document = pendingDocument(doc.products);
+      const lines = document.lines ?? [];
 
       const validLines = lines
-        .filter((l: any) => l.selected_item_id)
-        .map((l: any) => ({
-          internal_id:        l.selected_item_id,
-          item_document_name: l.description ?? "",
+        .map((l) => ({
+          internal_id:        asString(l.selected_item_id),
+          item_document_name: asString(l.description) ?? "",
           quantity:           l.quantity ?? 0,
           rate:               l.rate ?? null,
           amount:             l.amount ?? null,
-          unit:               l.selected_unit_id ?? null,
-        }));
+          unit:               asString(l.selected_unit_id),
+        }))
+        .filter((l): l is Omit<typeof l, "internal_id"> & { internal_id: string } => Boolean(l.internal_id));
 
       if (!validLines.length) {
         return NextResponse.json({ error: "Sin líneas válidas para enviar" }, { status: 422 });
@@ -83,18 +128,18 @@ export async function POST(req: NextRequest, { params }: Params) {
         documentType:           doc.documentType,
         dry_run:                dryRun,
         subsidiary_internal_id: sub.nsSubsidiaryId,
-        vendor_id:              document.vendor?.selected_internal_id ?? null,
-        document_number:        document.invoice_number ?? null,
-        date:                   document.invoice_date ?? "",
-        due_date:               document.due_date ?? null,
-        currency_internal_id:   document.currency ?? null,
+        vendor_id:              asString(document.vendor?.selected_internal_id),
+        document_number:        asString(document.invoice_number),
+        date:                   asString(document.invoice_date) ?? "",
+        due_date:               asString(document.due_date),
+        currency_internal_id:   asString(document.currency),
         customform_id:          customFormId || undefined,
         line_items:             validLines,
       };
 
       const nsResult = await processInNetSuite(session.orgId, nsPayload);
 
-      const confirmedProducts = validLines.map((l: any) => ({
+      const confirmedProducts = validLines.map((l) => ({
         description: l.item_document_name,
         quantity:    l.quantity,
         unitPrice:   l.rate,
@@ -113,7 +158,7 @@ export async function POST(req: NextRequest, { params }: Params) {
       }).where(eq(historyDocuments.id, docIdNum));
 
       void upsertItemMappings(
-        validLines.map((l: any) => ({
+        validLines.map((l) => ({
           subsidiaryId:       doc.subsidiaryId,
           vendor:             doc.vendor ?? "",
           vendorItemName:     l.item_document_name,
@@ -176,6 +221,57 @@ export async function POST(req: NextRequest, { params }: Params) {
         { error: `Subsidiaria ${doc.subsidiaryId} no encontrada` },
         { status: 422 }
       );
+    }
+
+    if (body.po_internal_id) {
+      const org = await db.query.organizations.findFirst({
+        where: eq(organizations.id, session.orgId),
+        columns: { activeNsEnvironment: true },
+      });
+      const environment = org?.activeNsEnvironment as "sandbox" | "production" | undefined;
+      const connection = environment
+        ? await db.query.nsConnections.findFirst({
+            where: and(
+              eq(nsConnections.organizationId, session.orgId),
+              eq(nsConnections.environment, environment),
+              eq(nsConnections.isActive, true),
+            ),
+          })
+        : undefined;
+
+      if (!connection?.catalogScriptId || !connection.catalogDeployId) {
+        return NextResponse.json(
+          { error: "No hay un catálogo de NetSuite configurado para validar la PO seleccionada" },
+          { status: 422 }
+        );
+      }
+
+      const credentials: NSCredentials = {
+        accountId: connection.accountId,
+        consumerKey: decryptField(connection.consumerKey),
+        consumerSecret: decryptField(connection.consumerSecret),
+        tokenId: decryptField(connection.tokenId),
+        tokenSecret: decryptField(connection.tokenSecret),
+      };
+      const openPurchaseOrders = await fetchOpenPurchaseOrders(
+        credentials,
+        connection.catalogScriptId,
+        connection.catalogDeployId,
+        sub.nsSubsidiaryId,
+        body.vendor_internal_id,
+      );
+      if (!openPurchaseOrders.ok) {
+        return NextResponse.json(
+          { error: `No se pudo validar la PO en NetSuite: ${openPurchaseOrders.error ?? "error desconocido"}` },
+          { status: 502 }
+        );
+      }
+      if (!openPurchaseOrders.data?.some((purchaseOrder) => purchaseOrder.internal_id === body.po_internal_id)) {
+        return NextResponse.json(
+          { error: "La PO elegida no está abierta o no corresponde al proveedor y subsidiaria seleccionados" },
+          { status: 422 }
+        );
+      }
     }
 
     const [dryRun, poFeature] = await Promise.all([

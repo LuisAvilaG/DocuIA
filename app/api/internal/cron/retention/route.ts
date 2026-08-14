@@ -47,28 +47,31 @@ export async function GET(req: NextRequest) {
 
       if (documentsDays > 0) {
         const cutoff = new Date(Date.now() - documentsDays * 86400_000);
-        // Keep active review/approval records. Finished documents are deleted one
-        // by one so the original object is removed before its database pointer.
+        // Keep active review/approval records. Claim each terminal record with
+        // a conditional delete before touching storage: a document that was
+        // retried after the candidate query can never lose its active file.
         const candidates = await db.query.historyDocuments.findMany({
           where: and(
             eq(historyDocuments.organizationId, org.id),
             lt(historyDocuments.createdAt, cutoff),
             inArray(historyDocuments.status, ["completed", "failed"]),
           ),
-          columns: { id: true, storageKey: true },
+          columns: { id: true },
           limit: 250,
         });
         for (const document of candidates) {
           try {
-            if (document.storageKey) {
-              await deleteFile(document.storageKey);
-              filesDeleted++;
-            }
-            await db.delete(historyDocuments).where(and(
+            const [removed] = await db.delete(historyDocuments).where(and(
               eq(historyDocuments.id, document.id),
               eq(historyDocuments.organizationId, org.id),
-            ));
+              inArray(historyDocuments.status, ["completed", "failed"]),
+            )).returning({ storageKey: historyDocuments.storageKey });
+            if (!removed) continue;
             documentsDeleted++;
+            if (removed.storageKey) {
+              await deleteFile(removed.storageKey);
+              filesDeleted++;
+            }
           } catch (err) {
             errors++;
             console.error("[cron/retention] document cleanup failed", { orgId: org.id, documentId: document.id, err });

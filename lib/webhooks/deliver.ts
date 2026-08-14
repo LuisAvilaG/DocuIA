@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { webhooks } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import { assertPublicHttpsUrl } from "./ssrf";
+import { isFeatureEnabled } from "@/lib/features";
 
 export type WebhookEvent = "document.completed" | "document.review" | "document.failed";
 
@@ -31,6 +32,8 @@ export async function deliverWebhooks(
   event: WebhookEvent,
   payload: Omit<WebhookPayload, "event" | "timestamp" | "organizationId">
 ): Promise<void> {
+  if (!await isFeatureEnabled(organizationId, "webhook_system")) return;
+
   const hooks = await db.query.webhooks.findMany({
     where: and(
       eq(webhooks.organizationId, organizationId),

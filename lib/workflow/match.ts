@@ -287,7 +287,8 @@ type MemorySuggestion = {
 async function getMemorySuggestions(
   vendor: string,
   lineNames: string[],
-  subsidiaryId: string
+  subsidiaryId: string,
+  options: { minConfirmations: number; similarityThreshold: number },
 ): Promise<Record<string, MemorySuggestion>> {
   if (!vendor || !lineNames.length) return {};
 
@@ -317,7 +318,11 @@ async function getMemorySuggestions(
       }
     }
 
-    if (bestRow && bestScore >= 0.7) {
+    if (
+      bestRow &&
+      bestRow.timesConfirmed >= options.minConfirmations &&
+      bestScore >= options.similarityThreshold
+    ) {
       result[lineName] = {
         netsuite_internal_id: bestRow.netsuiteInternalId,
         netsuite_item_name: bestRow.netsuiteItemName,
@@ -336,7 +341,12 @@ async function getMemorySuggestions(
 export async function buildUiPayload(
   extracted: ExtractedInvoice,
   subsidiaryId: string,
-  options?: { engine?: string; parserVersion?: string; meta?: Record<string, unknown> }
+  options?: {
+    engine?: string;
+    parserVersion?: string;
+    meta?: Record<string, unknown>;
+    autoMapping?: { enabled: boolean; minConfirmations?: number; similarityThreshold?: number };
+  }
 ): Promise<UiPayload> {
   const engine = normalize(options?.engine || "") || "gemini_file_primary";
   const parserVersion = normalize(options?.parserVersion || "") || "invoice-gemini-file-tiered-v1";
@@ -346,7 +356,13 @@ export async function buildUiPayload(
   const vendorForMemory = normalize(selectedVendor?.name || extracted.vendor);
 
   const lineNames = extracted.lines.map((l) => normalize(l.description));
-  const memorySuggestions = await getMemorySuggestions(vendorForMemory, lineNames, subsidiaryId);
+  const autoMapping = options?.autoMapping;
+  const memorySuggestions = autoMapping?.enabled
+    ? await getMemorySuggestions(vendorForMemory, lineNames, subsidiaryId, {
+        minConfirmations: Math.max(1, Math.round(autoMapping.minConfirmations ?? 5)),
+        similarityThreshold: Math.min(1, Math.max(0, autoMapping.similarityThreshold ?? 0.93)),
+      })
+    : {};
 
   const itemCache2 = new Map<string, ItemOption[]>();
   const itemByIdCache2 = new Map<string, ItemOption | null>();

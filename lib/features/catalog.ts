@@ -60,7 +60,7 @@ export const FEATURE_CATALOG = [
     configSchema: [
       { key: "primary_model", label: "Modelo primario", type: "select", options: ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-pro"] },
       { key: "secondary_model", label: "Modelo secundario (fallback)", type: "select", options: ["gemini-2.5-pro", "gemini-2.5-flash"] },
-      { key: "max_chars", label: "Máx caracteres por documento", type: "number", min: 10000, max: 200000 },
+      { key: "max_chars", label: "Máx. caracteres de respuesta AI (aprox.)", type: "number", min: 10000, max: 200000 },
     ],
     planRequired: "starter" as const,
     isBeta: false,

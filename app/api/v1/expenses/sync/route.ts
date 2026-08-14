@@ -34,6 +34,9 @@ export async function POST(req: NextRequest) {
   if (!await isFeatureEnabled(session.orgId, "expense_management")) {
     return NextResponse.json({ error: "Módulo de gastos no activado" }, { status: 403 });
   }
+  if (!await isFeatureEnabled(session.orgId, "expense_categories_sync")) {
+    return NextResponse.json({ error: "La sincronización de catálogos de gastos no está activada" }, { status: 403 });
+  }
 
   const body = await req.json() as {
     action: "sync_categories" | "sync_departments" | "sync_classes" | "sync_employees" | "sync_all";

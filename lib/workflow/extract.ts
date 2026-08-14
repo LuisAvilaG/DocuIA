@@ -161,6 +161,10 @@ function getInstruction(): string {
 
 type GeminiPart = Record<string, unknown>;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 // Transient Gemini errors worth retrying: rate limits and upstream hiccups.
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 const MAX_ATTEMPTS = 4;
@@ -170,12 +174,21 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function callModel(model: string, parts: GeminiPart[], apiKeyOverride?: string): Promise<{
+function outputTokenLimit(maxChars: unknown): number | undefined {
+  const characters = Number(maxChars);
+  if (!Number.isFinite(characters)) return undefined;
+  // Gemini controls output in tokens; four characters per token is the usual
+  // conservative conversion for the JSON extraction response.
+  return Math.max(256, Math.min(8192, Math.round(characters / 4)));
+}
+
+async function callModel(model: string, parts: GeminiPart[], apiKeyOverride?: string, maxChars?: number): Promise<{
   text: string;
   promptTokens: number;
   completionTokens: number;
 }> {
   const apiKey = getApiKey(apiKeyOverride);
+  const maxOutputTokens = outputTokenLimit(maxChars);
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
   let response: Response | null = null;
@@ -191,7 +204,11 @@ async function callModel(model: string, parts: GeminiPart[], apiKeyOverride?: st
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           contents:         [{ role: "user", parts }],
-          generationConfig: { temperature: 0, responseMimeType: "application/json" },
+          generationConfig: {
+            temperature: 0,
+            responseMimeType: "application/json",
+            ...(maxOutputTokens ? { maxOutputTokens } : {}),
+          },
         }),
         cache: "no-store",
         signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
@@ -216,16 +233,17 @@ async function callModel(model: string, parts: GeminiPart[], apiKeyOverride?: st
   const candidates = Array.isArray(json?.candidates) ? json.candidates : [];
   let text = "";
   for (const candidate of candidates) {
-    const parts2 = Array.isArray((candidate as any)?.content?.parts) ? (candidate as any).content.parts : [];
+    const content = isRecord(candidate) && isRecord(candidate.content) ? candidate.content : null;
+    const parts2 = content && Array.isArray(content.parts) ? content.parts : [];
     for (const part of parts2) {
-      const t = normalize((part as any)?.text);
+      const t = normalize(isRecord(part) ? part.text : "");
       if (t) { text = t; break; }
     }
     if (text) break;
   }
   if (!text) throw new Error("AI extraction returned empty content");
 
-  const usage = (json as any)?.usageMetadata;
+  const usage = isRecord(json.usageMetadata) ? json.usageMetadata : {};
   return {
     text,
     promptTokens:     Number(usage?.promptTokenCount    || 0),
@@ -237,7 +255,16 @@ export type ExtractOptions = {
   fallbackEnabled?: boolean; // ai_tiered_fallback — default true
   forceSecondary?:  boolean; // ai_force_secondary  — default false
   apiKey?:          string;  // per-org override; falls back to GOOGLE_API_KEY env
+  primaryModel?:     string; // ai_model_selection
+  secondaryModel?:   string; // ai_model_selection
+  maxChars?:         number; // ai_model_selection (OCR input / approximate AI output limit)
 };
+
+function configuredModel(value: unknown, fallback: string): string {
+  const model = normalize(value);
+  // Keep the configurable value constrained to Gemini model identifiers.
+  return /^gemini-[a-z0-9.-]+$/i.test(model) ? model : fallback;
+}
 
 export async function extractFromFile(params: {
   fileName:      string;
@@ -246,6 +273,8 @@ export async function extractFromFile(params: {
   options?:      ExtractOptions;
 }): Promise<ExtractionResult> {
   const { fallbackEnabled = true, forceSecondary = false, apiKey } = params.options ?? {};
+  const primaryModel = configuredModel(params.options?.primaryModel, FLASH_MODEL);
+  const secondaryModel = configuredModel(params.options?.secondaryModel, PRO_MODEL);
 
   const instruction = getInstruction();
   const parts: GeminiPart[] = [
@@ -255,12 +284,12 @@ export async function extractFromFile(params: {
 
   // ai_force_secondary: skip primary model entirely
   if (forceSecondary) {
-    const result = await callModel(PRO_MODEL, parts, apiKey);
+    const result = await callModel(secondaryModel, parts, apiKey, params.options?.maxChars);
     const parsed  = parseJsonObject(result.text);
     const invoice = mapInvoice(parsed, normalize(params.fileName));
     return {
       invoice,
-      model:            PRO_MODEL,
+      model:            secondaryModel,
       fallbackUsed:     true,
       rawJson:          result.text,
       promptTokens:     result.promptTokens,
@@ -270,13 +299,13 @@ export async function extractFromFile(params: {
 
   // Primary model attempt
   try {
-    const result = await callModel(FLASH_MODEL, parts, apiKey);
+    const result = await callModel(primaryModel, parts, apiKey, params.options?.maxChars);
     const parsed  = parseJsonObject(result.text);
     const invoice = mapInvoice(parsed, normalize(params.fileName));
     if (invoice.lines.length === 0) throw new Error("Primary model returned zero lines");
     return {
       invoice,
-      model:            FLASH_MODEL,
+      model:            primaryModel,
       fallbackUsed:     false,
       rawJson:          result.text,
       promptTokens:     result.promptTokens,
@@ -288,12 +317,12 @@ export async function extractFromFile(params: {
       throw primaryErr;
     }
     console.warn("[extract] Primary failed, using secondary:", (primaryErr as Error).message);
-    const result = await callModel(PRO_MODEL, parts, apiKey);
+    const result = await callModel(secondaryModel, parts, apiKey, params.options?.maxChars);
     const parsed  = parseJsonObject(result.text);
     const invoice = mapInvoice(parsed, normalize(params.fileName));
     return {
       invoice,
-      model:            PRO_MODEL,
+      model:            secondaryModel,
       fallbackUsed:     true,
       rawJson:          result.text,
       promptTokens:     result.promptTokens,
@@ -308,15 +337,20 @@ export async function extractFromText(params: {
   options?: ExtractOptions;
 }): Promise<ExtractionResult> {
   const { fallbackEnabled = true, forceSecondary = false, apiKey } = params.options ?? {};
-  const maxChars = Math.max(5000, Math.min(MAX_CHARS, 200000));
+  const primaryModel = configuredModel(params.options?.primaryModel, FLASH_MODEL);
+  const secondaryModel = configuredModel(params.options?.secondaryModel, PRO_MODEL);
+  const configuredMaxChars = Number(params.options?.maxChars);
+  const maxChars = Number.isFinite(configuredMaxChars)
+    ? Math.max(5000, Math.min(configuredMaxChars, 200000))
+    : MAX_CHARS;
   const text = params.ocrText.slice(0, maxChars);
   const instruction = getInstruction();
   const parts: GeminiPart[] = [{ text: `${instruction} OCR_TEXT:\n${text}` }];
 
-  const startModel = forceSecondary ? PRO_MODEL : (params.model || FLASH_MODEL);
+  const startModel = forceSecondary ? secondaryModel : (params.model || primaryModel);
 
   try {
-    const result = await callModel(startModel, parts, apiKey);
+    const result = await callModel(startModel, parts, apiKey, params.options?.maxChars);
     const parsed  = parseJsonObject(result.text);
     const invoice = mapInvoice(parsed, text);
     if (invoice.lines.length === 0 && !params.model && !forceSecondary) {
@@ -333,12 +367,12 @@ export async function extractFromText(params: {
   } catch (err) {
     if (params.model || forceSecondary || !fallbackEnabled) throw err;
     console.warn("[extract] Primary OCR failed, using secondary:", (err as Error).message);
-    const result = await callModel(PRO_MODEL, parts, apiKey);
+    const result = await callModel(secondaryModel, parts, apiKey, params.options?.maxChars);
     const parsed  = parseJsonObject(result.text);
     const invoice = mapInvoice(parsed, text);
     return {
       invoice,
-      model:            PRO_MODEL,
+      model:            secondaryModel,
       fallbackUsed:     true,
       rawJson:          result.text,
       promptTokens:     result.promptTokens,

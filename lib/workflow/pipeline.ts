@@ -12,6 +12,7 @@ import { deliverWebhooks } from "@/lib/webhooks/deliver";
 import { getAllFeatures, isFeatureEnabled } from "@/lib/features";
 import { decryptField } from "@/lib/crypto/encrypt";
 import { upsertItemMappings } from "./mappings";
+import { resolveCustomFormId, type CustomFormsConfig } from "@/lib/netsuite/custom-forms";
 
 export type PipelineInput = {
   organizationId: string;
@@ -89,10 +90,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   const detectDupes           = feat.isEnabled("duplicate_detection");
   const approvalRequired      = feat.isEnabled("approval_workflow");
   const exceptionQueueEnabled = feat.isEnabled("exception_queue");
-  const customForms     = feat.getConfig("custom_netsuite_forms") as {
-    invoice_customform_id?: string;
-    po_customform_id?: string;
-  };
+  const customForms = feat.getConfig("custom_netsuite_forms") as CustomFormsConfig;
   const poConfig = feat.getConfig("po_processing") as {
     apply_to_po_lines?: boolean;
     set_unselected_po_lines_to_zero?: boolean;
@@ -341,10 +339,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
     // Read dry_run fresh here so tenant changes during processing take effect
     const dryRun = await isFeatureEnabled(input.organizationId, "netsuite_dry_run");
 
-    const isPoType = input.documentType === "purchase_order";
-    const customFormId = isPoType
-      ? (customForms.po_customform_id || "")
-      : (customForms.invoice_customform_id || "");
+    const customFormId = resolveCustomFormId(customForms, input.subsidiaryId, input.documentType);
 
     const t3 = Date.now();
     const nsResult = await processInNetSuite(

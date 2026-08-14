@@ -85,6 +85,7 @@ export default async function HistoryDetailPage({
   }
 
   const storageEnabled = await isFeatureEnabled(session.orgId, "document_storage");
+  const poProcessingEnabled = await isFeatureEnabled(session.orgId, "po_processing");
   const fileExt = doc.storageKey ? (doc.storageKey.split(".").pop() ?? "").toLowerCase() : "";
   const showDocViewer = storageEnabled && Boolean(doc.storageKey) && Boolean(fileExt);
 
@@ -99,6 +100,7 @@ export default async function HistoryDetailPage({
         subsidiaryId={doc.subsidiaryId}
         storageKey={doc.storageKey ?? null}
         fileExt={ext}
+        poProcessingEnabled={poProcessingEnabled && doc.documentType === "invoice"}
         payload={doc.products as unknown as Parameters<typeof ReviewClient>[0]["payload"]}
       />
     );

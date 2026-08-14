@@ -8,6 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { ChevronDown, FlaskConical, Loader2 } from "lucide-react";
+import { CustomFormConfig } from "@/components/admin/custom-form-config";
 
 interface ConfigParam {
   key: string;
@@ -46,10 +47,11 @@ const PLAN_BADGE: Record<string, string> = {
 interface FeatureToggleProps {
   feature: Feature;
   orgId: string;
+  subsidiaries?: Array<{ id: string; name: string }>;
   onEnabledChange?: (featureId: string, enabled: boolean) => void;
 }
 
-export function FeatureToggle({ feature, orgId, onEnabledChange }: FeatureToggleProps) {
+export function FeatureToggle({ feature, orgId, subsidiaries = [], onEnabledChange }: FeatureToggleProps) {
   const router = useRouter();
   const [enabled, setEnabled] = useState(feature.adminGranted);
   const [config, setConfig] = useState<Record<string, unknown>>(feature.config ?? {});
@@ -59,9 +61,10 @@ export function FeatureToggle({ feature, orgId, onEnabledChange }: FeatureToggle
   const [saved, setSaved] = useState(false);
   const [saveError, setSaveError] = useState(false);
 
-  const hasConfig = feature.featureType !== "boolean" && feature.configSchema && feature.configSchema.length > 0;
+  const isCustomForms = feature.id === "custom_netsuite_forms";
+  const hasConfig = isCustomForms || (feature.featureType !== "boolean" && feature.configSchema && feature.configSchema.length > 0);
 
-  async function save(nextEnabled: boolean, nextConfig: Record<string, unknown>, nextNotes: string) {
+  async function save(nextEnabled: boolean, nextConfig: Record<string, unknown>, nextNotes: string): Promise<boolean> {
     setSaving(true);
     setSaved(false);
     setSaveError(false);
@@ -75,17 +78,20 @@ export function FeatureToggle({ feature, orgId, onEnabledChange }: FeatureToggle
         setSaved(true);
         setTimeout(() => setSaved(false), 3000);
         router.refresh(); // re-sincroniza server data con UI
+        return true;
       } else {
         setSaveError(true);
         setTimeout(() => setSaveError(false), 3000);
         setEnabled(!nextEnabled);
         onEnabledChange?.(feature.id, !nextEnabled); // revert parent map
+        return false;
       }
     } catch {
       setSaveError(true);
       setTimeout(() => setSaveError(false), 3000);
       setEnabled(!nextEnabled);
       onEnabledChange?.(feature.id, !nextEnabled); // revert parent map
+      return false;
     } finally {
       setSaving(false);
     }
@@ -180,7 +186,20 @@ export function FeatureToggle({ feature, orgId, onEnabledChange }: FeatureToggle
       </div>
 
       {/* Config panel */}
-      {showConfig && expanded && feature.configSchema && (
+      {showConfig && expanded && isCustomForms && (
+        <CustomFormConfig
+          initialConfig={config}
+          subsidiaries={subsidiaries}
+          disabled={saving}
+          onSave={async (nextConfig) => {
+            setEnabled(true);
+            onEnabledChange?.(feature.id, true);
+            return save(true, nextConfig as Record<string, unknown>, notes);
+          }}
+        />
+      )}
+
+      {showConfig && expanded && !isCustomForms && feature.configSchema && (
         <div className="border-t border-border/60 px-4 pb-4 pt-3 space-y-3">
           <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-2">
             Configuración

@@ -8,6 +8,7 @@
  *   type: "items"         — Paginated items for a subsidiary.
  *   type: "vendors"       — Paginated vendors for a subsidiary.
  *   type: "locations"     — Paginated locations (optionally filtered by subsidiary).
+ *   type: "open_purchase_orders" — POs con saldo abierto para un proveedor y subsidiaria.
  *
  * Common params for items/vendors/locations:
  *   page_index:       0..N (required)
@@ -88,6 +89,10 @@ define(["N/search", "N/log"], (search, log) => {
       if (filters.length) filters.push("AND");
       filters.push(["subsidiary", "anyof", opts.subsidiaryId]);
     }
+    if (opts.serviceCategoryId) {
+      if (filters.length) filters.push("AND");
+      filters.push(["custitem_drt_service_category", "anyof", opts.serviceCategoryId]);
+    }
     return search.create({
       type: search.Type.ITEM,
       filters,
@@ -142,6 +147,28 @@ define(["N/search", "N/log"], (search, log) => {
     });
   }
 
+  function buildOpenPurchaseOrderSearch(opts) {
+    const filters = [
+      ["mainline", "is", "T"], "AND",
+      ["entity", "anyof", opts.vendorId], "AND",
+      ["subsidiary", "anyof", opts.subsidiaryId], "AND",
+      // Closed and fully billed POs can no longer produce a Vendor Bill.
+      ["status", "noneof", "PurchOrd:H", "PurchOrd:F"],
+    ];
+    return search.create({
+      type: search.Type.PURCHASE_ORDER,
+      filters,
+      columns: [
+        search.createColumn({ name: "internalid", sort: search.Sort.DESC }),
+        search.createColumn({ name: "tranid" }),
+        search.createColumn({ name: "trandate" }),
+        search.createColumn({ name: "total" }),
+        search.createColumn({ name: "currency" }),
+        search.createColumn({ name: "statusref" }),
+      ],
+    });
+  }
+
   function mapItem(row) {
     const itemid      = str(row.getValue({ name: "itemid" }));
     const displayname = str(row.getValue({ name: "displayname" }));
@@ -177,6 +204,17 @@ define(["N/search", "N/log"], (search, log) => {
       name,
       full_name:   name,
       inactive:    str(row.getValue({ name: "isinactive" })) === "T",
+    };
+  }
+
+  function mapOpenPurchaseOrder(row) {
+    return {
+      internal_id: str(row.getValue({ name: "internalid" })),
+      tranid:      str(row.getValue({ name: "tranid" })),
+      date:        str(row.getValue({ name: "trandate" })),
+      total:       str(row.getValue({ name: "total" })),
+      currency:    str(row.getText({ name: "currency" })),
+      status:      str(row.getText({ name: "statusref" })),
     };
   }
 
@@ -223,30 +261,38 @@ define(["N/search", "N/log"], (search, log) => {
       }
 
       /* catalog types */
-      if (!["items", "vendors", "locations"].includes(type)) {
-        return { ok: false, error: "VALIDATION_ERROR", message: 'type must be: ping | subsidiaries | items | vendors | locations' };
+      if (!["items", "vendors", "locations", "open_purchase_orders"].includes(type)) {
+        return { ok: false, error: "VALIDATION_ERROR", message: 'type must be: ping | subsidiaries | items | vendors | locations | open_purchase_orders' };
       }
 
       const pageIndex     = int(params.page_index);
       const pageSize      = clampSize(params.page_size);
       const subsidiaryId  = str(params.subsidiary_id);
+      const vendorId      = str(params.vendor_id);
+      const serviceCategoryId = str(params.service_category_id);
       const includeInactive = bool(params.include_inactive);
       const filterBySubsidiary = bool(params.filter_locations_by_subsidiary);
 
       if (!Number.isFinite(pageIndex) || pageIndex < 0) {
         return { ok: false, error: "VALIDATION_ERROR", message: '"page_index" must be >= 0' };
       }
-      if ((type === "items" || type === "vendors") && !subsidiaryId) {
+      if ((type === "items" || type === "vendors" || type === "open_purchase_orders") && !subsidiaryId) {
         return { ok: false, error: "VALIDATION_ERROR", message: `"subsidiary_id" is required for type "${type}"` };
+      }
+      if (type === "open_purchase_orders" && !vendorId) {
+        return { ok: false, error: "VALIDATION_ERROR", message: '"vendor_id" is required for open_purchase_orders' };
       }
 
       let srch, mapper;
       if (type === "items") {
-        srch   = buildItemSearch({ subsidiaryId, includeInactive });
+        srch   = buildItemSearch({ subsidiaryId, includeInactive, serviceCategoryId });
         mapper = mapItem;
       } else if (type === "vendors") {
         srch   = buildVendorSearch({ subsidiaryId, includeInactive });
         mapper = mapVendor;
+      } else if (type === "open_purchase_orders") {
+        srch   = buildOpenPurchaseOrderSearch({ subsidiaryId, vendorId });
+        mapper = mapOpenPurchaseOrder;
       } else {
         srch   = buildLocationSearch({ subsidiaryId, includeInactive, filterBySubsidiary });
         mapper = mapLocation;

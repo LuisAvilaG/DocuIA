@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { organizations, historyDocuments } from "@/db/schema";
-import { and, eq, gte, count, sql } from "drizzle-orm";
+import { historyDocuments, orgFeatures } from "@/db/schema";
+import { and, eq, gte, count, inArray, sql } from "drizzle-orm";
 import { getFeature } from "@/lib/features";
 import { sendEmail } from "@/lib/email/send";
 
@@ -16,7 +16,17 @@ function periodStart(frequency: string): Date {
     const now = new Date();
     return new Date(now.getFullYear(), now.getMonth(), 1);
   }
-  return new Date(Date.now() - 7 * 86_400_000);
+  const now = new Date();
+  const day = now.getDay() || 7;
+  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day + 1);
+  monday.setHours(0, 0, 0, 0);
+  return monday;
+}
+
+function reportTypes(scope: string): Array<"invoice" | "purchase_order"> {
+  if (scope === "invoice") return ["invoice"];
+  if (scope === "purchase_order") return ["purchase_order"];
+  return ["invoice", "purchase_order"];
 }
 
 export async function GET(req: NextRequest) {
@@ -38,12 +48,20 @@ export async function GET(req: NextRequest) {
       } catch { continue; }
       if (!feat.isEnabled) continue;
 
-      const config = feat.config as { frequency?: string; recipients?: string };
+      const config = feat.config as { frequency?: string; recipients?: string; report_scope?: string; last_sent_period?: string };
       const frequency     = config.frequency ?? "weekly";
       const recipientsRaw = config.recipients ?? org.billingEmail ?? "";
       if (!recipientsRaw) { summary[org.id] = { skipped: "no recipients" }; continue; }
 
       const since        = periodStart(frequency);
+      const periodKey    = frequency === "monthly"
+        ? `${since.getFullYear()}-${String(since.getMonth() + 1).padStart(2, "0")}`
+        : since.toISOString().slice(0, 10);
+      if (config.last_sent_period === periodKey) {
+        summary[org.id] = { skipped: "already sent for current period" };
+        continue;
+      }
+      const documentTypes = reportTypes(config.report_scope ?? "all");
       const periodLabel  = frequency === "monthly" ? "mensual" : "semanal";
       const periodRange  = frequency === "monthly"
         ? since.toLocaleDateString("es-MX", { month: "long", year: "numeric" })
@@ -55,6 +73,7 @@ export async function GET(req: NextRequest) {
         .where(and(
           eq(historyDocuments.organizationId, org.id),
           gte(historyDocuments.createdAt, since),
+          inArray(historyDocuments.documentType, documentTypes),
         ))
         .groupBy(historyDocuments.status);
 
@@ -68,6 +87,7 @@ export async function GET(req: NextRequest) {
         .where(and(
           eq(historyDocuments.organizationId, org.id),
           gte(historyDocuments.createdAt, since),
+          inArray(historyDocuments.documentType, documentTypes),
           eq(historyDocuments.status, "completed"),
         ))
         .groupBy(historyDocuments.vendor)
@@ -124,7 +144,14 @@ export async function GET(req: NextRequest) {
         });
       }
 
-      summary[org.id] = { sent: true, recipients: recipients.length, total, completed, failed };
+      const [override] = await db.select({ configJson: orgFeatures.configJson })
+        .from(orgFeatures)
+        .where(and(eq(orgFeatures.organizationId, org.id), eq(orgFeatures.featureId, "scheduled_reports")));
+      await db.update(orgFeatures).set({
+        configJson: { ...((override?.configJson ?? {}) as Record<string, unknown>), last_sent_period: periodKey },
+      }).where(and(eq(orgFeatures.organizationId, org.id), eq(orgFeatures.featureId, "scheduled_reports")));
+
+      summary[org.id] = { sent: true, recipients: recipients.length, scope: config.report_scope ?? "all", total, completed, failed };
     }
 
     return NextResponse.json({ ok: true, summary });

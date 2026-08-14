@@ -15,7 +15,7 @@ import type { ExpenseOcrResult } from "@/lib/expense/extract";
 interface Category {
   id: number;
   name: string;
-  netsuiteCategoryId: string;
+  netsuiteCategoryId: string | null;
   dailyCap: string | null;
 }
 interface CatalogItem { id: number; name: string; }
@@ -27,6 +27,7 @@ interface Props {
   categories:    Category[];
   departments:   CatalogItem[];
   classes:       CatalogItem[];
+  countryCode:   string;
 }
 
 type Step = "capture" | "uploading" | "review" | "submitting";
@@ -52,7 +53,7 @@ const RETENTION_TYPES = new Set(["RETEFUENTE", "RETEICA", "ISR_RETENCION", "RETE
 
 // ── Component ──────────────────────────────────────────────────────────
 
-export function ItemCaptureClient({ reportId, reportPurpose, categories, departments, classes }: Props) {
+export function ItemCaptureClient({ reportId, reportPurpose, categories, departments, classes, countryCode }: Props) {
   const router = useRouter();
 
   const [step,    setStep]    = useState<Step>("capture");
@@ -82,27 +83,12 @@ export function ItemCaptureClient({ reportId, reportPurpose, categories, departm
   const fileRef      = useRef<HTMLInputElement>(null);
   const validateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Populate form from OCR result
-  useEffect(() => {
-    if (!ocr) return;
-    setVendorName(ocr.vendorName ?? "");
-    setVendorNit(ocr.vendorNit ?? "");
-    setInvoiceNumber(ocr.invoiceNumber ?? "");
-    setInvoiceDate(ocr.invoiceDate ?? "");
-    setSubtotal(ocr.subtotal != null ? String(ocr.subtotal) : "");
-    setTaxAmount(ocr.taxAmount != null ? String(ocr.taxAmount) : "");
-    setRetentionAmount(ocr.retentionAmount != null ? String(ocr.retentionAmount) : "");
-    setTotal(ocr.total != null ? String(ocr.total) : "");
-    setCurrency(ocr.currency || "COP");
-  }, [ocr]);
-
-  // Auto-recompute total when amounts change
-  useEffect(() => {
-    const s = parseFloat(subtotal) || 0;
-    const t = parseFloat(taxAmount) || 0;
-    const r = parseFloat(retentionAmount) || 0;
+  function recalculateTotal(nextSubtotal: string, nextTax: string, nextRetention: string) {
+    const s = parseFloat(nextSubtotal) || 0;
+    const t = parseFloat(nextTax) || 0;
+    const r = parseFloat(nextRetention) || 0;
     if (s > 0) setTotal(String(parseFloat((s + t - r).toFixed(2))));
-  }, [subtotal, taxAmount, retentionAmount]);
+  }
 
   // Debounced validation
   useEffect(() => {
@@ -136,7 +122,7 @@ export function ItemCaptureClient({ reportId, reportPurpose, categories, departm
     if (!s || !ocr?.documentType) return null;
     try {
       return calculateTaxes({
-        countryCode:  "CO",
+        countryCode,
         documentType: ocr.documentType,
         subtotal:     s,
         categoryId:   categoryId || undefined,
@@ -165,6 +151,15 @@ export function ItemCaptureClient({ reportId, reportPurpose, categories, departm
       if (!res.ok) { setError(data.error ?? "Error al procesar el documento"); setStep("capture"); return; }
       setFileKey(data.fileKey);
       setOcr(data.ocr);
+      setVendorName(data.ocr.vendorName ?? "");
+      setVendorNit(data.ocr.vendorNit ?? "");
+      setInvoiceNumber(data.ocr.invoiceNumber ?? "");
+      setInvoiceDate(data.ocr.invoiceDate ?? "");
+      setSubtotal(data.ocr.subtotal != null ? String(data.ocr.subtotal) : "");
+      setTaxAmount(data.ocr.taxAmount != null ? String(data.ocr.taxAmount) : "");
+      setRetentionAmount(data.ocr.retentionAmount != null ? String(data.ocr.retentionAmount) : "");
+      setTotal(data.ocr.total != null ? String(data.ocr.total) : "");
+      setCurrency(data.ocr.currency || "COP");
       setStep("review");
     } catch {
       setError("No se pudo conectar con el servidor");
@@ -494,7 +489,10 @@ export function ItemCaptureClient({ reportId, reportPurpose, categories, departm
                 type="text"
                 inputMode="decimal"
                 value={subtotal}
-                onChange={(e) => setSubtotal(e.target.value)}
+                onChange={(e) => {
+                  setSubtotal(e.target.value);
+                  recalculateTotal(e.target.value, taxAmount, retentionAmount);
+                }}
                 placeholder="0"
                 disabled={isSubmitting}
                 className={cn(
@@ -510,7 +508,10 @@ export function ItemCaptureClient({ reportId, reportPurpose, categories, departm
                 type="text"
                 inputMode="decimal"
                 value={taxAmount}
-                onChange={(e) => setTaxAmount(e.target.value)}
+                onChange={(e) => {
+                  setTaxAmount(e.target.value);
+                  recalculateTotal(subtotal, e.target.value, retentionAmount);
+                }}
                 placeholder="0"
                 disabled={isSubmitting}
                 className="w-full px-3 py-2.5 rounded-lg border border-border text-sm bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-60"
@@ -523,7 +524,10 @@ export function ItemCaptureClient({ reportId, reportPurpose, categories, departm
                 type="text"
                 inputMode="decimal"
                 value={retentionAmount}
-                onChange={(e) => setRetentionAmount(e.target.value)}
+                onChange={(e) => {
+                  setRetentionAmount(e.target.value);
+                  recalculateTotal(subtotal, taxAmount, e.target.value);
+                }}
                 placeholder="0"
                 disabled={isSubmitting}
                 className="w-full px-3 py-2.5 rounded-lg border border-border text-sm bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-60"

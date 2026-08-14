@@ -93,7 +93,6 @@ const ORGS = [
       { featureId: "bulk_upload",        isEnabled: true,  config: {}, notes: null },
       { featureId: "duplicate_detection",isEnabled: true,  config: {}, notes: null },
       { featureId: "advanced_analytics", isEnabled: true,  config: {}, notes: null },
-      { featureId: "white_label",        isEnabled: false, config: {}, notes: "Rechazaron el branding personalizado" },
       { featureId: "webhook_system",     isEnabled: true,  config: {}, notes: null },
     ],
     subsidiaries: [
@@ -205,7 +204,6 @@ const ORGS = [
       { featureId: "webhook_system",       isEnabled: true,  config: {}, notes: "Conectado a su ERP interno" },
       { featureId: "advanced_analytics",   isEnabled: true,  config: {}, notes: null },
       { featureId: "tenant_audit_log",     isEnabled: true,  config: {}, notes: "Requerido por compliance" },
-      { featureId: "white_label",          isEnabled: true,  config: { company_name: "DRT Platform", primary_color: "#1E3A8A", hide_branding: false }, notes: null },
     ],
     subsidiaries: [
       { name: "USA",            nsSubsidiaryId: "58", currency: "USD", locale: "en-US", docTypes: ["invoice", "purchase_order"] },

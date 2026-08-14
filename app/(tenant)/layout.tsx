@@ -45,16 +45,6 @@ export default async function TenantLayout({ children }: { children: React.React
     );
   }
 
-  // ── white_label ────────────────────────────────────────────────────
-  const wlFeat = resolvedFeatures.find(f => f.id === "white_label");
-  const wlEnabled = wlFeat?.isEnabled ?? false;
-  const wlConfig  = wlEnabled ? (wlFeat!.config as {
-    company_name?: string;
-    logo_url?:     string;
-    primary_color?: string;
-    hide_branding?: boolean;
-  }) : null;
-
   const featuresMap  = Object.fromEntries(resolvedFeatures.map(f => [f.id, f.isEnabled]));
   const dryRunActive = resolvedFeatures.find(f => f.id === "netsuite_dry_run")?.isEnabled ?? false;
 
@@ -68,11 +58,6 @@ export default async function TenantLayout({ children }: { children: React.React
           userEmail={session.email}
           userRole={session.role ?? "operator"}
           activeProducts={[...activeProducts]}
-          whiteLabel={wlConfig ? {
-            companyName:  wlConfig.company_name || undefined,
-            logoUrl:      wlConfig.logo_url      || undefined,
-            hideBranding: wlConfig.hide_branding ?? false,
-          } : undefined}
         />
         <main className="flex-1 flex flex-col overflow-hidden ml-56">
           {dryRunActive && <DryRunBanner isAdmin={session.role === "admin"} />}

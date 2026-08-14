@@ -7,6 +7,7 @@ import { ensureBucket } from "@/lib/storage/minio";
 import { subsidiaries } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { validateCustomFormsConfig } from "@/lib/netsuite/custom-forms";
+import { validateExpenseManagementConfig } from "@/lib/expense/config";
 
 export async function GET(
   _req: NextRequest,
@@ -37,6 +38,10 @@ export async function PATCH(
       where: eq(subsidiaries.organizationId, orgId), columns: { id: true },
     });
     const validationError = validateCustomFormsConfig(config, new Set(rows.map(row => row.id)));
+    if (validationError) return NextResponse.json({ error: validationError }, { status: 400 });
+  }
+  if (featureId === "expense_management") {
+    const validationError = validateExpenseManagementConfig(config);
     if (validationError) return NextResponse.json({ error: validationError }, { status: 400 });
   }
 

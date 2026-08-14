@@ -9,6 +9,7 @@ import { db } from "@/lib/db";
 import { expenseItems, expenseReports, expenseCategories } from "@/db/schema";
 import { eq, and, gte, sql } from "drizzle-orm";
 import { validateFiscalId } from "@/lib/expense/tax-engine";
+import { getExpenseManagementConfig } from "@/lib/expense/config";
 
 export async function POST(req: NextRequest) {
   const session = await getTenantSession();
@@ -23,28 +24,27 @@ export async function POST(req: NextRequest) {
     subtotal,
     categoryId,
     excludeItemId,
-    countryCode = "CO",
   } = await req.json() as {
     vendorNit?:     string;
     invoiceNumber?: string;
     subtotal?:      number;
     categoryId?:    number;
     excludeItemId?: string;
-    countryCode?:   string;
   };
+  const config = await getExpenseManagementConfig(session.orgId);
 
   const warnings: { type: string; message: string }[] = [];
 
   // ── 1. Fiscal ID format ───────────────────────────────────────────
   if (vendorNit) {
-    const valid = validateFiscalId(countryCode, vendorNit);
+    const valid = validateFiscalId(config.countryCode, vendorNit);
     if (!valid) {
-      warnings.push({ type: "invalid_nit", message: `El NIT/RFC "${vendorNit}" no tiene un formato válido para ${countryCode}` });
+      warnings.push({ type: "invalid_nit", message: `El NIT/RFC "${vendorNit}" no tiene un formato válido para ${config.countryCode}` });
     }
   }
 
   // ── 2. Duplicate invoice ──────────────────────────────────────────
-  if (vendorNit && invoiceNumber) {
+  if (config.duplicateCheckEnabled && vendorNit && invoiceNumber) {
     const existingItems = await db
       .select({ id: expenseItems.id, reportId: expenseItems.reportId })
       .from(expenseItems)
@@ -68,7 +68,7 @@ export async function POST(req: NextRequest) {
   }
 
   // ── 3. Daily spending cap ─────────────────────────────────────────
-  if (categoryId && subtotal && subtotal > 0) {
+  if (config.spendingCapsEnabled && categoryId && subtotal && subtotal > 0) {
     const category = await db.query.expenseCategories.findFirst({
       where: and(
         eq(expenseCategories.id, categoryId),

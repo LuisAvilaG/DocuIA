@@ -90,7 +90,9 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   const detectDupes           = feat.isEnabled("duplicate_detection");
   const approvalRequired      = feat.isEnabled("approval_workflow");
   const exceptionQueueEnabled = feat.isEnabled("exception_queue");
-  const customForms = feat.getConfig("custom_netsuite_forms") as CustomFormsConfig;
+  const customForms = feat.isEnabled("custom_netsuite_forms")
+    ? feat.getConfig("custom_netsuite_forms") as CustomFormsConfig
+    : undefined;
   const poConfig = feat.getConfig("po_processing") as {
     apply_to_po_lines?: boolean;
     set_unselected_po_lines_to_zero?: boolean;

@@ -326,6 +326,13 @@ define(["N/record", "N/search", "N/format", "N/log"], (record, search, format, l
       || findDuplicate("VendBill", vendorId, invNumber, subId);
     if (existing) return { ok: true, dry_run: dryRun, already_exists: true, mode: poId ? "transform" : "standalone", vendor_bill_internal_id: existing, warnings };
 
+    // The app validates the catalog choice too, but the RESTlet must protect
+    // direct callers from transforming a PO owned by another vendor/subsidiary.
+    if (poId) {
+      const poValidation = validatePurchaseOrderForTransform(poId, vendorId, subId);
+      if (!poValidation.ok) return poValidation;
+    }
+
     const mode = poId ? "transform" : "standalone";
     const rec  = poId
       ? record.transform({ fromType: record.Type.PURCHASE_ORDER, fromId: poId, toType: record.Type.VENDOR_BILL, isDynamic: true })
@@ -353,6 +360,25 @@ define(["N/record", "N/search", "N/format", "N/log"], (record, search, format, l
     log.audit({ title: "docuia-process:saving", details: "vendor_bill mode=" + mode + " lines=" + lines.length + " expense=" + expenseLines.length + " warnings=" + j(warnings, 1000) });
     const id = rec.save({ enableSourcing: true, ignoreMandatoryFields: false });
     return { ok: true, dry_run: false, mode, vendor_bill_internal_id: String(id), warnings };
+  }
+
+  function validatePurchaseOrderForTransform(poId, vendorId, subId) {
+    try {
+      const po = record.load({ type: record.Type.PURCHASE_ORDER, id: poId, isDynamic: false });
+      if (s(po.getValue({ fieldId: "entity" })) !== vendorId) {
+        return { ok: false, error: "The selected purchase order does not belong to the vendor" };
+      }
+      if (subId && s(po.getValue({ fieldId: "subsidiary" })) !== subId) {
+        return { ok: false, error: "The selected purchase order does not belong to the subsidiary" };
+      }
+      const status = s(po.getValue({ fieldId: "status" }));
+      if (status === "PurchOrd:H" || status === "PurchOrd:F") {
+        return { ok: false, error: "The selected purchase order is not open" };
+      }
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: "Could not validate the selected purchase order: " + String(err.message || err) };
+    }
   }
 
   function createPurchaseOrder(body, warnings) {

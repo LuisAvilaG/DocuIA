@@ -4,10 +4,12 @@ import { db } from "@/lib/db";
 import { itemMappings, subsidiaries } from "@/db/schema";
 import { eq, inArray } from "drizzle-orm";
 import { MappingsClient } from "./client";
+import { isFeatureEnabled } from "@/lib/features";
 
 export default async function MappingsPage() {
   const session = await getTenantSession();
   if (!session) redirect("/login");
+  if (!await isFeatureEnabled(session.orgId, "auto_mapping")) redirect("/dashboard");
 
   type MappingRow = {
     id: number;
@@ -60,5 +62,5 @@ export default async function MappingsPage() {
     console.error("[mappings]", err);
   }
 
-  return <MappingsClient subsidiaries={subs} mappings={mappings} />;
+  return <MappingsClient subsidiaries={subs} mappings={mappings} canManage={session.role === "admin"} />;
 }

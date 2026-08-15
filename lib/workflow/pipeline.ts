@@ -87,6 +87,14 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
 
   const storageEnabled        = feat.isEnabled("document_storage");
   const fallbackEnabled       = feat.isEnabled("ai_tiered_fallback");
+  const tieredFallback = fallbackEnabled
+    ? feat.getConfig("ai_tiered_fallback") as {
+        soft_fallback_rate?: number; canary_rate?: number; sticky_secondary_enabled?: boolean;
+        allow_secondary_for_baldor?: boolean; complex_line_count_threshold?: number;
+        primary_max_retries?: number; secondary_max_retries?: number;
+        retry_base_ms?: number; retry_max_ms?: number;
+      }
+    : undefined;
   const forceSecondary        = feat.isEnabled("ai_force_secondary");
   const detectDupes           = feat.isEnabled("duplicate_detection");
   const approvalRequired      = feat.isEnabled("approval_workflow");
@@ -108,6 +116,8 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
     ? feat.getConfig("auto_mapping") as {
         min_confirmations?: number;
         merge_similarity?: number;
+        suggest_similarity?: number;
+        vendor_suggest_similarity?: number;
       }
     : undefined;
   const poConfig = feat.getConfig("po_processing") as {
@@ -224,6 +234,17 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
           primaryModel: modelSelection?.primary_model,
           secondaryModel: modelSelection?.secondary_model,
           maxChars: modelSelection?.max_chars,
+          tieredFallback: tieredFallback ? {
+            softFallbackRate: tieredFallback.soft_fallback_rate,
+            canaryRate: tieredFallback.canary_rate,
+            stickySecondaryEnabled: tieredFallback.sticky_secondary_enabled,
+            allowSecondaryForBaldor: tieredFallback.allow_secondary_for_baldor,
+            complexLineCountThreshold: tieredFallback.complex_line_count_threshold,
+            primaryMaxRetries: tieredFallback.primary_max_retries,
+            secondaryMaxRetries: tieredFallback.secondary_max_retries,
+            retryBaseMs: tieredFallback.retry_base_ms,
+            retryMaxMs: tieredFallback.retry_max_ms,
+          } : undefined,
         },
       });
     }
@@ -307,7 +328,8 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
       autoMapping: {
         enabled: Boolean(autoMapping),
         minConfirmations: autoMapping?.min_confirmations,
-        similarityThreshold: autoMapping?.merge_similarity,
+        suggestionSimilarityThreshold: autoMapping?.suggest_similarity,
+        vendorSimilarityThreshold: autoMapping?.vendor_suggest_similarity,
       },
     });
 
@@ -430,7 +452,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
 
     usageDelta.totalAmount = (extraction.invoice.total ?? 0).toString();
 
-    void upsertItemMappings(
+    if (autoMapping) void upsertItemMappings(
       payload.document.lines
         .filter((l) => l.selected_item_id)
         .map((l) => {
@@ -444,7 +466,8 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
             netsuiteUnit:       l.selected_unit_id ?? null,
             autoMap:            true,
           };
-        })
+        }),
+      { mergeSimilarity: autoMapping.merge_similarity },
     ).catch(() => {});
 
     return {

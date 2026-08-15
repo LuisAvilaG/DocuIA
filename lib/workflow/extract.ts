@@ -167,8 +167,50 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 // Transient Gemini errors worth retrying: rate limits and upstream hiccups.
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
-const MAX_ATTEMPTS = 4;
 const GEMINI_TIMEOUT_MS = Number(process.env.GEMINI_TIMEOUT_MS) || 90_000;
+
+export type TieredFallbackConfig = {
+  softFallbackRate?: unknown;
+  canaryRate?: unknown;
+  stickySecondaryEnabled?: unknown;
+  allowSecondaryForBaldor?: unknown;
+  complexLineCountThreshold?: unknown;
+  primaryMaxRetries?: unknown;
+  secondaryMaxRetries?: unknown;
+  retryBaseMs?: unknown;
+  retryMaxMs?: unknown;
+};
+
+type ResolvedTieredFallbackConfig = {
+  softFallbackRate: number;
+  canaryRate: number;
+  stickySecondaryEnabled: boolean;
+  allowSecondaryForBaldor: boolean;
+  complexLineCountThreshold: number;
+  primaryMaxRetries: number;
+  secondaryMaxRetries: number;
+  retryBaseMs: number;
+  retryMaxMs: number;
+};
+
+function boundedNumber(value: unknown, fallback: number, min: number, max: number): number {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : fallback;
+}
+
+function resolveTieredFallbackConfig(config?: TieredFallbackConfig): ResolvedTieredFallbackConfig {
+  return {
+    softFallbackRate: boundedNumber(config?.softFallbackRate, 0.08, 0, 1),
+    canaryRate: boundedNumber(config?.canaryRate, 0, 0, 0.5),
+    stickySecondaryEnabled: config?.stickySecondaryEnabled !== false,
+    allowSecondaryForBaldor: config?.allowSecondaryForBaldor === true,
+    complexLineCountThreshold: Math.round(boundedNumber(config?.complexLineCountThreshold, 12, 3, 200)),
+    primaryMaxRetries: Math.round(boundedNumber(config?.primaryMaxRetries, 3, 0, 5)),
+    secondaryMaxRetries: Math.round(boundedNumber(config?.secondaryMaxRetries, 1, 0, 3)),
+    retryBaseMs: Math.round(boundedNumber(config?.retryBaseMs, 1500, 250, 10000)),
+    retryMaxMs: Math.round(boundedNumber(config?.retryMaxMs, 8000, 1000, 60000)),
+  };
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -182,7 +224,13 @@ function outputTokenLimit(maxChars: unknown): number | undefined {
   return Math.max(256, Math.min(8192, Math.round(characters / 4)));
 }
 
-async function callModel(model: string, parts: GeminiPart[], apiKeyOverride?: string, maxChars?: number): Promise<{
+async function callModel(
+  model: string,
+  parts: GeminiPart[],
+  apiKeyOverride?: string,
+  maxChars?: number,
+  retry?: Pick<ResolvedTieredFallbackConfig, "retryBaseMs" | "retryMaxMs"> & { maxRetries: number },
+): Promise<{
   text: string;
   promptTokens: number;
   completionTokens: number;
@@ -191,11 +239,14 @@ async function callModel(model: string, parts: GeminiPart[], apiKeyOverride?: st
   const maxOutputTokens = outputTokenLimit(maxChars);
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
+  const maxRetries = retry?.maxRetries ?? 3;
+  const attempts = maxRetries + 1;
+  const retryBaseMs = retry?.retryBaseMs ?? 1500;
+  const retryMaxMs = retry?.retryMaxMs ?? 8000;
   let response: Response | null = null;
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+  for (let attempt = 0; attempt < attempts; attempt++) {
     if (attempt > 0) {
-      // Exponential backoff with jitter: ~0.5s, 1s, 2s (+ up to 300ms)
-      const backoff = Math.min(8000, 500 * 2 ** (attempt - 1)) + Math.floor(Math.random() * 300);
+      const backoff = Math.min(retryMaxMs, retryBaseMs * 2 ** (attempt - 1)) + Math.floor(Math.random() * Math.min(300, retryBaseMs / 4));
       await sleep(backoff);
     }
     try {
@@ -215,14 +266,14 @@ async function callModel(model: string, parts: GeminiPart[], apiKeyOverride?: st
       });
     } catch (e) {
       // Network error or timeout (AbortError). Retry unless attempts exhausted.
-      if (attempt === MAX_ATTEMPTS - 1) {
+      if (attempt === attempts - 1) {
         const reason = e instanceof Error ? e.message : String(e);
         throw new Error(`AI extraction request failed (network/timeout): ${reason}`);
       }
       continue;
     }
     if (response.ok) break;
-    if (!RETRYABLE_STATUS.has(response.status) || attempt === MAX_ATTEMPTS - 1) {
+    if (!RETRYABLE_STATUS.has(response.status) || attempt === attempts - 1) {
       const body = await response.text();
       throw new Error(`AI extraction failed (${response.status}): ${body}`);
     }
@@ -258,7 +309,25 @@ export type ExtractOptions = {
   primaryModel?:     string; // ai_model_selection
   secondaryModel?:   string; // ai_model_selection
   maxChars?:         number; // ai_model_selection (OCR input / approximate AI output limit)
+  tieredFallback?:   TieredFallbackConfig;
 };
+
+function allowsSecondary(source: string, config: ResolvedTieredFallbackConfig): boolean {
+  return config.allowSecondaryForBaldor || !source.toLowerCase().includes("baldor");
+}
+
+function isSoftExtractionFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("zero lines") || message.includes("empty content") || message.includes("valid JSON");
+}
+
+function retryConfig(config: ResolvedTieredFallbackConfig, secondary: boolean) {
+  return {
+    maxRetries: secondary ? config.secondaryMaxRetries : config.primaryMaxRetries,
+    retryBaseMs: config.retryBaseMs,
+    retryMaxMs: config.retryMaxMs,
+  };
+}
 
 function configuredModel(value: unknown, fallback: string): string {
   const model = normalize(value);
@@ -273,6 +342,7 @@ export async function extractFromFile(params: {
   options?:      ExtractOptions;
 }): Promise<ExtractionResult> {
   const { fallbackEnabled = true, forceSecondary = false, apiKey } = params.options ?? {};
+  const tiered = resolveTieredFallbackConfig(params.options?.tieredFallback);
   const primaryModel = configuredModel(params.options?.primaryModel, FLASH_MODEL);
   const secondaryModel = configuredModel(params.options?.secondaryModel, PRO_MODEL);
 
@@ -281,10 +351,11 @@ export async function extractFromFile(params: {
     { text: `${instruction} FILE_NAME: ${normalize(params.fileName) || "invoice"}` },
     { inline_data: { mime_type: params.mimeType, data: params.base64Content } },
   ];
+  const secondaryAllowed = allowsSecondary(params.fileName, tiered);
 
   // ai_force_secondary: skip primary model entirely
   if (forceSecondary) {
-    const result = await callModel(secondaryModel, parts, apiKey, params.options?.maxChars);
+    const result = await callModel(secondaryModel, parts, apiKey, params.options?.maxChars, retryConfig(tiered, true));
     const parsed  = parseJsonObject(result.text);
     const invoice = mapInvoice(parsed, normalize(params.fileName));
     return {
@@ -299,10 +370,31 @@ export async function extractFromFile(params: {
 
   // Primary model attempt
   try {
-    const result = await callModel(primaryModel, parts, apiKey, params.options?.maxChars);
+    const result = await callModel(primaryModel, parts, apiKey, params.options?.maxChars, retryConfig(tiered, false));
     const parsed  = parseJsonObject(result.text);
     const invoice = mapInvoice(parsed, normalize(params.fileName));
     if (invoice.lines.length === 0) throw new Error("Primary model returned zero lines");
+
+    // Complex documents intentionally receive a Pro extraction as the final
+    // result. Canary calls exercise Pro without replacing a valid Flash result.
+    if (secondaryAllowed && invoice.lines.length >= tiered.complexLineCountThreshold) {
+      try {
+        const secondary = await callModel(secondaryModel, parts, apiKey, params.options?.maxChars, retryConfig(tiered, true));
+        const secondaryInvoice = mapInvoice(parseJsonObject(secondary.text), normalize(params.fileName));
+        if (secondaryInvoice.lines.length === 0) throw new Error("Secondary model returned zero lines");
+        return {
+          invoice: secondaryInvoice, model: secondaryModel, fallbackUsed: true, rawJson: secondary.text,
+          promptTokens: secondary.promptTokens, completionTokens: secondary.completionTokens,
+        };
+      } catch (secondaryError) {
+        if (tiered.stickySecondaryEnabled) {
+          const message = secondaryError instanceof Error ? secondaryError.message : String(secondaryError);
+          throw new Error(`Secondary model failed for complex document: ${message}`);
+        }
+      }
+    } else if (secondaryAllowed && Math.random() < tiered.canaryRate) {
+      void callModel(secondaryModel, parts, apiKey, params.options?.maxChars, retryConfig(tiered, true)).catch(() => {});
+    }
     return {
       invoice,
       model:            primaryModel,
@@ -312,12 +404,16 @@ export async function extractFromFile(params: {
       completionTokens: result.completionTokens,
     };
   } catch (primaryErr) {
-    // ai_tiered_fallback disabled: propagate the error, no retry
-    if (!fallbackEnabled) {
+    // Soft extraction failures are sampled; transport/provider failures always
+    // fall through to Pro. Baldor is explicitly opt-in for Pro usage.
+    const message = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
+    if (message.startsWith("Secondary model failed for complex document:")
+      || !fallbackEnabled || !secondaryAllowed
+      || (isSoftExtractionFailure(primaryErr) && Math.random() >= tiered.softFallbackRate)) {
       throw primaryErr;
     }
     console.warn("[extract] Primary failed, using secondary:", (primaryErr as Error).message);
-    const result = await callModel(secondaryModel, parts, apiKey, params.options?.maxChars);
+    const result = await callModel(secondaryModel, parts, apiKey, params.options?.maxChars, retryConfig(tiered, true));
     const parsed  = parseJsonObject(result.text);
     const invoice = mapInvoice(parsed, normalize(params.fileName));
     return {
@@ -337,6 +433,7 @@ export async function extractFromText(params: {
   options?: ExtractOptions;
 }): Promise<ExtractionResult> {
   const { fallbackEnabled = true, forceSecondary = false, apiKey } = params.options ?? {};
+  const tiered = resolveTieredFallbackConfig(params.options?.tieredFallback);
   const primaryModel = configuredModel(params.options?.primaryModel, FLASH_MODEL);
   const secondaryModel = configuredModel(params.options?.secondaryModel, PRO_MODEL);
   const configuredMaxChars = Number(params.options?.maxChars);
@@ -346,11 +443,12 @@ export async function extractFromText(params: {
   const text = params.ocrText.slice(0, maxChars);
   const instruction = getInstruction();
   const parts: GeminiPart[] = [{ text: `${instruction} OCR_TEXT:\n${text}` }];
+  const secondaryAllowed = allowsSecondary(text, tiered);
 
   const startModel = forceSecondary ? secondaryModel : (params.model || primaryModel);
 
   try {
-    const result = await callModel(startModel, parts, apiKey, params.options?.maxChars);
+    const result = await callModel(startModel, parts, apiKey, params.options?.maxChars, retryConfig(tiered, forceSecondary));
     const parsed  = parseJsonObject(result.text);
     const invoice = mapInvoice(parsed, text);
     if (invoice.lines.length === 0 && !params.model && !forceSecondary) {
@@ -365,9 +463,9 @@ export async function extractFromText(params: {
       completionTokens: result.completionTokens,
     };
   } catch (err) {
-    if (params.model || forceSecondary || !fallbackEnabled) throw err;
+    if (params.model || forceSecondary || !fallbackEnabled || !secondaryAllowed || (isSoftExtractionFailure(err) && Math.random() >= tiered.softFallbackRate)) throw err;
     console.warn("[extract] Primary OCR failed, using secondary:", (err as Error).message);
-    const result = await callModel(secondaryModel, parts, apiKey, params.options?.maxChars);
+    const result = await callModel(secondaryModel, parts, apiKey, params.options?.maxChars, retryConfig(tiered, true));
     const parsed  = parseJsonObject(result.text);
     const invoice = mapInvoice(parsed, text);
     return {

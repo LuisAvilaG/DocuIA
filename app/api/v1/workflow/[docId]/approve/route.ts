@@ -79,7 +79,10 @@ export async function POST(req: NextRequest, { params }: Params) {
     // must travel with the manual-approve flow too — not only the auto pipeline.
     // The configuration is retained when the feature is turned off, but must
     // only affect NetSuite requests while the feature itself is enabled.
-    const formsFeat = await getFeature(session.orgId, "custom_netsuite_forms");
+    const [formsFeat, autoMappingFeat] = await Promise.all([
+      getFeature(session.orgId, "custom_netsuite_forms"),
+      getFeature(session.orgId, "auto_mapping"),
+    ]);
     const customFormId = formsFeat.isEnabled
       ? resolveCustomFormId(formsFeat.config, doc.subsidiaryId, doc.documentType)
       : "";
@@ -157,7 +160,7 @@ export async function POST(req: NextRequest, { params }: Params) {
         updatedAt:     new Date(),
       }).where(eq(historyDocuments.id, docIdNum));
 
-      void upsertItemMappings(
+      if (autoMappingFeat.isEnabled) void upsertItemMappings(
         validLines.map((l) => ({
           subsidiaryId:       doc.subsidiaryId,
           vendor:             doc.vendor ?? "",
@@ -166,7 +169,8 @@ export async function POST(req: NextRequest, { params }: Params) {
           netsuiteItemName:   null,
           netsuiteUnit:       l.unit ?? null,
           autoMap:            false,
-        }))
+        })),
+        { mergeSimilarity: Number(autoMappingFeat.config.merge_similarity) },
       ).catch(() => {});
 
       return NextResponse.json({ ok: true, netsuiteId: nsResult.internalId, recordUrl: nsResult.recordUrl });
@@ -330,7 +334,7 @@ export async function POST(req: NextRequest, { params }: Params) {
       updatedAt:     new Date(),
     }).where(eq(historyDocuments.id, docIdNum));
 
-    void upsertItemMappings(
+    if (autoMappingFeat.isEnabled) void upsertItemMappings(
       validLines.map((l) => ({
         subsidiaryId:       doc.subsidiaryId,
         vendor:             resolvedVendorName ?? "",
@@ -339,7 +343,8 @@ export async function POST(req: NextRequest, { params }: Params) {
         netsuiteItemName:   null,
         netsuiteUnit:       l.unit ?? null,
         autoMap:            false,
-      }))
+      })),
+      { mergeSimilarity: Number(autoMappingFeat.config.merge_similarity) },
     ).catch(() => {});
 
     return NextResponse.json({ ok: true, netsuiteId: nsResult.internalId, recordUrl: nsResult.recordUrl });

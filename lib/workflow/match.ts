@@ -1,4 +1,4 @@
-import { like, eq, and, asc } from "drizzle-orm";
+import { eq, and, asc } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   catalogItems, catalogVendors, catalogLocations, itemMappings,
@@ -288,20 +288,14 @@ async function getMemorySuggestions(
   vendor: string,
   lineNames: string[],
   subsidiaryId: string,
-  options: { minConfirmations: number; similarityThreshold: number },
+  options: { minConfirmations: number; suggestionSimilarityThreshold: number; vendorSimilarityThreshold: number },
 ): Promise<Record<string, MemorySuggestion>> {
   if (!vendor || !lineNames.length) return {};
 
-  const vendorNorm = normalizeForLookup(vendor);
   const rows = await db
     .select()
     .from(itemMappings)
-    .where(
-      and(
-        eq(itemMappings.subsidiaryId, subsidiaryId),
-        like(itemMappings.vendorNorm, `%${vendorNorm.slice(0, 60)}%`)
-      )
-    )
+    .where(eq(itemMappings.subsidiaryId, subsidiaryId))
     .limit(500);
 
   const result: Record<string, MemorySuggestion> = {};
@@ -311,6 +305,7 @@ async function getMemorySuggestions(
     let bestRow: typeof rows[number] | null = null;
 
     for (const row of rows) {
+      if (computeSimilarity(vendor, row.vendor) < options.vendorSimilarityThreshold) continue;
       const score = computeSimilarity(lineName, row.vendorItemName);
       if (score > bestScore) {
         bestScore = score;
@@ -321,7 +316,7 @@ async function getMemorySuggestions(
     if (
       bestRow &&
       bestRow.timesConfirmed >= options.minConfirmations &&
-      bestScore >= options.similarityThreshold
+      bestScore >= options.suggestionSimilarityThreshold
     ) {
       result[lineName] = {
         netsuite_internal_id: bestRow.netsuiteInternalId,
@@ -345,7 +340,12 @@ export async function buildUiPayload(
     engine?: string;
     parserVersion?: string;
     meta?: Record<string, unknown>;
-    autoMapping?: { enabled: boolean; minConfirmations?: number; similarityThreshold?: number };
+    autoMapping?: {
+      enabled: boolean;
+      minConfirmations?: number;
+      suggestionSimilarityThreshold?: number;
+      vendorSimilarityThreshold?: number;
+    };
   }
 ): Promise<UiPayload> {
   const engine = normalize(options?.engine || "") || "gemini_file_primary";
@@ -360,7 +360,8 @@ export async function buildUiPayload(
   const memorySuggestions = autoMapping?.enabled
     ? await getMemorySuggestions(vendorForMemory, lineNames, subsidiaryId, {
         minConfirmations: Math.max(1, Math.round(autoMapping.minConfirmations ?? 5)),
-        similarityThreshold: Math.min(1, Math.max(0, autoMapping.similarityThreshold ?? 0.93)),
+        suggestionSimilarityThreshold: Math.min(1, Math.max(0, autoMapping.suggestionSimilarityThreshold ?? 0.84)),
+        vendorSimilarityThreshold: Math.min(1, Math.max(0, autoMapping.vendorSimilarityThreshold ?? 0.90)),
       })
     : {};
 

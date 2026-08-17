@@ -22,11 +22,14 @@ export async function register() {
   }
 
   try {
-    const { startPipelineWorker } = await import("@/lib/queue");
+    const { getBoss, startPipelineWorker } = await import("@/lib/queue");
     await startPipelineWorker();
+
+    const { startInternalScheduler } = await import("@/lib/scheduler");
+    await startInternalScheduler(await getBoss());
   } catch (err) {
-    // Don't crash the server if the queue can't boot; uploads fall back to
-    // inline processing, and the reap-stuck watchdog cleans up any orphans.
-    console.error("[instrumentation] failed to start pipeline worker:", err);
+    // Don't crash the server if background work can't boot; uploads fall back
+    // to inline processing and scheduled maintenance resumes on the next boot.
+    console.error("[instrumentation] failed to start background workers:", err);
   }
 }

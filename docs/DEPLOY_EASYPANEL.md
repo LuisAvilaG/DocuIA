@@ -69,25 +69,27 @@ Aplica solo las migraciones pendientes (tracking `drizzle.__drizzle_migrations`)
 idempotente. Si la base no está lista al arrancar, el contenedor falla y EasyPanel
 reintenta hasta que Postgres responda.
 
-## Crons (tareas programadas)
-Cada endpoint requiere el header `X-Cron-Secret: <CRON_SECRET>`. Prográmalos con el
-scheduler de EasyPanel o un cron externo apuntando a tu dominio:
+## Scheduler interno
+No se configura ningún cron externo. Al iniciar la app, su worker pg-boss
+registra en PostgreSQL tareas persistentes y respeta en cada ejecución los
+features y configuración actuales de cada tenant. Funciona también con más de
+una réplica: PostgreSQL asegura que cada trabajo se procese una sola vez.
 
-| Frecuencia | Endpoint |
+| Frecuencia (America/Mexico_City) | Tarea |
 |---|---|
-| cada 5 min | `POST /api/internal/cron/reap-stuck` |
-| diario | `POST /api/internal/cron/contract-alerts` |
-| según uso | `POST /api/internal/cron/auto-sync` |
-| diario | `POST /api/internal/cron/retention` |
-| según uso | `POST /api/internal/cron/scheduled-reports` |
+| cada 5 min | recuperar documentos atascados y auto-sync de catálogos |
+| diario 02:20 | sincronizar catálogos de gastos |
+| diario 03:00 | aplicar retención de datos |
+| diario 08:00 | enviar reportes programados |
+| diario 08:15 | alertas de contratos |
 
-Ejemplo:
-```
-curl -X POST https://tu-dominio/api/internal/cron/reap-stuck -H "X-Cron-Secret: $CRON_SECRET"
-```
+`CRON_SECRET` continúa siendo obligatorio: protege los endpoints internos de
+diagnóstico (`GET /api/internal/cron/*`), aunque el scheduler normal ya no los
+invoca desde internet. Para detener el scheduler temporalmente durante una
+intervención, configura `INTERNAL_SCHEDULER_ENABLED=false` y reinicia la app.
 
 ## Orden de despliegue
 1. Crear Postgres y MinIO (esperar healthy).
 2. Crear la App con sus variables; primer deploy → migra + arranca + crea super-admin.
 3. Entrar como super-admin (`/admin/login`), crear el primer cliente con el producto Contract Intelligence.
-4. Configurar los crons.
+4. Confirmar en los logs de la app el mensaje `[scheduler] internal schedules registered`.

@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 import {
   Cpu, Map as MapIcon, Workflow, RefreshCw, Plug, BarChart3,
   Shield, Building, HardDrive, Search, SlidersHorizontal,
-  FlaskConical, Loader2, CheckCircle2, AlertTriangle,
+  FlaskConical, Loader2, CheckCircle2, AlertTriangle, ScrollText,
 } from "lucide-react";
 
 const CATEGORIES = [
@@ -19,6 +19,7 @@ const CATEGORIES = [
   { id: "storage",     label: "Storage",        icon: HardDrive },
   { id: "security",    label: "Seguridad",      icon: Shield },
   { id: "enterprise",  label: "Enterprise",     icon: Building },
+  { id: "contracts",   label: "Contratos",      icon: ScrollText },
 ];
 
 const PLAN_BADGE: Record<string, string> = {

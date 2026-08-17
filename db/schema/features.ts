@@ -5,7 +5,7 @@ import {
 
 export const featureCategoryEnum = pgEnum("feature_category", [
   "extraction", "mapping", "workflow", "sync",
-  "integration", "analytics", "security", "enterprise", "storage", "expenses",
+  "integration", "analytics", "security", "enterprise", "storage", "expenses", "contracts",
 ]);
 
 export const featureTypeEnum = pgEnum("feature_type", [

@@ -4,12 +4,16 @@ import { db } from "@/lib/db";
 import { contractCases } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
 import { logAudit } from "@/lib/audit/log";
+import { isFeatureEnabled } from "@/lib/features";
 
 // Reopen a decided case back to review, keeping the prior decision in history.
 export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getTenantSession();
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (session.role !== "admin") return NextResponse.json({ error: "Solo administradores pueden reabrir" }, { status: 403 });
+  if (!await isFeatureEnabled(session.orgId, "contract_approval_workflow")) {
+    return NextResponse.json({ error: "La aprobación de contratos no está habilitada para este cliente." }, { status: 403 });
+  }
   const { id } = await params;
 
   const kase = await db.query.contractCases.findFirst({

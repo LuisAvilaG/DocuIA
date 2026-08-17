@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { isProductActive } from "@/lib/products";
+import { isFeatureEnabled } from "@/lib/features";
 import { db } from "@/lib/db";
 import { contractCases } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
@@ -10,6 +11,7 @@ export default async function ContractsPage() {
   const session = await getTenantSession();
   if (!session) redirect("/login");
   if (!(await isProductActive(session.orgId, "contract_intelligence"))) redirect("/dashboard");
+  if (!(await isFeatureEnabled(session.orgId, "contract_ai_extraction"))) redirect("/contracts/dashboard");
 
   const cases = await db.query.contractCases.findMany({
     where: eq(contractCases.organizationId, session.orgId),

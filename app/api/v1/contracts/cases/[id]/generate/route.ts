@@ -7,10 +7,14 @@ import { uploadFile } from "@/lib/storage/minio";
 import { renderTemplate, renderPdf, renderDocPdf, renderHtmlPdf, defaultTemplate, assembleCaseData } from "@/lib/contracts/generate";
 import { loadContractPlan } from "@/lib/contracts/plan";
 import { logAudit } from "@/lib/audit/log";
+import { isFeatureEnabled } from "@/lib/features";
 
 export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getTenantSession();
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+  if (!await isFeatureEnabled(session.orgId, "contract_document_generation")) {
+    return NextResponse.json({ error: "La generación documental no está habilitada para este cliente." }, { status: 403 });
+  }
 
   const { id } = await params;
   const kase = await db.query.contractCases.findFirst({

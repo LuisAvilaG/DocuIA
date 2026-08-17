@@ -5,10 +5,14 @@ import { contractCases } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
 import { getFileStream } from "@/lib/storage/minio";
 import { Readable } from "node:stream";
+import { isFeatureEnabled } from "@/lib/features";
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getTenantSession();
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+  if (!await isFeatureEnabled(session.orgId, "contract_document_generation")) {
+    return NextResponse.json({ error: "La generación documental no está habilitada para este cliente." }, { status: 403 });
+  }
 
   const { id } = await params;
   const kase = await db.query.contractCases.findFirst({

@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { isProductActive } from "@/lib/products";
+import { isFeatureEnabled } from "@/lib/features";
 import { db } from "@/lib/db";
 import { contractCases, contractDocuments, contractValidations, contractFlows } from "@/db/schema";
 import { eq, desc, count } from "drizzle-orm";
@@ -20,6 +21,7 @@ export default async function ContractMetricsPage() {
   const session = await getTenantSession();
   if (!session) redirect("/login");
   if (!(await isProductActive(session.orgId, "contract_intelligence"))) redirect("/dashboard");
+  if (!(await isFeatureEnabled(session.orgId, "contract_metrics"))) redirect("/contracts/dashboard");
   const orgId = session.orgId;
 
   const [cases, docCountRows, signerRows, flows] = await Promise.all([

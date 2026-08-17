@@ -4,11 +4,14 @@ import { db } from "@/lib/db";
 import { contractCases, contractValidations } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
 import { logAudit } from "@/lib/audit/log";
+import { getFeature, isFeatureEnabled } from "@/lib/features";
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getTenantSession();
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (session.role !== "admin") return NextResponse.json({ error: "Solo administradores pueden aprobar" }, { status: 403 });
+  const approvalFeature = await getFeature(session.orgId, "contract_approval_workflow");
+  if (!approvalFeature.isEnabled) return NextResponse.json({ error: "La aprobación de contratos no está habilitada para este cliente." }, { status: 403 });
   const { id } = await params;
 
   const kase = await db.query.contractCases.findFirst({
@@ -23,12 +26,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   // Gate on blocking validations: cannot approve unless the reviewer overrides + explains.
   const vals = await db.query.contractValidations.findMany({ where: eq(contractValidations.caseId, id), columns: { ok: true, severity: true } });
-  const blocked = vals.some((v) => v.ok === false && v.severity === "block");
+  const validationsEnabled = await isFeatureEnabled(session.orgId, "contract_advanced_validations");
+  const blocked = validationsEnabled && vals.some((v) => v.ok === false && v.severity === "block");
+  const allowOverride = approvalFeature.config.allow_override !== false;
   if (blocked && !override) {
     return NextResponse.json({ error: "Este caso tiene validaciones bloqueantes. Debes forzar la aprobación con un motivo.", needsOverride: true }, { status: 409 });
   }
   if (blocked && override && !reason) {
     return NextResponse.json({ error: "Escribe el motivo para aprobar pese a los bloqueos." }, { status: 400 });
+  }
+  if (blocked && override && !allowOverride) {
+    return NextResponse.json({ error: "Este cliente no permite aprobar casos con bloqueos." }, { status: 409 });
   }
 
   const prev = (kase.resultJson ?? {}) as Record<string, unknown>;

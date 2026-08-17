@@ -62,7 +62,14 @@ export const FEATURE_PRODUCT: Record<string, ProductKey> = {
   expense_management:      "expense_management",
   expense_approval:        "expense_management",
   expense_categories_sync: "expense_management",
-  // contract_intelligence features are added in P9+
+  // Contract Intelligence
+  contract_ai_extraction:        "contract_intelligence",
+  contract_flow_builder:         "contract_intelligence",
+  contract_advanced_validations: "contract_intelligence",
+  contract_document_generation:  "contract_intelligence",
+  contract_approval_workflow:    "contract_intelligence",
+  contract_obligation_tracking:  "contract_intelligence",
+  contract_metrics:              "contract_intelligence",
 };
 
 // Platform features (product_key = null): webhook_system, api_keys,
@@ -97,10 +104,10 @@ export const PRODUCT_MODULES: Record<ProductKey, NavModule[]> = {
   ],
   contract_intelligence: [
     { href: "/contracts/dashboard",  label: "Panel",         icon: "LayoutDashboard" },
-    { href: "/contracts",            label: "Casos",         icon: "ScrollText" },
-    { href: "/contracts/approvals",  label: "Aprobaciones",  icon: "ClipboardCheck", adminOnly: true },
-    { href: "/contracts/metrics",    label: "Métricas",      icon: "BarChart3" },
-    { href: "/contracts/flow",       label: "Configuración", icon: "Workflow", adminOnly: true },
+    { href: "/contracts",            label: "Casos",         icon: "ScrollText",      feature: "contract_ai_extraction" },
+    { href: "/contracts/approvals",  label: "Aprobaciones",  icon: "ClipboardCheck",  feature: "contract_approval_workflow", adminOnly: true },
+    { href: "/contracts/metrics",    label: "Métricas",      icon: "BarChart3",       feature: "contract_metrics" },
+    { href: "/contracts/flow",       label: "Configuración", icon: "Workflow",        feature: "contract_flow_builder", adminOnly: true },
   ],
 };
 

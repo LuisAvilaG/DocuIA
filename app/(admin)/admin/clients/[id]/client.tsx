@@ -12,7 +12,7 @@ import {
   Map as MapIcon, Workflow, RefreshCw, Plug, BarChart3,
   Shield, Building, HardDrive, SlidersHorizontal,
   CheckCircle2, AlertTriangle, Loader2, Info, KeyRound, Eye, EyeOff, Trash2,
-  Users, UserPlus, Mail, User, Receipt, Check, X,
+  Users, UserPlus, Mail, User, Receipt, Check, X, ScrollText,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -31,6 +31,7 @@ const TABS = [
 const FEATURE_CATEGORIES = [
   { id: "all",         label: "Todos",         icon: SlidersHorizontal },
   { id: "expenses",    label: "Gastos",        icon: Receipt },
+  { id: "contracts",   label: "Contratos",     icon: ScrollText },
   { id: "extraction",  label: "Extracción AI", icon: Cpu },
   { id: "mapping",     label: "Mapeo",         icon: MapIcon },
   { id: "workflow",    label: "Workflow",       icon: Workflow },

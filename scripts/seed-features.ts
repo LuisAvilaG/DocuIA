@@ -13,7 +13,7 @@ async function main() {
     await db.insert(features).values(f).onConflictDoUpdate({
       target: features.id,
       set: {
-        name: f.name, description: f.description, defaultEnabled: f.defaultEnabled,
+        name: f.name, description: f.description, category: f.category, defaultEnabled: f.defaultEnabled,
         featureType: f.featureType, defaultConfig: f.defaultConfig, configSchema: f.configSchema,
         planRequired: f.planRequired, isBeta: f.isBeta, sortOrder: f.sortOrder,
       },

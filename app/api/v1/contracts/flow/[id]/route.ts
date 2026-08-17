@@ -5,14 +5,22 @@ import { db } from "@/lib/db";
 import { contractFlows } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
 import { flowGraphSchema, hasCycle, validateFlowReferences } from "@/lib/contracts/flow";
+import { isFeatureEnabled } from "@/lib/features";
 
 async function guard(orgId: string) { return isProductActive(orgId, "contract_intelligence"); }
+
+async function featureGuard(orgId: string) {
+  const [productActive, enabled] = await Promise.all([
+    guard(orgId), isFeatureEnabled(orgId, "contract_flow_builder"),
+  ]);
+  return productActive && enabled;
+}
 
 // One flow's full graph.
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getTenantSession();
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
-  if (!await guard(session.orgId)) return NextResponse.json({ error: "Producto no activo" }, { status: 403 });
+  if (!await featureGuard(session.orgId)) return NextResponse.json({ error: "El constructor de flujos no está habilitado" }, { status: 403 });
   const { id } = await params;
 
   const row = await db.query.contractFlows.findFirst({
@@ -32,7 +40,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   const session = await getTenantSession();
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (session.role !== "admin") return NextResponse.json({ error: "Solo administradores" }, { status: 403 });
-  if (!await guard(session.orgId)) return NextResponse.json({ error: "Producto no activo" }, { status: 403 });
+  if (!await featureGuard(session.orgId)) return NextResponse.json({ error: "El constructor de flujos no está habilitado" }, { status: 403 });
   const { id } = await params;
 
   const existing = await db.query.contractFlows.findFirst({
@@ -64,7 +72,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
   const session = await getTenantSession();
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (session.role !== "admin") return NextResponse.json({ error: "Solo administradores" }, { status: 403 });
-  if (!await guard(session.orgId)) return NextResponse.json({ error: "Producto no activo" }, { status: 403 });
+  if (!await featureGuard(session.orgId)) return NextResponse.json({ error: "El constructor de flujos no está habilitado" }, { status: 403 });
   const { id } = await params;
 
   const res = await db.delete(contractFlows)

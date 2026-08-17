@@ -7,8 +7,16 @@ import { contractFlows } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
 import { flowGraphSchema, hasCycle, validateFlowReferences } from "@/lib/contracts/flow";
 import { getContractFlowLimit, getContractFlowCount } from "@/lib/contracts/plan";
+import { isFeatureEnabled } from "@/lib/features";
 
 async function guard(orgId: string) { return isProductActive(orgId, "contract_intelligence"); }
+
+async function featureGuard(orgId: string) {
+  const [productActive, enabled] = await Promise.all([
+    guard(orgId), isFeatureEnabled(orgId, "contract_flow_builder"),
+  ]);
+  return productActive && enabled;
+}
 
 const EMPTY_GRAPH = { nodes: [], edges: [] };
 
@@ -16,7 +24,7 @@ const EMPTY_GRAPH = { nodes: [], edges: [] };
 export async function GET() {
   const session = await getTenantSession();
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
-  if (!await guard(session.orgId)) return NextResponse.json({ error: "Producto no activo" }, { status: 403 });
+  if (!await featureGuard(session.orgId)) return NextResponse.json({ error: "El constructor de flujos no está habilitado" }, { status: 403 });
 
   const [rows, maxFlows] = await Promise.all([
     db.query.contractFlows.findMany({
@@ -36,7 +44,7 @@ export async function POST(req: NextRequest) {
   const session = await getTenantSession();
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (session.role !== "admin") return NextResponse.json({ error: "Solo administradores" }, { status: 403 });
-  if (!await guard(session.orgId)) return NextResponse.json({ error: "Producto no activo" }, { status: 403 });
+  if (!await featureGuard(session.orgId)) return NextResponse.json({ error: "El constructor de flujos no está habilitado" }, { status: 403 });
 
   const [limit, current] = await Promise.all([getContractFlowLimit(session.orgId), getContractFlowCount(session.orgId)]);
   if (current >= limit) {

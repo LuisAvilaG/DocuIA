@@ -7,6 +7,7 @@ import { realExtractDeps, type ContractExtractDeps, type ExtractSource } from ".
 import { runValidations, caseVerdict, type DocsByType } from "./validate";
 import { loadContractPlan } from "./plan";
 import { buildFlowTrace } from "./trace";
+import { getFeature, isFeatureEnabled } from "@/lib/features";
 
 export interface CaseFileInput { buffer: Buffer; fileName: string; mimeType: string }
 
@@ -75,12 +76,18 @@ export async function processContractCase(caseId: string, deps: ContractExtractD
   const kase = await db.query.contractCases.findFirst({ where: eq(contractCases.id, caseId) });
   if (!kase) throw new Error(`Contract case ${caseId} not found`);
 
+  if (!await isFeatureEnabled(kase.organizationId, "contract_ai_extraction")) {
+    throw new Error("El análisis AI de contratos fue deshabilitado antes de procesar este caso.");
+  }
+
   await db.update(contractCases).set({ status: "processing", updatedAt: new Date() }).where(eq(contractCases.id, caseId));
 
   try {
-    const [docs, plan] = await Promise.all([
+    const [docs, plan, validationsFeature, obligationsFeature] = await Promise.all([
       db.query.contractDocuments.findMany({ where: eq(contractDocuments.caseId, caseId) }),
       loadContractPlan(kase.organizationId, kase.flowId),
+      isFeatureEnabled(kase.organizationId, "contract_advanced_validations"),
+      getFeature(kase.organizationId, "contract_obligation_tracking"),
     ]);
 
     const summary: Array<{ documentId: string; type: string; typeName: string; fields: number }> = [];
@@ -109,7 +116,7 @@ export async function processContractCase(caseId: string, deps: ContractExtractD
     }
 
     // Cross-document validation (declarative rules from the active flow or tables).
-    const validations = runValidations(plan.rules, docsByType, new Date());
+    const validations = validationsFeature ? runValidations(plan.rules, docsByType, new Date()) : [];
     const verdict = caseVerdict(validations);
 
     // Replace any prior validations for this case, then persist fresh results.
@@ -128,15 +135,18 @@ export async function processContractCase(caseId: string, deps: ContractExtractD
       })));
     }
 
-    // Derive key-date obligations (renewal/expiry) → alert 30 days before.
+    // Derive key-date obligations (renewal/expiry) using the tenant-configured alert lead time.
     const obligations: Array<{ type: string; description: string; dueDate: Date; alertAt: Date }> = [];
-    for (const list of Object.values(docsByType)) {
-      for (const d of list) {
-        for (const [k, val] of Object.entries(d.values)) {
-          if (!DATE_FIELD_RE.test(k)) continue;
-          const due = parseDateLoose(Array.isArray(val) ? val[0] : val);
-          if (!due) continue;
-          obligations.push({ type: k, description: `${k}: ${Array.isArray(val) ? val[0] : val}`, dueDate: due, alertAt: new Date(due.getTime() - 30 * 86400_000) });
+    if (obligationsFeature.isEnabled) {
+      const days = Math.min(365, Math.max(1, Math.round(Number(obligationsFeature.config.alert_days_before ?? 30))));
+      for (const list of Object.values(docsByType)) {
+        for (const d of list) {
+          for (const [k, val] of Object.entries(d.values)) {
+            if (!DATE_FIELD_RE.test(k)) continue;
+            const due = parseDateLoose(Array.isArray(val) ? val[0] : val);
+            if (!due) continue;
+            obligations.push({ type: k, description: `${k}: ${Array.isArray(val) ? val[0] : val}`, dueDate: due, alertAt: new Date(due.getTime() - days * 86400_000) });
+          }
         }
       }
     }

@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { CaseActions } from "./actions";
 import { CaseDocuments, type CaseDoc } from "./case-documents";
+import { getFeature, isFeatureEnabled } from "@/lib/features";
 
 const STATUS: Record<string, { label: string; cls: string }> = {
   uploaded:   { label: "En cola",     cls: "bg-secondary text-muted-foreground" },
@@ -57,10 +58,14 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
   });
   if (!kase) notFound();
 
-  const [documents, validations, obligations] = await Promise.all([
+  const [documents, validations, obligations, validationsEnabled, obligationsEnabled, generationEnabled, approvalFeature] = await Promise.all([
     db.query.contractDocuments.findMany({ where: eq(contractDocuments.caseId, id) }),
     db.query.contractValidations.findMany({ where: eq(contractValidations.caseId, id) }),
     db.query.contractObligations.findMany({ where: eq(contractObligations.caseId, id), orderBy: [asc(contractObligations.dueDate)] }),
+    isFeatureEnabled(session.orgId, "contract_advanced_validations"),
+    isFeatureEnabled(session.orgId, "contract_obligation_tracking"),
+    isFeatureEnabled(session.orgId, "contract_document_generation"),
+    getFeature(session.orgId, "contract_approval_workflow"),
   ]);
 
   const result = (kase.resultJson ?? {}) as {
@@ -106,12 +111,12 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
           <div className="flex items-center gap-3 mt-2 flex-wrap">
             <h1 className="text-lg font-semibold tracking-[-0.01em] text-foreground">{kase.title || `Caso ${kase.id.slice(0, 8)}`}</h1>
             <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full ${status.cls}`}>{status.label}</span>
-            {verdict && (() => { const b = VERDICT[verdict]; return <span className={`inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full ml-auto ${b.cls}`}><b.Icon className="w-3.5 h-3.5" /> {b.text}</span>; })()}
+            {validationsEnabled && verdict && (() => { const b = VERDICT[verdict]; return <span className={`inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full ml-auto ${b.cls}`}><b.Icon className="w-3.5 h-3.5" /> {b.text}</span>; })()}
           </div>
           <p className="text-xs text-muted-foreground mt-1 tabular-nums">Creado el {new Date(kase.createdAt).toLocaleString("es-MX")}</p>
         </div>
 
-        <CaseActions caseId={kase.id} status={kase.status} verdict={verdict} decision={result.decision} />
+        <CaseActions caseId={kase.id} status={kase.status} verdict={validationsEnabled ? verdict : null} decision={result.decision} generationEnabled={generationEnabled} approvalEnabled={approvalFeature.isEnabled} allowOverride={approvalFeature.config.allow_override !== false} />
         {kase.status === "processing" && <p className="text-xs text-warning">Procesando el caso; recarga en unos segundos.</p>}
         {kase.errorMessage && <div className="rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-xs px-3 py-2">{kase.errorMessage}</div>}
 
@@ -131,11 +136,11 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
             )}
           </Stage>
 
-          <Stage n={2} title="Extracción" Icon={ListChecks} pill={<Pill cls="bg-secondary text-muted-foreground">{totalFields} datos</Pill>}>
+          <Stage n={2} title="Extracción" Icon={ListChecks} last={!validationsEnabled && !obligationsEnabled && !generationEnabled} pill={<Pill cls="bg-secondary text-muted-foreground">{totalFields} datos</Pill>}>
             <CaseDocuments documents={docs} />
           </Stage>
 
-          <Stage n={3} title="Validación" Icon={ShieldCheck}
+          {validationsEnabled && <Stage n={3} title="Validación" Icon={ShieldCheck} last={!obligationsEnabled && !generationEnabled}
             pill={verdict ? (() => { const b = VERDICT[verdict]; return <Pill cls={b.cls}>{b.text}</Pill>; })() : <Pill cls="bg-secondary text-muted-foreground">sin reglas</Pill>}>
             {validations.length === 0 ? (
               <div className="bg-card border border-border rounded-xl px-5 py-4">
@@ -168,9 +173,16 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
                 ))}
               </div>
             )}
-            {obligations.length > 0 && (
-              <div className="bg-card border border-border rounded-xl mt-3 overflow-hidden">
-                <div className="px-5 py-2.5 border-b border-border flex items-center gap-2"><CalendarClock className="w-3.5 h-3.5 text-muted-foreground" /><p className="text-xs font-semibold text-foreground">Fechas y obligaciones</p></div>
+          </Stage>}
+
+          {obligationsEnabled && <Stage n={validationsEnabled ? 4 : 3} title="Obligaciones" Icon={CalendarClock} last={!generationEnabled}
+            pill={<Pill cls="bg-secondary text-muted-foreground">{obligations.length}</Pill>}>
+            {obligations.length === 0 ? (
+              <div className="bg-card border border-border rounded-xl px-5 py-4">
+                <p className="text-xs text-muted-foreground">No se detectaron fechas u obligaciones para este caso.</p>
+              </div>
+            ) : (
+              <div className="bg-card border border-border rounded-xl overflow-hidden">
                 <ul className="divide-y divide-border">
                   {obligations.map((o) => (
                     <li key={o.id} className="px-5 py-2 flex items-center gap-2">
@@ -181,9 +193,9 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
                 </ul>
               </div>
             )}
-          </Stage>
+          </Stage>}
 
-          <Stage n={4} title="Generación" Icon={FileType} last
+          {generationEnabled && <Stage n={(validationsEnabled ? 3 : 2) + (obligationsEnabled ? 1 : 0) + 1} title="Generación" Icon={FileType} last
             pill={result.outputKey ? <Pill cls="bg-success/10 text-success">listo</Pill> : <Pill cls="bg-secondary text-muted-foreground">pendiente</Pill>}>
             <div className="bg-card border border-border rounded-xl px-5 py-4">
               {result.outputKey ? (
@@ -201,7 +213,7 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
                 <p className="text-xs text-muted-foreground">Aún no se ha generado. Usa <span className="text-foreground font-medium">“Generar documento”</span> arriba.</p>
               )}
             </div>
-          </Stage>
+          </Stage>}
         </div>
       </div>
     </div>

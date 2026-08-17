@@ -6,8 +6,14 @@ import { Loader2, FileDown, CheckCircle2, XCircle, ShieldX, RotateCcw, X } from 
 
 interface Decision { action?: string; reason?: string | null; byEmail?: string | null; at?: string | null; override?: boolean }
 
-export function CaseActions({ caseId, status, verdict, decision }: {
-  caseId: string; status: string; verdict?: "ok" | "warn" | "block" | null; decision?: Decision | null;
+export function CaseActions({ caseId, status, verdict, decision, generationEnabled, approvalEnabled, allowOverride }: {
+  caseId: string;
+  status: string;
+  verdict?: "ok" | "warn" | "block" | null;
+  decision?: Decision | null;
+  generationEnabled: boolean;
+  approvalEnabled: boolean;
+  allowOverride: boolean;
 }) {
   const router = useRouter();
   const [dialog, setDialog] = useState<null | "approve" | "reject">(null);
@@ -32,12 +38,12 @@ export function CaseActions({ caseId, status, verdict, decision }: {
     finally { setBusy(null); }
   }
 
-  const genBtn = (
+  const genBtn = generationEnabled ? (
     <button onClick={() => post(`/api/v1/contracts/cases/${caseId}/generate`, "gen")} disabled={!!busy}
       className="inline-flex items-center gap-2 rounded-lg bg-secondary text-foreground px-3 py-1.5 text-xs font-medium disabled:opacity-60 hover:bg-secondary/70 transition-colors">
       {busy === "gen" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileDown className="w-3.5 h-3.5" />} Generar documento
     </button>
-  );
+  ) : null;
 
   if (decided) {
     const ok = status === "approved";
@@ -55,30 +61,30 @@ export function CaseActions({ caseId, status, verdict, decision }: {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {genBtn}
-          <button onClick={() => post(`/api/v1/contracts/cases/${caseId}/reopen`, "reopen")} disabled={!!busy}
+          {approvalEnabled && <button onClick={() => post(`/api/v1/contracts/cases/${caseId}/reopen`, "reopen")} disabled={!!busy}
             className="inline-flex items-center gap-2 rounded-lg border border-border text-muted-foreground px-3 py-1.5 text-xs font-medium disabled:opacity-60 hover:text-foreground hover:bg-secondary transition-colors">
             {busy === "reopen" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />} Reabrir
-          </button>
+          </button>}
           {msg && <span className="text-xs text-destructive">{msg}</span>}
         </div>
       </div>
     );
   }
 
-  const confirmDisabled = busy != null || (dialog === "reject" && !reason.trim()) || (dialog === "approve" && blocked && (!override || !reason.trim()));
+  const confirmDisabled = busy != null || (dialog === "reject" && !reason.trim()) || (dialog === "approve" && blocked && (!allowOverride || !override || !reason.trim()));
 
   return (
     <>
       <div className="flex flex-wrap items-center gap-2">
         {genBtn}
-        <button onClick={() => { setReason(""); setOverride(false); setMsg(null); setDialog("approve"); }} disabled={!!busy}
+        {approvalEnabled && <button onClick={() => { setReason(""); setOverride(false); setMsg(null); setDialog("approve"); }} disabled={!!busy}
           className="inline-flex items-center gap-2 rounded-lg bg-success/15 text-success px-3 py-1.5 text-xs font-medium disabled:opacity-60 hover:bg-success/25 transition-colors">
           <CheckCircle2 className="w-3.5 h-3.5" /> Aprobar
-        </button>
-        <button onClick={() => { setReason(""); setMsg(null); setDialog("reject"); }} disabled={!!busy}
+        </button>}
+        {approvalEnabled && <button onClick={() => { setReason(""); setMsg(null); setDialog("reject"); }} disabled={!!busy}
           className="inline-flex items-center gap-2 rounded-lg bg-destructive/10 text-destructive px-3 py-1.5 text-xs font-medium disabled:opacity-60 hover:bg-destructive/20 transition-colors">
           <XCircle className="w-3.5 h-3.5" /> Rechazar
-        </button>
+        </button>}
         {msg && !dialog && <span className="text-xs text-destructive">{msg}</span>}
       </div>
 
@@ -93,10 +99,12 @@ export function CaseActions({ caseId, status, verdict, decision }: {
               {dialog === "approve" && blocked && (
                 <div className="rounded-lg bg-destructive/10 border border-destructive/20 px-3 py-2.5">
                   <div className="flex items-center gap-2 text-destructive"><ShieldX className="w-4 h-4 shrink-0" /><p className="text-xs font-medium">Este caso tiene validaciones bloqueantes.</p></div>
-                  <label className="flex items-start gap-2 mt-2 text-[11px] text-foreground">
-                    <input type="checkbox" checked={override} onChange={(e) => setOverride(e.target.checked)} className="mt-0.5" />
-                    Aprobar de todas formas (queda registrado que se forzó la aprobación).
-                  </label>
+                  {allowOverride ? (
+                    <label className="flex items-start gap-2 mt-2 text-[11px] text-foreground">
+                      <input type="checkbox" checked={override} onChange={(e) => setOverride(e.target.checked)} className="mt-0.5" />
+                      Aprobar de todas formas (queda registrado que se forzó la aprobación).
+                    </label>
+                  ) : <p className="text-[11px] text-muted-foreground mt-2">Este cliente no permite aprobar casos con bloqueos.</p>}
                 </div>
               )}
               <label className="block space-y-1">

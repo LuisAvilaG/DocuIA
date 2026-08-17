@@ -6,6 +6,7 @@ import { contractCases } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
 import { createContractCase, type CaseFileInput } from "@/lib/contracts/pipeline";
 import { enqueueContractCase } from "@/lib/queue";
+import { isFeatureEnabled } from "@/lib/features";
 
 const ALLOWED = new Set(["application/pdf", "image/jpeg", "image/png", "image/webp", "image/tiff", "text/plain", "text/xml", "application/xml"]);
 const MAX_FILE = 20 * 1024 * 1024;
@@ -18,6 +19,9 @@ export async function GET() {
   const session = await getTenantSession();
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (!await guard(session.orgId)) return NextResponse.json({ error: "Producto no activo" }, { status: 403 });
+  if (!await isFeatureEnabled(session.orgId, "contract_ai_extraction")) {
+    return NextResponse.json({ error: "El análisis AI de contratos no está habilitado para este cliente." }, { status: 403 });
+  }
 
   const cases = await db.query.contractCases.findMany({
     where: eq(contractCases.organizationId, session.orgId),
@@ -32,6 +36,9 @@ export async function POST(req: NextRequest) {
   const session = await getTenantSession();
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (!await guard(session.orgId)) return NextResponse.json({ error: "Producto no activo" }, { status: 403 });
+  if (!await isFeatureEnabled(session.orgId, "contract_ai_extraction")) {
+    return NextResponse.json({ error: "El análisis AI de contratos no está habilitado para este cliente." }, { status: 403 });
+  }
 
   try {
     const form = await req.formData();

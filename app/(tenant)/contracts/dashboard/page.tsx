@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { isProductActive } from "@/lib/products";
+import { isFeatureEnabled } from "@/lib/features";
 import { db } from "@/lib/db";
 import { contractCases, contractDocuments, contractValidations, contractObligations } from "@/db/schema";
 import { and, eq, desc, count, isNotNull } from "drizzle-orm";
@@ -26,6 +27,12 @@ export default async function ContractDashboardPage() {
   if (!session) redirect("/login");
   if (!(await isProductActive(session.orgId, "contract_intelligence"))) redirect("/dashboard");
   const orgId = session.orgId;
+
+  const [extractionEnabled, validationsEnabled, obligationsEnabled] = await Promise.all([
+    isFeatureEnabled(orgId, "contract_ai_extraction"),
+    isFeatureEnabled(orgId, "contract_advanced_validations"),
+    isFeatureEnabled(orgId, "contract_obligation_tracking"),
+  ]);
 
   const [statusRows, signerRows, docTypeRows, obligations, recent] = await Promise.all([
     db.select({ status: contractCases.status, n: count() }).from(contractCases).where(eq(contractCases.organizationId, orgId)).groupBy(contractCases.status),
@@ -86,17 +93,17 @@ export default async function ContractDashboardPage() {
             <h1 className="text-base font-semibold tracking-[-0.01em] text-foreground">Panel de contratos</h1>
             <p className="text-xs text-muted-foreground mt-1">Resumen de casos, validaciones y obligaciones.</p>
           </div>
-          <Link href="/contracts" className="inline-flex items-center gap-1.5 rounded-md bg-primary text-primary-foreground px-3 py-2 text-xs font-medium shadow-[0_1px_3px_oklch(0.48_0.15_182_/_0.3)] hover:bg-primary/90 transition-colors">
+          {extractionEnabled && <Link href="/contracts" className="inline-flex items-center gap-1.5 rounded-md bg-primary text-primary-foreground px-3 py-2 text-xs font-medium shadow-[0_1px_3px_oklch(0.48_0.15_182_/_0.3)] hover:bg-primary/90 transition-colors">
             <Upload className="w-3.5 h-3.5" /> Nuevo caso
-          </Link>
+          </Link>}
         </div>
 
         {totalCases === 0 ? (
           <div className="bg-card border border-border rounded-xl p-10 text-center">
             <div className="w-11 h-11 rounded-lg bg-primary/10 text-primary flex items-center justify-center mx-auto"><ScrollText className="w-5 h-5" /></div>
             <p className="text-sm font-medium text-foreground mt-3">Aún no hay casos</p>
-            <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">Sube los documentos de un caso y la IA los clasificará, extraerá y validará según tu flujo. Las métricas aparecerán aquí.</p>
-            <Link href="/contracts" className="inline-flex items-center gap-1.5 rounded-md bg-primary text-primary-foreground px-4 py-2 text-xs font-medium mt-4"><Upload className="w-3.5 h-3.5" /> Subir documentos</Link>
+            <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">{extractionEnabled ? "Sube los documentos de un caso y la IA los clasificará, extraerá y validará según tu flujo. Las métricas aparecerán aquí." : "El análisis AI de contratos no está habilitado para este cliente."}</p>
+            {extractionEnabled && <Link href="/contracts" className="inline-flex items-center gap-1.5 rounded-md bg-primary text-primary-foreground px-4 py-2 text-xs font-medium mt-4"><Upload className="w-3.5 h-3.5" /> Subir documentos</Link>}
           </div>
         ) : (
           <>
@@ -132,7 +139,7 @@ export default async function ContractDashboardPage() {
               </div>
 
               {/* Validación de firmantes */}
-              <div className="bg-card border border-border rounded-xl p-5">
+              {validationsEnabled && <div className="bg-card border border-border rounded-xl p-5">
                 <h2 className="text-sm font-semibold text-foreground">Validación de firmantes</h2>
                 {totalSigners === 0 ? (
                   <p className="text-xs text-muted-foreground mt-4">Sin validaciones todavía.</p>
@@ -151,7 +158,7 @@ export default async function ContractDashboardPage() {
                     ))}
                   </div>
                 )}
-              </div>
+              </div>}
 
               {/* Documentos por tipo */}
               <div className="bg-card border border-border rounded-xl p-5">
@@ -174,7 +181,7 @@ export default async function ContractDashboardPage() {
               </div>
 
               {/* Obligaciones próximas */}
-              <div className="bg-card border border-border rounded-xl p-5">
+              {obligationsEnabled && <div className="bg-card border border-border rounded-xl p-5">
                 <div className="flex items-center gap-2"><CalendarClock className="w-4 h-4 text-muted-foreground" /><h2 className="text-sm font-semibold text-foreground">Obligaciones próximas</h2></div>
                 {obligations.length === 0 ? (
                   <p className="text-xs text-muted-foreground mt-4">Sin fechas próximas registradas.</p>
@@ -193,7 +200,7 @@ export default async function ContractDashboardPage() {
                     })}
                   </ul>
                 )}
-              </div>
+              </div>}
             </div>
 
             {/* Casos recientes */}

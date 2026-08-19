@@ -20,3 +20,17 @@ export async function isProductActive(orgId: string, productKey: string): Promis
   });
   return !!row && row.status !== "disabled";
 }
+
+export type TenantHomePath = "/dashboard" | "/contracts/dashboard" | "/accounting/expenses";
+
+// Keep the tenant's first destination aligned with the products it actually
+// owns. AP Automation remains the default for multi-product tenants so their
+// existing navigation does not change; product-only tenants land in their own
+// workspace instead of an empty AP dashboard.
+export async function getTenantHomePath(orgId: string): Promise<TenantHomePath> {
+  const activeProducts = await getActiveProductKeys(orgId);
+  if (activeProducts.has("ap_automation")) return "/dashboard";
+  if (activeProducts.has("contract_intelligence")) return "/contracts/dashboard";
+  if (activeProducts.has("expense_management")) return "/accounting/expenses";
+  return "/dashboard";
+}

@@ -8,6 +8,12 @@ const TENANT_ROUTES = [
   "/expenses", "/accounting", "/contracts",
 ];
 
+function tenantHomePath(homePath: unknown): "/dashboard" | "/contracts/dashboard" | "/accounting/expenses" {
+  return homePath === "/contracts/dashboard" || homePath === "/accounting/expenses" || homePath === "/dashboard"
+    ? homePath
+    : "/dashboard";
+}
+
 export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
@@ -47,7 +53,7 @@ export async function proxy(req: NextRequest) {
       try {
         const { payload } = await jwtVerify(token, jwtSecret(), { algorithms: ["HS256"] });
         if (payload.type === "org_user")
-          return NextResponse.redirect(new URL("/dashboard", req.url));
+          return NextResponse.redirect(new URL(tenantHomePath((payload as Record<string, unknown>).homePath), req.url));
       } catch { /* let through */ }
     }
     return NextResponse.next();

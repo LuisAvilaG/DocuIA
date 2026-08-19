@@ -386,6 +386,7 @@ function FlowBuilder({ flowId }: { flowId: string }) {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [name, setName] = useState("Flujo de contratos");
+  const [notes, setNotes] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [docEditorOpen, setDocEditorOpen] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -394,7 +395,8 @@ function FlowBuilder({ flowId }: { flowId: string }) {
 
   const nodeTypes = useMemo(() => ({ intake: NodeCard, extract: NodeCard, validate: NodeCard, generate: NodeCard }), []);
 
-  const setGraph = useCallback((graph: { nodes?: Array<{ id: string; kind: Kind; position: { x: number; y: number }; data: AnyData }>; edges?: Array<{ id: string; source: string; target: string }> }) => {
+  const setGraph = useCallback((graph: { notes?: string; nodes?: Array<{ id: string; kind: Kind; position: { x: number; y: number }; data: AnyData }>; edges?: Array<{ id: string; source: string; target: string }> }) => {
+    setNotes(graph.notes ?? "");
     setNodes((graph.nodes ?? []).map((n) => ({ id: n.id, type: n.kind, position: n.position, data: n.data })));
     setEdges((graph.edges ?? []).map((e) => ({ id: e.id, source: e.source, target: e.target })));
   }, [setNodes, setEdges]);
@@ -453,6 +455,7 @@ function FlowBuilder({ flowId }: { flowId: string }) {
   async function save() {
     setSaving(true); setMsg(null);
     const graph = {
+      notes: notes.trim() || undefined,
       nodes: nodes.map((n) => ({ id: n.id, kind: n.type, position: { x: Math.round(n.position.x), y: Math.round(n.position.y) }, data: n.data })),
       edges: edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
     };
@@ -545,6 +548,13 @@ function FlowBuilder({ flowId }: { flowId: string }) {
                     </button>
                   );
                 })}
+              </div>
+              <div className="border-t border-border pt-4 space-y-1.5">
+                <label htmlFor="flow-notes" className="text-xs font-semibold text-foreground">Notas para el equipo</label>
+                <p className="text-[11px] leading-relaxed text-muted-foreground">Deja el objetivo de la demo, el orden sugerido de carga o criterios que deban conocer quienes ejecutan este flujo.</p>
+                <textarea id="flow-notes" value={notes} onChange={(e) => setNotes(e.target.value)} rows={5}
+                  placeholder="Ej. Carga primero la cotización y después la póliza. El dictamen debe explicar cualquier diferencia."
+                  className={`${inp} resize-y leading-relaxed`} />
               </div>
               <p className="text-[11px] text-muted-foreground leading-relaxed border-t border-border pt-3">Todo lo que el motor hace con un caso sale de este flujo. Haz clic en un nodo para configurarlo.</p>
             </div>

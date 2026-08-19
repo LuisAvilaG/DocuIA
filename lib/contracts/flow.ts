@@ -72,6 +72,7 @@ const zNode = z.discriminatedUnion("kind", [zIntake, zExtract, zValidate, zGener
 const zEdge = z.object({ id: z.string().min(1), source: z.string().min(1), target: z.string().min(1) });
 
 export const flowGraphSchema = z.object({
+  notes: z.string().trim().max(4000).optional(),
   nodes: z.array(zNode).max(200),
   edges: z.array(zEdge).max(400),
 });

@@ -29,12 +29,22 @@ export async function GET() {
   const [rows, maxFlows] = await Promise.all([
     db.query.contractFlows.findMany({
       where: eq(contractFlows.organizationId, session.orgId),
-      columns: { id: true, name: true, version: true, updatedAt: true },
+      columns: { id: true, name: true, version: true, updatedAt: true, graphJson: true },
       orderBy: [desc(contractFlows.updatedAt)],
     }),
     getContractFlowLimit(session.orgId),
   ]);
-  return NextResponse.json({ flows: rows, maxFlows, count: rows.length });
+  const flows = rows.map(({ graphJson, ...flow }) => {
+    const graph = flowGraphSchema.safeParse(graphJson);
+    const nodes = graph.success ? graph.data.nodes : [];
+    return {
+      ...flow,
+      notes: graph.success ? graph.data.notes ?? null : null,
+      documentCount: nodes.filter((node) => node.kind === "intake").length,
+      validationCount: nodes.filter((node) => node.kind === "validate").length,
+    };
+  });
+  return NextResponse.json({ flows, maxFlows, count: flows.length });
 }
 
 interface PostBody { name?: string; graph?: unknown }

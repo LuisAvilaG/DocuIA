@@ -107,6 +107,7 @@ export const PRODUCT_MODULES: Record<ProductKey, NavModule[]> = {
     { href: "/contracts",            label: "Casos",         icon: "ScrollText",      feature: "contract_ai_extraction" },
     { href: "/contracts/approvals",  label: "Aprobaciones",  icon: "ClipboardCheck",  feature: "contract_approval_workflow", adminOnly: true },
     { href: "/contracts/metrics",    label: "Métricas",      icon: "BarChart3",       feature: "contract_metrics" },
+    { href: "/contracts/quality",    label: "Calidad",       icon: "BrainCircuit",    feature: "contract_ai_extraction", adminOnly: true },
     { href: "/contracts/flow",       label: "Configuración", icon: "Workflow",        feature: "contract_flow_builder", adminOnly: true },
   ],
 };

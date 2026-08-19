@@ -176,7 +176,7 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
           </Stage>
 
           <Stage n={2} title="Extracción" Icon={ListChecks} last={!validationsEnabled && !obligationsEnabled && !generationEnabled} pill={<Pill cls="bg-secondary text-muted-foreground">{totalFields} datos</Pill>}>
-            <CaseDocuments documents={docs} />
+            <CaseDocuments documents={docs} canTrain={session.role === "admin"} />
           </Stage>
 
           {validationsEnabled && <Stage n={3} title="Validación" Icon={ShieldCheck} last={!obligationsEnabled && !generationEnabled}

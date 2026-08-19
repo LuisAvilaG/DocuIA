@@ -1,26 +1,23 @@
 import { randomUUID } from "crypto";
 import { db } from "@/lib/db";
-import { contractCases, contractDocuments, contractValidations, contractObligations } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { contractCases, contractDocuments, contractExtractionLearnings, contractValidations, contractObligations } from "@/db/schema";
+import { and, desc, eq } from "drizzle-orm";
 import { uploadFile, getFileBuffer } from "@/lib/storage/minio";
 import { realExtractDeps, type ContractExtractDeps, type ExtractSource } from "./extract";
 import { runValidations, caseVerdict, type DocsByType } from "./validate";
 import { loadContractPlan } from "./plan";
 import { buildFlowTrace } from "./trace";
 import { getFeature, isFeatureEnabled } from "@/lib/features";
+import { normalizeContractDate } from "./normalization";
 
 export interface CaseFileInput { buffer: Buffer; fileName: string; mimeType: string }
 
-// Loose date parser for extracted strings (YYYY-MM-DD, DD/MM/YYYY, DD-MM-YYYY, or native).
+// Dates read from documents are normalized before obligation alerts are created.
 function parseDateLoose(v: unknown): Date | null {
-  const s = String(v ?? "").trim();
-  if (!s) return null;
-  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-  m = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
-  if (m) return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
-  const d = new Date(s);
-  return isNaN(d.getTime()) ? null : d;
+  const normalized = normalizeContractDate(v);
+  if (!normalized) return null;
+  const [year, month, day] = normalized.split("-").map(Number);
+  return new Date(year, month - 1, day);
 }
 
 // Fields whose value is a key date worth alerting on (renewal / expiry).
@@ -101,12 +98,19 @@ export async function processContractCase(caseId: string, deps: ContractExtractD
   await db.update(contractCases).set({ status: "processing", updatedAt: new Date() }).where(eq(contractCases.id, caseId));
 
   try {
-    const [docs, plan, validationsFeature, obligationsFeature] = await Promise.all([
+    const [docs, plan, validationsFeature, obligationsFeature, learnings] = await Promise.all([
       db.query.contractDocuments.findMany({ where: eq(contractDocuments.caseId, caseId) }),
       loadContractPlan(kase.organizationId, kase.flowId),
       isFeatureEnabled(kase.organizationId, "contract_advanced_validations"),
       getFeature(kase.organizationId, "contract_obligation_tracking"),
+      db.query.contractExtractionLearnings.findMany({
+        where: and(eq(contractExtractionLearnings.organizationId, kase.organizationId), eq(contractExtractionLearnings.isActive, true)),
+        orderBy: [desc(contractExtractionLearnings.createdAt)],
+        columns: { documentType: true, fieldKey: true, originalValue: true, correctedValue: true, citation: true },
+      }),
     ]);
+    const learningsByType = new Map<string, typeof learnings>();
+    for (const learning of learnings) (learningsByType.get(learning.documentType) ?? learningsByType.set(learning.documentType, []).get(learning.documentType)!).push(learning);
 
     const summary: Array<{ documentId: string; type: string; typeName: string; fields: number }> = [];
     const docsByType: DocsByType = {};
@@ -126,7 +130,7 @@ export async function processContractCase(caseId: string, deps: ContractExtractD
       // find them.
       const fields = plan.fieldsByType[typeKey] ?? [];
 
-      const { values, citations } = await deps.extract(source, typeName, fields);
+      const { values, citations } = await deps.extract(source, typeName, fields, undefined, learningsByType.get(typeKey) ?? []);
 
       await db.update(contractDocuments).set({
         detectedType:  typeKey,

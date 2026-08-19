@@ -220,6 +220,13 @@ const FORMATS = [
   { value: "number", label: "Número" },
   { value: "nonempty", label: "No vacío (obligatorio)" },
 ];
+const COMPARISON_NORMALIZERS = [
+  { value: "auto", label: "Automático según el dato" },
+  { value: "date", label: "Fecha, sin importar el formato" },
+  { value: "number", label: "Monto o número" },
+  { value: "name", label: "Nombre o empresa" },
+  { value: "text", label: "Texto flexible" },
+];
 const SEVERITIES: { value: "info" | "warn" | "block"; label: string; cls: string }[] = [
   { value: "info",  label: "OK / Info",   cls: "border-success/50 bg-success/10 text-success" },
   { value: "warn",  label: "Advertencia", cls: "border-warning/50 bg-warning/10 text-warning" },
@@ -297,6 +304,8 @@ function ValidateForm({ data, patch, docTypes, fieldsByType }: { data: AnyData; 
           <DocFieldPicker label="Campo A" docType={ref("left").docType ?? ""} field={ref("left").field ?? ""} onChange={(v) => setRule({ left: v })} docTypes={docTypes} fieldsByType={fieldsByType} />
           <DocFieldPicker label="Campo B" docType={ref("right").docType ?? ""} field={ref("right").field ?? ""} onChange={(v) => setRule({ right: v })} docTypes={docTypes} fieldsByType={fieldsByType} />
           <FieldRow label="Condición"><Select value={String(rule.mode ?? "equal")} onChange={(v) => setRule({ mode: v })} options={[{ value: "equal", label: "Deben coincidir" }, { value: "different", label: "Deben diferir" }]} /></FieldRow>
+          <FieldRow label="Cómo comparar"><Select value={String(rule.normalizer ?? "auto")} onChange={(v) => setRule({ normalizer: v === "auto" ? undefined : v })} options={COMPARISON_NORMALIZERS} /></FieldRow>
+          <p className="text-[10px] text-muted-foreground -mt-1">Fechas, importes y nombres se normalizan antes de validar. Elige una opción si quieres fijar el criterio de esta regla.</p>
           <FieldRow label="Tolerancia numérica (opcional)"><input type="number" className={inp} value={numStr(rule.numericTolerance)} onChange={(e) => setRule({ numericTolerance: e.target.value === "" ? undefined : Number(e.target.value) })} placeholder="0" /></FieldRow>
         </>
       )}

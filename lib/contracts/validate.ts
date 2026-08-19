@@ -1,4 +1,4 @@
-import { normalizeForLookup } from "@/lib/workflow/similarity";
+import { compareContractValues, normalizeContractDate, normalizeContractNumber, textValuesMatch, type ComparisonNormalizer } from "./normalization";
 
 // ── Declarative validation engine ─────────────────────────────────────
 // Rules are configured per flow (validate nodes). Each rule is ONE condition
@@ -33,19 +33,9 @@ function firstValue(docsByType: DocsByType, ref: Ref): unknown {
   const d = (docsByType[ref.docType] ?? [])[0];
   return d ? d.values[ref.field] : undefined;
 }
-function tokens(s: string): string[] { return normalizeForLookup(s).split(" ").filter((t) => t.length >= 2); }
-
 // Tolerant name match: order-insensitive, ignores missing second names, OCR noise.
 export function namesMatch(a: string, b: string): boolean {
-  const na = normalizeForLookup(a), nb = normalizeForLookup(b);
-  if (!na || !nb) return false;
-  if (na === nb || na.includes(nb) || nb.includes(na)) return true;
-  const ta = tokens(a), tb = tokens(b);
-  if (!ta.length || !tb.length) return false;
-  const [short, long] = ta.length <= tb.length ? [ta, tb] : [tb, ta];
-  const longSet = new Set(long);
-  const hits = short.filter((t) => longSet.has(t)).length;
-  return hits / short.length >= 0.6 && hits >= 2;
+  return textValuesMatch(a, b);
 }
 function truthy(v: unknown): boolean {
   if (typeof v === "boolean") return v;
@@ -53,31 +43,13 @@ function truthy(v: unknown): boolean {
   return ["true", "1", "si", "sí", "yes", "revocado", "presente", "incluye", "x"].includes(s);
 }
 function toNumber(v: unknown): number | null {
-  const s = String(v ?? "").replace(/[^\d.,-]/g, "").replace(/\.(?=\d{3}\b)/g, "").replace(",", ".");
-  const n = parseFloat(s);
-  return isNaN(n) ? null : n;
+  return normalizeContractNumber(v);
 }
 function toDate(v: unknown): Date | null {
-  const s = String(v ?? "").trim();
-  if (!s) return null;
-  let m = s.match(/^(\d{4})[-/](\d{2})[-/](\d{2})$/);
-  if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-  m = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
-  if (m) return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
-  const spanishMonths: Record<string, number> = {
-    enero: 0, febrero: 1, marzo: 2, abril: 3, mayo: 4, junio: 5,
-    julio: 6, agosto: 7, septiembre: 8, setiembre: 8, octubre: 9,
-    noviembre: 10, diciembre: 11,
-  };
-  m = s.toLowerCase().match(/^(\d{1,2})\s+de\s+([a-záéíóúñ]+)\s+de\s+(\d{4})$/i);
-  if (m) {
-    const month = spanishMonths[m[2].normalize("NFD").replace(/[\u0300-\u036f]/g, "")];
-    if (month !== undefined) return new Date(Number(m[3]), month, Number(m[1]));
-  }
-  // Do not let Date parse amounts such as "21.008" as dates.
-  if (!/[a-záéíóúñ]/i.test(s)) return null;
-  const d = new Date(s);
-  return isNaN(d.getTime()) ? null : d;
+  const normalized = normalizeContractDate(v);
+  if (!normalized) return null;
+  const [year, month, day] = normalized.split("-").map(Number);
+  return new Date(year, month - 1, day);
 }
 
 // ── LATAM tax-ID validation (region-agnostic; country picks the algorithm) ──
@@ -138,7 +110,7 @@ export function validateTaxId(raw: string, country?: string): boolean {
 // ── Rule kinds ────────────────────────────────────────────────────────
 export type ValidationRule =
   | { kind: "cross_reference"; subjects: Ref; membership: Ref & { label: string }; confirmation?: Ref & { label: string; revokedWhenTruthy?: boolean }; statusLabels?: { pass: string; fail: string; unknown: string } }
-  | { kind: "field_match"; left: Ref; right: Ref; mode?: "equal" | "different"; numericTolerance?: number }
+  | { kind: "field_match"; left: Ref; right: Ref; mode?: "equal" | "different"; numericTolerance?: number; normalizer?: ComparisonNormalizer }
   | { kind: "clause_presence"; docType: string; field: string; mustExist?: boolean }
   | { kind: "numeric_threshold"; docType: string; field: string; min?: number; max?: number }
   | { kind: "date_rule"; docType: string; field: string; notExpired?: boolean; before?: Ref }
@@ -191,13 +163,14 @@ function runFieldMatch(r: Extract<ValidationRule, { kind: "field_match" }>, docs
   const a = firstValue(docs, r.left), b = firstValue(docs, r.right);
   const subject = `${r.left.field} vs ${r.right.field}`;
   if (a === undefined || b === undefined) return [unk(subject, "faltante", "Falta uno de los campos a comparar.")];
-  const dateA = toDate(a), dateB = toDate(b);
-  const na = toNumber(a), nb = toNumber(b);
-  const equal = (dateA !== null && dateB !== null)
-    ? dateA.getTime() === dateB.getTime()
-    : (na !== null && nb !== null)
-      ? Math.abs(na - nb) <= (r.numericTolerance ?? 0)
-      : namesMatch(String(a), String(b));
+  const equal = compareContractValues({
+    left: a,
+    right: b,
+    leftField: r.left.field,
+    rightField: r.right.field,
+    normalizer: r.normalizer,
+    numericTolerance: r.numericTolerance,
+  });
   const wantEqual = (r.mode ?? "equal") === "equal";
   return [(wantEqual ? equal : !equal)
     ? pass(subject, wantEqual ? "coinciden" : "difieren", `"${a}" y "${b}" ${wantEqual ? "coinciden" : "difieren"} como se esperaba.`)

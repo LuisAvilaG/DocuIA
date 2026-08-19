@@ -64,6 +64,13 @@
       "when": 1786996800000,
       "tag": "0008_contract_features",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1787076000000,
+      "tag": "0009_contract_extraction_learning",
+      "breakpoints": true
     }
   ]
 }

@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, FileUp, Clock, AlertTriangle,
   GitMerge, Database, BarChart3, Settings, Workflow, ClipboardCheck,
-  LogOut, User, Zap, Crown, Receipt, ScrollText, FolderOpen,
+  LogOut, User, Zap, Crown, Receipt, ScrollText, FolderOpen, BrainCircuit,
 } from "lucide-react";
 import Image from "next/image";
 import { useFeatures } from "@/components/providers/feature-provider";
@@ -15,7 +15,7 @@ import { PRODUCTS, PRODUCT_MODULES, PLATFORM_MODULES, type ProductKey, type NavM
 // lucide icon name → component (registry stores names as strings)
 const ICONS: Record<string, React.ElementType> = {
   LayoutDashboard, FileUp, Clock, AlertTriangle, GitMerge, Database,
-  BarChart3, Settings, Workflow, ClipboardCheck, Receipt, ScrollText, FolderOpen,
+  BarChart3, Settings, Workflow, ClipboardCheck, Receipt, ScrollText, FolderOpen, BrainCircuit,
 };
 
 const PLAN_BADGE: Record<string, string> = {

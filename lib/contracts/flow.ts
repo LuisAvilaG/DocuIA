@@ -36,7 +36,7 @@ const zRule = z.discriminatedUnion("kind", [
     confirmation: zRefLabeled.extend({ revokedWhenTruthy: z.boolean().optional() }).optional(),
     statusLabels: z.object({ pass: z.string(), fail: z.string(), unknown: z.string() }).optional(),
   }),
-  z.object({ kind: z.literal("field_match"), left: zRef, right: zRef, mode: z.enum(["equal", "different"]).optional(), numericTolerance: z.number().optional() }),
+  z.object({ kind: z.literal("field_match"), left: zRef, right: zRef, mode: z.enum(["equal", "different"]).optional(), numericTolerance: z.number().optional(), normalizer: z.enum(["auto", "date", "number", "name", "text"]).optional() }),
   z.object({ kind: z.literal("clause_presence"), docType: z.string().min(1), field: z.string().min(1), mustExist: z.boolean().optional() }),
   z.object({ kind: z.literal("numeric_threshold"), docType: z.string().min(1), field: z.string().min(1), min: z.number().optional(), max: z.number().optional() }),
   z.object({ kind: z.literal("date_rule"), docType: z.string().min(1), field: z.string().min(1), notExpired: z.boolean().optional(), before: zRef.optional() }),

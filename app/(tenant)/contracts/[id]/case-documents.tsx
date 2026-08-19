@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Document, Page, pdfjs } from "react-pdf";
-import { X, Download, ExternalLink, ScrollText, ZoomIn, ZoomOut, ChevronLeft, ChevronRight, FileSearch } from "lucide-react";
+import { X, Download, ExternalLink, ScrollText, ZoomIn, ZoomOut, ChevronLeft, ChevronRight, FileSearch, Pencil, Save, Sparkles, Loader2 } from "lucide-react";
 
 pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 
@@ -48,7 +49,7 @@ function Highlighted({ text, needle, markRef }: { text: string; needle: string |
   );
 }
 
-function DocViewer({ doc, onClose }: { doc: CaseDoc; onClose: () => void }) {
+function DocViewer({ doc, canTrain, onClose, onUpdated }: { doc: CaseDoc; canTrain: boolean; onClose: () => void; onUpdated: (doc: CaseDoc) => void }) {
   const fileUrl = `/api/v1/contracts/documents/${doc.id}/file`;
   const entries = Object.entries(doc.extractedJson ?? {});
   const [selected, setSelected] = useState<string | null>(entries[0]?.[0] ?? null);
@@ -58,8 +59,42 @@ function DocViewer({ doc, onClose }: { doc: CaseDoc; onClose: () => void }) {
   const markRef = useRef<HTMLElement | null>(null);
   const kind = docKind(doc.mimeType, !!doc.detectedText);
   const citation = selected ? citationOf(doc.citationsJson ?? {}, selected) : null;
+  const [editing, setEditing] = useState(false);
+  const [editedValue, setEditedValue] = useState("");
+  const [applyToFuture, setApplyToFuture] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
 
   useEffect(() => { markRef.current?.scrollIntoView({ block: "center", behavior: "smooth" }); }, [selected]);
+
+  function startEditing() {
+    if (!selected) return;
+    const current = doc.extractedJson[selected];
+    setEditedValue(Array.isArray(current) ? current.map(String).join(", ") : current === null || current === undefined ? "" : String(current));
+    setApplyToFuture(false);
+    setEditError(null);
+    setEditing(true);
+  }
+
+  async function saveCorrection() {
+    if (!selected || !editedValue.trim()) return;
+    setSaving(true); setEditError(null);
+    try {
+      const response = await fetch(`/api/v1/contracts/documents/${doc.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fieldKey: selected, value: editedValue.trim(), applyToFuture }),
+      });
+      const payload = await response.json() as { error?: string; extractedJson?: Record<string, unknown> };
+      if (!response.ok || !payload.extractedJson) throw new Error(payload.error || "No se pudo guardar la corrección.");
+      onUpdated({ ...doc, extractedJson: payload.extractedJson });
+      setEditing(false);
+    } catch (error) {
+      setEditError(error instanceof Error ? error.message : "No se pudo guardar la corrección.");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <div className="fixed inset-0 z-[60] bg-black/40 flex items-center justify-center p-4" onMouseDown={onClose}>
@@ -114,7 +149,19 @@ function DocViewer({ doc, onClose }: { doc: CaseDoc; onClose: () => void }) {
 
           {/* Fields + origin */}
           <div className="w-80 shrink-0 flex flex-col">
-            <div className="px-4 py-2.5 border-b border-border shrink-0"><p className="text-xs font-semibold text-foreground">Datos del documento</p><p className="text-[11px] text-muted-foreground">Selecciona un dato para ver su origen.</p></div>
+            <div className="px-4 py-2.5 border-b border-border shrink-0">
+              <div className="flex items-center justify-between gap-2"><p className="text-xs font-semibold text-foreground">Datos del documento</p>{selected && !editing && <button onClick={startEditing} className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-foreground hover:bg-secondary"><Pencil className="w-3 h-3" /> Corregir</button>}</div>
+              <p className="text-[11px] text-muted-foreground">Selecciona un dato para ver su origen o corregirlo.</p>
+            </div>
+            {editing && selected && (
+              <div className="border-b border-border bg-secondary/35 p-3 space-y-2.5">
+                <div><p className="text-[10px] font-medium uppercase tracking-[0.06em] text-muted-foreground">Corrigiendo {pretty(selected)}</p><p className="text-[10px] text-muted-foreground mt-0.5">Al guardar, las validaciones del caso se recalculan.</p></div>
+                <textarea value={editedValue} onChange={(event) => setEditedValue(event.target.value)} rows={3} className="w-full resize-y rounded-md border border-border bg-card px-2.5 py-2 text-xs text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15" />
+                {canTrain && doc.detectedType && <label className="flex items-start gap-2 text-[10px] leading-relaxed text-muted-foreground"><input type="checkbox" checked={applyToFuture} onChange={(event) => setApplyToFuture(event.target.checked)} className="mt-0.5" /><span><strong className="font-medium text-foreground">Aplicar a futuros {doc.detectedType}</strong><br />Guarda este ajuste como ejemplo aprobado para este tenant.</span></label>}
+                {editError && <p className="text-[10px] text-destructive">{editError}</p>}
+                <div className="flex items-center justify-end gap-2"><button onClick={() => setEditing(false)} disabled={saving} className="rounded-md px-2 py-1 text-[10px] font-medium text-muted-foreground hover:bg-secondary">Cancelar</button><button onClick={saveCorrection} disabled={saving || !editedValue.trim()} className="inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 text-[10px] font-medium text-primary-foreground disabled:opacity-50">{saving ? <Loader2 className="w-3 h-3 animate-spin" /> : applyToFuture ? <Sparkles className="w-3 h-3" /> : <Save className="w-3 h-3" />}{applyToFuture ? "Guardar y aprender" : "Guardar corrección"}</button></div>
+              </div>
+            )}
             <div className="flex-1 overflow-y-auto">
               {entries.length === 0 && <p className="px-4 py-4 text-xs text-muted-foreground">Sin datos.</p>}
               {entries.map(([k, v]) => {
@@ -140,15 +187,23 @@ function DocViewer({ doc, onClose }: { doc: CaseDoc; onClose: () => void }) {
   );
 }
 
-export function CaseDocuments({ documents }: { documents: CaseDoc[] }) {
+export function CaseDocuments({ documents, canTrain = false }: { documents: CaseDoc[]; canTrain?: boolean }) {
+  const router = useRouter();
+  const [overrides, setOverrides] = useState<Record<string, CaseDoc>>({});
   const [openId, setOpenId] = useState<string | null>(null);
-  const open = documents.find((d) => d.id === openId) ?? null;
+  const resolvedDocuments = documents.map((document) => overrides[document.id] ?? document);
+  const open = resolvedDocuments.find((d) => d.id === openId) ?? null;
+
+  function updateDocument(updated: CaseDoc) {
+    setOverrides((current) => ({ ...current, [updated.id]: updated }));
+    router.refresh();
+  }
 
   return (
     <>
       <div className="space-y-4">
-        {documents.length === 0 && <p className="text-xs text-muted-foreground">Sin documentos.</p>}
-        {documents.map((d) => {
+        {resolvedDocuments.length === 0 && <p className="text-xs text-muted-foreground">Sin documentos.</p>}
+        {resolvedDocuments.map((d) => {
           const entries = Object.entries(d.extractedJson ?? {});
           return (
             <div key={d.id} className="bg-card border border-border rounded-xl overflow-hidden">
@@ -158,7 +213,7 @@ export function CaseDocuments({ documents }: { documents: CaseDoc[] }) {
                   {d.detectedType && <span className="text-[11px] text-muted-foreground">{d.detectedType}</span>}
                 </div>
                 <button onClick={() => setOpenId(d.id)} className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-[11px] font-medium text-foreground hover:bg-secondary shrink-0">
-                  <FileSearch className="w-3.5 h-3.5" /> Ver en el documento
+                  <FileSearch className="w-3.5 h-3.5" /> Revisar / corregir
                 </button>
               </div>
               {entries.length === 0 ? (
@@ -177,7 +232,7 @@ export function CaseDocuments({ documents }: { documents: CaseDoc[] }) {
           );
         })}
       </div>
-      {open && <DocViewer doc={open} onClose={() => setOpenId(null)} />}
+      {open && <DocViewer doc={open} canTrain={canTrain} onClose={() => setOpenId(null)} onUpdated={updateDocument} />}
     </>
   );
 }

@@ -25,7 +25,7 @@ export default function TenantLoginPage() {
       });
       const data = await res.json();
       if (!res.ok) { setError(data.error ?? "Error al iniciar sesión"); return; }
-      router.push("/dashboard");
+      router.replace(data.homePath ?? "/dashboard");
     } catch {
       setError("No se pudo conectar al servidor");
     } finally {

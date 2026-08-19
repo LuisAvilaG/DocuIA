@@ -7,6 +7,7 @@ import { db } from "@/lib/db";
 import { apiKeys } from "@/db/schema";
 import { and, eq, isNull } from "drizzle-orm";
 import { isFeatureEnabled } from "@/lib/features";
+import type { TenantHomePath } from "@/lib/products";
 
 export interface AccessTokenPayload {
   sub: string;          // user id
@@ -14,6 +15,7 @@ export interface AccessTokenPayload {
   orgId?: string;
   role?: string;
   email: string;
+  homePath?: TenantHomePath;
 }
 
 export interface RefreshTokenPayload {

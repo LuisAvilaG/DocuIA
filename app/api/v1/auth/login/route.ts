@@ -8,6 +8,7 @@ import { randomBytes } from "crypto";
 import { signAccessToken, signRefreshToken } from "@/lib/auth/jwt";
 import { rateLimit, clearRateLimit } from "@/lib/auth/rate-limit";
 import { logAudit } from "@/lib/audit/log";
+import { getTenantHomePath } from "@/lib/products";
 
 export async function POST(req: NextRequest) {
   const ip =
@@ -47,6 +48,8 @@ export async function POST(req: NextRequest) {
 
     await clearRateLimit(ip);
 
+    const homePath = await getTenantHomePath(user.organizationId);
+
     const sessionId  = uuid();
     const tokenNonce = randomBytes(32).toString("hex");
     const expiresAt  = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
@@ -69,6 +72,7 @@ export async function POST(req: NextRequest) {
         orgId: user.organizationId,
         role:  user.role,
         email: user.email,
+        homePath,
       }),
       signRefreshToken({ sub: user.id, type: "org_user", sessionId, tokenNonce }),
     ]);
@@ -82,7 +86,7 @@ export async function POST(req: NextRequest) {
       ipAddress: ip,
     });
 
-    const res    = NextResponse.json({ ok: true });
+    const res    = NextResponse.json({ ok: true, homePath });
     const secure = process.env.NODE_ENV === "production";
 
     res.cookies.set("access_token", accessToken, {

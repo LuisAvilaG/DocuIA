@@ -5,6 +5,7 @@ import { authSessions, orgUsers } from "@/db/schema";
 import { and, eq, isNull } from "drizzle-orm";
 import { randomBytes } from "crypto";
 import { isTenantIpAllowed } from "@/lib/security/ip-allowlist";
+import { getTenantHomePath } from "@/lib/products";
 
 export async function POST(req: NextRequest) {
   const refreshCookie = req.cookies.get("refresh_token")?.value;
@@ -50,6 +51,7 @@ export async function POST(req: NextRequest) {
 
     const newNonce     = randomBytes(32).toString("hex");
     const newExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const homePath     = await getTenantHomePath(user.organizationId);
 
     await db
       .update(authSessions)
@@ -63,6 +65,7 @@ export async function POST(req: NextRequest) {
         orgId: user.organizationId,
         role:  user.role,
         email: user.email,
+        homePath,
       }),
       signRefreshToken({ sub: user.id, type: "org_user", sessionId, tokenNonce: newNonce }),
     ]);

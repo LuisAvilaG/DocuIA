@@ -26,6 +26,24 @@ function parseDateLoose(v: unknown): Date | null {
 // Fields whose value is a key date worth alerting on (renewal / expiry).
 const DATE_FIELD_RE = /(fecha|date|vigencia|termino|término|renov|corte|vencim)/i;
 
+function normalizeName(value: string): string {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+// A filename is a useful, deterministic tie-breaker for a deliberately named
+// upload such as "Cotizacion_demo...". It is only used when the model returned
+// unknown; a recognised model result always wins.
+function inferTypeFromFileName(fileName: string | null, docTypes: Array<{ key: string; name: string }>): string | null {
+  if (!fileName) return null;
+  const words = new Set(normalizeName(fileName).split(" ").filter((word) => word.length >= 4));
+  if (words.size === 0) return null;
+  for (const docType of docTypes) {
+    const aliases = `${docType.key} ${docType.name}`.split(/[_\s-]+/).map(normalizeName).filter((word) => word.length >= 4);
+    if (aliases.some((alias) => words.has(alias))) return docType.key;
+  }
+  return null;
+}
+
 // Create the case + persist files to MinIO + document rows. Returns the case id.
 export async function createContractCase(input: {
   organizationId: string;
@@ -97,9 +115,16 @@ export async function processContractCase(caseId: string, deps: ContractExtractD
       const buffer = await getFileBuffer(doc.storageKey);
       const { source, mode, text } = toSource(buffer, doc.mimeType);
 
-      const typeKey = await deps.classify(source, plan.docTypes);
+      const classifiedTypeKey = await deps.classify(source, plan.docTypes, undefined, doc.originalName ?? undefined);
+      const typeKey = plan.docTypes.some((type) => type.key === classifiedTypeKey)
+        ? classifiedTypeKey
+        : inferTypeFromFileName(doc.originalName, plan.docTypes) ?? (plan.docTypes.length === 1 ? plan.docTypes[0].key : "unknown");
       const typeName = plan.docTypes.find((t) => t.key === typeKey)?.name ?? typeKey;
-      const fields = plan.fieldsByType[typeKey] ?? plan.fieldsByType[plan.docTypes[0]?.key] ?? [];
+      // Never extract with another type's schema. The old fallback made an
+      // unknown document look like the first intake type in the UI while its
+      // values were stored under "unknown", so downstream rules could never
+      // find them.
+      const fields = plan.fieldsByType[typeKey] ?? [];
 
       const { values, citations } = await deps.extract(source, typeName, fields);
 

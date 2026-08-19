@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { isProductActive } from "@/lib/products";
 import { db } from "@/lib/db";
-import { contractCases } from "@/db/schema";
+import { contractCases, contractFlows } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
 import { createContractCase, type CaseFileInput } from "@/lib/contracts/pipeline";
 import { enqueueContractCase } from "@/lib/queue";
@@ -23,13 +23,25 @@ export async function GET() {
     return NextResponse.json({ error: "El análisis AI de contratos no está habilitado para este cliente." }, { status: 403 });
   }
 
-  const cases = await db.query.contractCases.findMany({
-    where: eq(contractCases.organizationId, session.orgId),
-    columns: { id: true, title: true, status: true, createdAt: true, updatedAt: true },
-    orderBy: [desc(contractCases.createdAt)],
-    limit: 200,
+  const [cases, flows] = await Promise.all([
+    db.query.contractCases.findMany({
+      where: eq(contractCases.organizationId, session.orgId),
+      columns: { id: true, title: true, status: true, flowId: true, createdAt: true, updatedAt: true },
+      orderBy: [desc(contractCases.createdAt)],
+      limit: 200,
+    }),
+    db.query.contractFlows.findMany({
+      where: eq(contractFlows.organizationId, session.orgId),
+      columns: { id: true, name: true },
+    }),
+  ]);
+  const flowNames = new Map(flows.map((flow) => [flow.id, flow.name]));
+  return NextResponse.json({
+    cases: cases.map((kase) => ({
+      ...kase,
+      flowName: kase.flowId ? flowNames.get(kase.flowId) ?? "Flujo eliminado" : "Sin flujo asignado",
+    })),
   });
-  return NextResponse.json({ cases });
 }
 
 export async function POST(req: NextRequest) {

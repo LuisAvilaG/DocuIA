@@ -73,7 +73,7 @@ export type ExtractSource =
   | { kind: "file"; base64: string; mimeType: string };
 
 export interface ClassifyFn {
-  (source: ExtractSource, docTypes: DocTypeOption[], apiKey?: string): Promise<string>;
+  (source: ExtractSource, docTypes: DocTypeOption[], apiKey?: string, fileName?: string): Promise<string>;
 }
 export interface ExtractFn {
   (source: ExtractSource, docTypeName: string, fields: FieldDef[], apiKey?: string):
@@ -93,11 +93,12 @@ function buildParts(instruction: string, source: ExtractSource): Part[] {
 }
 
 // ── Real implementations ──────────────────────────────────────────────
-export const classifyDocument: ClassifyFn = async (source, docTypes, apiKey) => {
+export const classifyDocument: ClassifyFn = async (source, docTypes, apiKey, fileName) => {
   const options = docTypes.map((d) => `- ${d.key}: ${d.name}${d.hint ? ` (${d.hint})` : ""}`).join("\n");
   const instruction =
     "Clasifica el documento en UNO de estos tipos según su FUNCIÓN LEGAL, no cómo se autodenomine.\n" +
     `Tipos:\n${options}\n` +
+    (fileName ? `El archivo se llama \"${fileName}\". Úsalo como señal adicional, pero confirma siempre con el contenido.\n` : "") +
     'Responde SOLO JSON: {"type_key":"..."}. Si ninguno aplica, usa "unknown".';
   const res = await geminiJson(buildParts(instruction, source), apiKey);
   const key = String(res.type_key ?? res.typeKey ?? "unknown");

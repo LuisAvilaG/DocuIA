@@ -2,15 +2,16 @@ import { redirect, notFound } from "next/navigation";
 import Link from "next/link";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
-import { contractCases, contractDocuments, contractValidations, contractObligations } from "@/db/schema";
+import { contractCases, contractDocuments, contractValidations, contractObligations, contractFlows } from "@/db/schema";
 import { and, eq, asc } from "drizzle-orm";
 import {
   CheckCircle2, XCircle, MinusCircle, ShieldCheck, ShieldAlert, ShieldX,
-  FileText, Download, CalendarClock, FileInput, ListChecks, FileType,
+  FileText, Download, CalendarClock, FileInput, ListChecks, FileType, Workflow,
 } from "lucide-react";
 import { CaseActions } from "./actions";
 import { CaseDocuments, type CaseDoc } from "./case-documents";
 import { getFeature, isFeatureEnabled } from "@/lib/features";
+import { flowGraphSchema } from "@/lib/contracts/flow";
 
 const STATUS: Record<string, { label: string; cls: string }> = {
   uploaded:   { label: "En cola",     cls: "bg-secondary text-muted-foreground" },
@@ -58,7 +59,7 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
   });
   if (!kase) notFound();
 
-  const [documents, validations, obligations, validationsEnabled, obligationsEnabled, generationEnabled, approvalFeature] = await Promise.all([
+  const [documents, validations, obligations, validationsEnabled, obligationsEnabled, generationEnabled, approvalFeature, activeFlow] = await Promise.all([
     db.query.contractDocuments.findMany({ where: eq(contractDocuments.caseId, id) }),
     db.query.contractValidations.findMany({ where: eq(contractValidations.caseId, id) }),
     db.query.contractObligations.findMany({ where: eq(contractObligations.caseId, id), orderBy: [asc(contractObligations.dueDate)] }),
@@ -66,7 +67,18 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
     isFeatureEnabled(session.orgId, "contract_obligation_tracking"),
     isFeatureEnabled(session.orgId, "contract_document_generation"),
     getFeature(session.orgId, "contract_approval_workflow"),
+    kase.flowId ? db.query.contractFlows.findFirst({
+      where: and(eq(contractFlows.id, kase.flowId), eq(contractFlows.organizationId, session.orgId)),
+      columns: { id: true, name: true, graphJson: true },
+    }) : Promise.resolve(null),
   ]);
+
+  const parsedFlow = activeFlow ? flowGraphSchema.safeParse(activeFlow.graphJson) : null;
+  const flowNotes = parsedFlow?.success ? parsedFlow.data.notes?.trim() || null : null;
+  const configuredValidations = parsedFlow?.success
+    ? parsedFlow.data.nodes.filter((node) => node.kind === "validate").length
+    : null;
+  const isProcessing = kase.status === "uploaded" || kase.status === "processing";
 
   const result = (kase.resultJson ?? {}) as {
     outputKey?: string; missing?: string[];
@@ -114,10 +126,20 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
             {validationsEnabled && verdict && (() => { const b = VERDICT[verdict]; return <span className={`inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full ml-auto ${b.cls}`}><b.Icon className="w-3.5 h-3.5" /> {b.text}</span>; })()}
           </div>
           <p className="text-xs text-muted-foreground mt-1 tabular-nums">Creado el {new Date(kase.createdAt).toLocaleString("es-MX")}</p>
+          {activeFlow && (
+            <div className="mt-3 flex items-start gap-2 rounded-lg border border-border bg-card px-3 py-2.5">
+              <Workflow className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
+              <div className="min-w-0">
+                <p className="text-[10px] font-medium uppercase tracking-[0.06em] text-muted-foreground">Flujo aplicado</p>
+                <p className="text-xs font-semibold text-foreground">{activeFlow.name}{configuredValidations !== null ? <span className="font-normal text-muted-foreground"> · {configuredValidations} controles</span> : null}</p>
+                {flowNotes && <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{flowNotes}</p>}
+              </div>
+            </div>
+          )}
         </div>
 
         <CaseActions caseId={kase.id} status={kase.status} verdict={validationsEnabled ? verdict : null} decision={result.decision} generationEnabled={generationEnabled} approvalEnabled={approvalFeature.isEnabled} allowOverride={approvalFeature.config.allow_override !== false} />
-        {kase.status === "processing" && <p className="text-xs text-warning">Procesando el caso; recarga en unos segundos.</p>}
+        {isProcessing && <p className="text-xs text-warning">El caso está en proceso. La clasificación, extracción y validación aparecerán aquí al terminar.</p>}
         {kase.errorMessage && <div className="rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-xs px-3 py-2">{kase.errorMessage}</div>}
 
         {/* Recorrido por etapas */}
@@ -141,10 +163,16 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
           </Stage>
 
           {validationsEnabled && <Stage n={3} title="Validación" Icon={ShieldCheck} last={!obligationsEnabled && !generationEnabled}
-            pill={verdict ? (() => { const b = VERDICT[verdict]; return <Pill cls={b.cls}>{b.text}</Pill>; })() : <Pill cls="bg-secondary text-muted-foreground">sin reglas</Pill>}>
+            pill={isProcessing
+              ? <Pill cls="bg-warning/10 text-warning">pendiente</Pill>
+              : verdict ? (() => { const b = VERDICT[verdict]; return <Pill cls={b.cls}>{b.text}</Pill>; })() : <Pill cls="bg-secondary text-muted-foreground">sin reglas</Pill>}>
             {validations.length === 0 ? (
               <div className="bg-card border border-border rounded-xl px-5 py-4">
-                <p className="text-xs text-muted-foreground">Este flujo no tiene reglas de validación. Agrégalas en el editor del flujo (nodos de Validación) para revisar firmantes, montos, cláusulas, fechas, etc.</p>
+                {isProcessing ? (
+                  <p className="text-xs text-muted-foreground">{configuredValidations && configuredValidations > 0 ? `Este flujo tiene ${configuredValidations} regla${configuredValidations === 1 ? "" : "s"} configurada${configuredValidations === 1 ? "" : "s"}. ` : "El flujo se está preparando. "}Las validaciones se ejecutarán cuando terminen de clasificarse y extraerse los documentos.</p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">Este flujo no tiene reglas de validación. Agrégalas en el editor del flujo (nodos de Validación) para revisar firmantes, montos, cláusulas, fechas, etc.</p>
+                )}
               </div>
             ) : (
               <div className="bg-card border border-border rounded-xl divide-y divide-border overflow-hidden">

@@ -1,17 +1,33 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Eye, EyeOff, Loader2 } from "lucide-react";
 import Image from "next/image";
 
-export default function TenantLoginPage() {
+function TenantLoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [email,    setEmail]    = useState("");
   const [password, setPassword] = useState("");
   const [showPass, setShowPass] = useState(false);
   const [error,    setError]    = useState("");
   const [loading,  setLoading]  = useState(false);
+  const requestedPath = searchParams.get("returnTo");
+  const returnTo = requestedPath?.startsWith("/") && !requestedPath.startsWith("//") ? requestedPath : null;
+  const [restoring, setRestoring] = useState(() => Boolean(returnTo));
+
+  useEffect(() => {
+    if (!returnTo) return;
+    let active = true;
+    fetch("/api/v1/auth/refresh", { method: "POST" })
+      .then((res) => {
+        if (active && res.ok) router.replace(returnTo);
+      })
+      .catch(() => undefined)
+      .finally(() => { if (active) setRestoring(false); });
+    return () => { active = false; };
+  }, [returnTo, router]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -112,6 +128,8 @@ export default function TenantLoginPage() {
             </div>
           </div>
 
+          {restoring && <p className="text-xs text-muted-foreground">Restaurando tu sesión…</p>}
+
           {error && (
             <div className="flex items-start gap-2.5 bg-[oklch(0.96_0.04_25)] border border-[oklch(0.50_0.20_25_/_0.18)] rounded-lg px-3 py-2.5">
               <div className="mt-[3px] w-1.5 h-1.5 rounded-full bg-[oklch(0.50_0.20_25)] shrink-0" />
@@ -121,7 +139,7 @@ export default function TenantLoginPage() {
 
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || restoring}
             className="w-full bg-primary hover:bg-[oklch(0.42_0.15_182)] disabled:opacity-60 text-primary-foreground font-medium text-sm py-[10px] rounded-lg flex items-center justify-center gap-2 transition-all duration-[120ms] hover:-translate-y-px active:translate-y-0"
             style={{ boxShadow: "0 1px 3px oklch(0.48 0.15 182 / 0.30)" }}
           >
@@ -132,4 +150,16 @@ export default function TenantLoginPage() {
       </div>
     </div>
   );
+}
+
+function LoginLoading() {
+  return (
+    <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: "oklch(0.975 0.006 240)" }}>
+      <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+    </div>
+  );
+}
+
+export default function TenantLoginPage() {
+  return <Suspense fallback={<LoginLoading />}><TenantLoginForm /></Suspense>;
 }

@@ -14,7 +14,7 @@ import type { ContractDoc } from "./generate";
 //   validate → "valida esto"            (cross-document rule)
 //   generate → "al final genera esto"   (output template)
 
-export type FlowNodeKind = "intake" | "extract" | "validate" | "generate";
+export type FlowNodeKind = "intake" | "extract" | "validate" | "generate" | "note";
 
 const zPosition = z.object({ x: z.number(), y: z.number() });
 const zField = z.object({
@@ -67,12 +67,17 @@ const zGenerate = z.object({
   id: z.string().min(1), kind: z.literal("generate"), position: zPosition,
   data: z.object({ templateKey: z.string().min(1), name: z.string().min(1), body: z.string().default(""), doc: zDoc.optional(), html: z.string().optional() }),
 });
+// Notes are visual annotations for the team. They are deliberately ignored by
+// compilation, validation and execution.
+const zNote = z.object({
+  id: z.string().min(1), kind: z.literal("note"), position: zPosition,
+  data: z.object({ body: z.string().max(4000).default("") }),
+});
 
-const zNode = z.discriminatedUnion("kind", [zIntake, zExtract, zValidate, zGenerate]);
+const zNode = z.discriminatedUnion("kind", [zIntake, zExtract, zValidate, zGenerate, zNote]);
 const zEdge = z.object({ id: z.string().min(1), source: z.string().min(1), target: z.string().min(1) });
 
 export const flowGraphSchema = z.object({
-  notes: z.string().trim().max(4000).optional(),
   nodes: z.array(zNode).max(200),
   edges: z.array(zEdge).max(400),
 });

@@ -9,7 +9,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import {
-  Loader2, Save, Plus, Trash2, FileInput, ListChecks, ShieldCheck, FileText, ChevronDown, ChevronUp,
+  Loader2, Save, Plus, Trash2, FileInput, ListChecks, ShieldCheck, FileText, ChevronDown, ChevronUp, StickyNote,
 } from "lucide-react";
 import { DocEditor } from "./doc-editor";
 
@@ -22,13 +22,14 @@ function genInitialHtml(data: Record<string, unknown>): string {
 }
 
 // ── Node kinds ────────────────────────────────────────────────────────
-type Kind = "intake" | "extract" | "validate" | "generate";
+type Kind = "intake" | "extract" | "validate" | "generate" | "note";
 
 const KIND_META: Record<Kind, { title: string; hint: string; Icon: typeof FileInput; hasIn: boolean; hasOut: boolean }> = {
   intake:   { title: "Entrada",    hint: "Qué documento entra",       Icon: FileInput,   hasIn: false, hasOut: true },
   extract:  { title: "Extracción", hint: "Qué datos saca la IA",       Icon: ListChecks,  hasIn: true,  hasOut: true },
   validate: { title: "Validación", hint: "Regla de cruce entre docs",  Icon: ShieldCheck, hasIn: true,  hasOut: true },
   generate: { title: "Generación", hint: "Documento final",            Icon: FileText,    hasIn: true,  hasOut: false },
+  note:     { title: "Nota",       hint: "Comentario para el equipo",  Icon: StickyNote,  hasIn: false, hasOut: false },
 };
 
 type AnyData = Record<string, unknown>;
@@ -44,6 +45,7 @@ function defaultData(kind: Kind): AnyData {
       statusLabels: { pass: "vigente", fail: "no_vigente", unknown: "indeterminado" },
     } };
     case "generate": return { templateKey: "salida", name: "Documento de salida", body: "" };
+    case "note":     return { body: "Escribe aquí la instrucción o comentario para este flujo." };
   }
 }
 
@@ -55,6 +57,20 @@ function NodeCard({ type, data, selected }: NodeProps) {
   const d = data as AnyData;
   const Icon = meta.Icon;
   const order = typeof d._order === "number" ? d._order : null;
+  const onNoteChange = typeof d._onNoteChange === "function" ? d._onNoteChange as (body: string) => void : null;
+  if (type === "note") {
+    return (
+      <div className={`min-w-[230px] max-w-[300px] rounded-lg border p-3 transition-shadow ${selected ? "border-warning ring-2 ring-warning/20 shadow-[0_4px_16px_oklch(0.18_0.015_258_/_0.10)]" : "border-warning/35 bg-warning/10 hover:shadow-[0_2px_8px_oklch(0.18_0.015_258_/_0.06)]"}`}>
+        <div className="mb-2 flex items-center gap-1.5 text-warning">
+          <StickyNote className="h-3.5 w-3.5" />
+          <span className="text-[10px] font-semibold uppercase tracking-[0.06em]">Nota de flujo</span>
+        </div>
+        <textarea className="nodrag nopan w-full resize-none bg-transparent text-xs leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/70"
+          value={String(d.body ?? "")} rows={4} placeholder="Escribe una instrucción para la demo…"
+          onChange={(e) => onNoteChange?.(e.target.value)} onMouseDown={(e) => e.stopPropagation()} />
+      </div>
+    );
+  }
   const summary =
     type === "intake"   ? String(d.name || d.docTypeKey || "Sin nombre") :
     type === "extract"  ? `${String(d.docTypeKey || "—")} · ${Array.isArray(d.fields) ? d.fields.length : 0} campos` :
@@ -386,17 +402,15 @@ function FlowBuilder({ flowId }: { flowId: string }) {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [name, setName] = useState("Flujo de contratos");
-  const [notes, setNotes] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [docEditorOpen, setDocEditorOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
-  const nodeTypes = useMemo(() => ({ intake: NodeCard, extract: NodeCard, validate: NodeCard, generate: NodeCard }), []);
+  const nodeTypes = useMemo(() => ({ intake: NodeCard, extract: NodeCard, validate: NodeCard, generate: NodeCard, note: NodeCard }), []);
 
-  const setGraph = useCallback((graph: { notes?: string; nodes?: Array<{ id: string; kind: Kind; position: { x: number; y: number }; data: AnyData }>; edges?: Array<{ id: string; source: string; target: string }> }) => {
-    setNotes(graph.notes ?? "");
+  const setGraph = useCallback((graph: { nodes?: Array<{ id: string; kind: Kind; position: { x: number; y: number }; data: AnyData }>; edges?: Array<{ id: string; source: string; target: string }> }) => {
     setNodes((graph.nodes ?? []).map((n) => ({ id: n.id, type: n.kind, position: n.position, data: n.data })));
     setEdges((graph.edges ?? []).map((e) => ({ id: e.id, source: e.source, target: e.target })));
   }, [setNodes, setEdges]);
@@ -430,6 +444,9 @@ function FlowBuilder({ flowId }: { flowId: string }) {
   const patchSelected = (patch: AnyData) =>
     setNodes((ns) => ns.map((n) => n.id === selectedId ? { ...n, data: { ...n.data, ...patch } } : n));
 
+  const patchNote = useCallback((id: string, body: string) =>
+    setNodes((ns) => ns.map((n) => n.id === id ? { ...n, data: { ...n.data, body } } : n)), [setNodes]);
+
   const deleteSelected = () => {
     if (!selectedId) return;
     setNodes((ns) => ns.filter((n) => n.id !== selectedId));
@@ -455,7 +472,6 @@ function FlowBuilder({ flowId }: { flowId: string }) {
   async function save() {
     setSaving(true); setMsg(null);
     const graph = {
-      notes: notes.trim() || undefined,
       nodes: nodes.map((n) => ({ id: n.id, kind: n.type, position: { x: Math.round(n.position.x), y: Math.round(n.position.y) }, data: n.data })),
       edges: edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
     };
@@ -485,7 +501,11 @@ function FlowBuilder({ flowId }: { flowId: string }) {
   const intakeOrder = new Map(
     nodes.filter((n) => n.type === "intake").sort((a, b) => a.position.y - b.position.y).map((n, i) => [n.id, i + 1]),
   );
-  const displayNodes = nodes.map((n) => n.type === "intake" ? { ...n, data: { ...n.data, _order: intakeOrder.get(n.id) } } : n);
+  const displayNodes = nodes.map((n) => {
+    if (n.type === "intake") return { ...n, data: { ...n.data, _order: intakeOrder.get(n.id) } };
+    if (n.type === "note") return { ...n, data: { ...n.data, _onNoteChange: (body: string) => patchNote(n.id, body) } };
+    return n;
+  });
 
   if (loading) return <div className="flex-1 flex items-center justify-center"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>;
 
@@ -530,7 +550,7 @@ function FlowBuilder({ flowId }: { flowId: string }) {
             <div className="p-5 space-y-4">
               <div>
                 <h2 className="text-sm font-semibold text-foreground">Agrega una etapa</h2>
-                <p className="text-xs text-muted-foreground mt-1 leading-relaxed"><strong className="text-foreground font-medium">Arrastra</strong> una tarjeta al lienzo (o haz clic para añadirla), luego conecta los nodos arrastrando del punto derecho de uno al izquierdo del siguiente. Orden: Entrada → Extracción → Validación → Generación.</p>
+                <p className="text-xs text-muted-foreground mt-1 leading-relaxed"><strong className="text-foreground font-medium">Arrastra</strong> una tarjeta al lienzo (o haz clic para añadirla), luego conecta los nodos arrastrando del punto derecho de uno al izquierdo del siguiente. Orden: Entrada → Extracción → Validación → Generación. La Nota es solo visual y no altera el procesamiento.</p>
               </div>
               <div className="space-y-2">
                 {(Object.keys(KIND_META) as Kind[]).map((k, i) => {
@@ -541,20 +561,13 @@ function FlowBuilder({ flowId }: { flowId: string }) {
                       className="w-full flex items-center gap-3 rounded-lg border border-border bg-background hover:border-primary/50 hover:bg-primary/5 p-3 text-left transition-colors cursor-grab active:cursor-grabbing group">
                       <span className="w-8 h-8 rounded-md bg-primary/10 text-primary flex items-center justify-center shrink-0"><M.Icon className="w-4 h-4" /></span>
                       <div className="min-w-0">
-                        <p className="text-xs font-medium text-foreground">{i + 1}. {M.title}</p>
+                        <p className="text-xs font-medium text-foreground">{k === "note" ? M.title : `${i + 1}. ${M.title}`}</p>
                         <p className="text-[11px] text-muted-foreground">{M.hint}</p>
                       </div>
                       <Plus className="w-3.5 h-3.5 text-muted-foreground ml-auto shrink-0 group-hover:text-primary" />
                     </button>
                   );
                 })}
-              </div>
-              <div className="border-t border-border pt-4 space-y-1.5">
-                <label htmlFor="flow-notes" className="text-xs font-semibold text-foreground">Notas para el equipo</label>
-                <p className="text-[11px] leading-relaxed text-muted-foreground">Deja el objetivo de la demo, el orden sugerido de carga o criterios que deban conocer quienes ejecutan este flujo.</p>
-                <textarea id="flow-notes" value={notes} onChange={(e) => setNotes(e.target.value)} rows={5}
-                  placeholder="Ej. Carga primero la cotización y después la póliza. El dictamen debe explicar cualquier diferencia."
-                  className={`${inp} resize-y leading-relaxed`} />
               </div>
               <p className="text-[11px] text-muted-foreground leading-relaxed border-t border-border pt-3">Todo lo que el motor hace con un caso sale de este flujo. Haz clic en un nodo para configurarlo.</p>
             </div>
@@ -571,6 +584,7 @@ function FlowBuilder({ flowId }: { flowId: string }) {
               {selected.type === "extract"  && <ExtractForm  data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} />}
               {selected.type === "validate" && <ValidateForm data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} fieldsByType={fieldsByType} />}
               {selected.type === "generate" && <GenerateForm data={selected.data as AnyData} patch={patchSelected} onOpenEditor={() => setDocEditorOpen(true)} />}
+              {selected.type === "note" && <p className="text-xs leading-relaxed text-muted-foreground">Edita el texto directamente en el bloque del lienzo. Esta nota no crea reglas ni cambia el resultado del caso.</p>}
             </div>
           )}
         </aside>

@@ -74,7 +74,6 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
   ]);
 
   const parsedFlow = activeFlow ? flowGraphSchema.safeParse(activeFlow.graphJson) : null;
-  const flowNotes = parsedFlow?.success ? parsedFlow.data.notes?.trim() || null : null;
   const configuredValidations = parsedFlow?.success
     ? parsedFlow.data.nodes.filter((node) => node.kind === "validate").length
     : null;
@@ -132,7 +131,6 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
               <div className="min-w-0">
                 <p className="text-[10px] font-medium uppercase tracking-[0.06em] text-muted-foreground">Flujo aplicado</p>
                 <p className="text-xs font-semibold text-foreground">{activeFlow.name}{configuredValidations !== null ? <span className="font-normal text-muted-foreground"> · {configuredValidations} controles</span> : null}</p>
-                {flowNotes && <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{flowNotes}</p>}
               </div>
             </div>
           )}

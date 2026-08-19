@@ -39,7 +39,6 @@ export async function GET() {
     const nodes = graph.success ? graph.data.nodes : [];
     return {
       ...flow,
-      notes: graph.success ? graph.data.notes ?? null : null,
       documentCount: nodes.filter((node) => node.kind === "intake").length,
       validationCount: nodes.filter((node) => node.kind === "validate").length,
     };

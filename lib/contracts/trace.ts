@@ -47,6 +47,13 @@ export function buildFlowTrace(
         detail: res.length ? Object.entries(by).map(([s, c]) => `${c} ${s}`).join(", ") : "sin sujetos",
       };
     }
+    if (n.kind === "note") {
+      return {
+        nodeId: n.id, kind: n.kind, label: "Nota de flujo",
+        status: "done",
+        detail: n.data.body || "sin contenido",
+      };
+    }
     return {
       nodeId: n.id, kind: n.kind, label: `Genera: ${n.data.name}`,
       status: hasTemplate ? "done" : "empty",

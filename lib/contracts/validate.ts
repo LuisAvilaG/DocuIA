@@ -60,10 +60,22 @@ function toNumber(v: unknown): number | null {
 function toDate(v: unknown): Date | null {
   const s = String(v ?? "").trim();
   if (!s) return null;
-  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  let m = s.match(/^(\d{4})[-/](\d{2})[-/](\d{2})$/);
   if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
   m = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
   if (m) return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
+  const spanishMonths: Record<string, number> = {
+    enero: 0, febrero: 1, marzo: 2, abril: 3, mayo: 4, junio: 5,
+    julio: 6, agosto: 7, septiembre: 8, setiembre: 8, octubre: 9,
+    noviembre: 10, diciembre: 11,
+  };
+  m = s.toLowerCase().match(/^(\d{1,2})\s+de\s+([a-záéíóúñ]+)\s+de\s+(\d{4})$/i);
+  if (m) {
+    const month = spanishMonths[m[2].normalize("NFD").replace(/[\u0300-\u036f]/g, "")];
+    if (month !== undefined) return new Date(Number(m[3]), month, Number(m[1]));
+  }
+  // Do not let Date parse amounts such as "21.008" as dates.
+  if (!/[a-záéíóúñ]/i.test(s)) return null;
   const d = new Date(s);
   return isNaN(d.getTime()) ? null : d;
 }
@@ -179,8 +191,13 @@ function runFieldMatch(r: Extract<ValidationRule, { kind: "field_match" }>, docs
   const a = firstValue(docs, r.left), b = firstValue(docs, r.right);
   const subject = `${r.left.field} vs ${r.right.field}`;
   if (a === undefined || b === undefined) return [unk(subject, "faltante", "Falta uno de los campos a comparar.")];
+  const dateA = toDate(a), dateB = toDate(b);
   const na = toNumber(a), nb = toNumber(b);
-  const equal = (na !== null && nb !== null) ? Math.abs(na - nb) <= (r.numericTolerance ?? 0) : namesMatch(String(a), String(b));
+  const equal = (dateA !== null && dateB !== null)
+    ? dateA.getTime() === dateB.getTime()
+    : (na !== null && nb !== null)
+      ? Math.abs(na - nb) <= (r.numericTolerance ?? 0)
+      : namesMatch(String(a), String(b));
   const wantEqual = (r.mode ?? "equal") === "equal";
   return [(wantEqual ? equal : !equal)
     ? pass(subject, wantEqual ? "coinciden" : "difieren", `"${a}" y "${b}" ${wantEqual ? "coinciden" : "difieren"} como se esperaba.`)

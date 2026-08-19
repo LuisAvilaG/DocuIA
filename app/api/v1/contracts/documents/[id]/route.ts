@@ -3,8 +3,8 @@ import { and, eq } from "drizzle-orm";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { logAudit } from "@/lib/audit/log";
 import { db } from "@/lib/db";
-import { contractCases, contractDocuments, contractExtractionLearnings } from "@/db/schema";
-import { revalidateContractCase } from "@/lib/contracts/revalidate";
+import { contractCases, contractDocuments, contractExtractionLearnings, contractValidations } from "@/db/schema";
+import { calculateContractRevalidation } from "@/lib/contracts/revalidate";
 import { isFeatureEnabled } from "@/lib/features";
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -38,23 +38,49 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   if (Array.isArray(values[fieldKey])) return NextResponse.json({ error: "La corrección de listas estará disponible próximamente." }, { status: 400 });
   const originalValue = values[fieldKey] === null || values[fieldKey] === undefined ? null : String(values[fieldKey]);
   values[fieldKey] = value;
+  const recalculation = await calculateContractRevalidation(kase.id, { [id]: values });
 
-  await db.update(contractDocuments).set({ extractedJson: values }).where(eq(contractDocuments.id, id));
-  if (applyToFuture && document.detectedType) {
-    const citations = (document.citationsJson ?? {}) as Record<string, unknown>;
-    const citation = citations[fieldKey] === null || citations[fieldKey] === undefined ? null : String(citations[fieldKey]);
-    await db.insert(contractExtractionLearnings).values({
-      organizationId: session.orgId,
-      documentType: document.detectedType,
-      fieldKey,
-      originalValue,
-      correctedValue: value,
-      citation,
-      createdBy: session.sub,
+  // The document, optional tenant learning and refreshed verdict are one unit:
+  // a migration/write failure must not leave a corrected field with stale rules.
+  try {
+    await db.transaction(async (tx) => {
+      await tx.update(contractDocuments).set({ extractedJson: values }).where(eq(contractDocuments.id, id));
+      if (applyToFuture && document.detectedType) {
+        const citations = (document.citationsJson ?? {}) as Record<string, unknown>;
+        const citation = citations[fieldKey] === null || citations[fieldKey] === undefined ? null : String(citations[fieldKey]);
+        await tx.insert(contractExtractionLearnings).values({
+          organizationId: session.orgId,
+          documentType: document.detectedType,
+          fieldKey,
+          originalValue,
+          correctedValue: value,
+          citation,
+          createdBy: session.sub,
+        });
+      }
+      await tx.delete(contractValidations).where(eq(contractValidations.caseId, kase.id));
+      if (recalculation.validations.length > 0) {
+        await tx.insert(contractValidations).values(recalculation.validations.map((validation) => ({
+          caseId: kase.id,
+          ruleName: validation.ruleName,
+          severity: validation.severity,
+          subject: validation.subject,
+          status: validation.status,
+          ok: validation.ok,
+          reason: validation.reason,
+          checksJson: validation.checks,
+          citation: validation.citation,
+        })));
+      }
+      await tx.update(contractCases).set({ status: "validated", resultJson: recalculation.resultJson, updatedAt: new Date() }).where(eq(contractCases.id, kase.id));
     });
+  } catch {
+    return NextResponse.json({
+      error: applyToFuture
+        ? "No se guardó la corrección ni el aprendizaje. Confirma que la actualización de base de datos haya terminado."
+        : "No se pudo guardar la corrección. No se aplicó ningún cambio.",
+    }, { status: 500 });
   }
-
-  await revalidateContractCase(kase.id);
   await logAudit({
     orgId: session.orgId,
     userId: session.sub,

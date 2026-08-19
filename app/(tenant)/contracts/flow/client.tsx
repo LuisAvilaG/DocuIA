@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   ReactFlow, Background, Controls, MiniMap, ReactFlowProvider, useReactFlow,
-  useNodesState, useEdgesState, addEdge, Handle, Position, MarkerType,
+  useNodesState, useEdgesState, addEdge, Handle, NodeResizer, Position, MarkerType,
   type Node, type Edge, type Connection, type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -60,15 +60,27 @@ function NodeCard({ type, data, selected }: NodeProps) {
   const onNoteChange = typeof d._onNoteChange === "function" ? d._onNoteChange as (body: string) => void : null;
   if (type === "note") {
     return (
-      <div className={`min-w-[230px] max-w-[300px] rounded-lg border p-3 transition-shadow ${selected ? "border-warning ring-2 ring-warning/20 shadow-[0_4px_16px_oklch(0.18_0.015_258_/_0.10)]" : "border-warning/35 bg-warning/10 hover:shadow-[0_2px_8px_oklch(0.18_0.015_258_/_0.06)]"}`}>
-        <div className="mb-2 flex items-center gap-1.5 text-warning">
+      <>
+        <NodeResizer
+          isVisible={!!selected}
+          minWidth={230}
+          minHeight={126}
+          maxWidth={680}
+          maxHeight={520}
+          color="var(--color-warning)"
+          handleStyle={{ width: 10, height: 10, borderRadius: 3, background: "var(--color-card)", border: "2px solid var(--color-warning)" }}
+          lineStyle={{ opacity: 0.55 }}
+        />
+        <div className={`flex h-full min-h-[126px] min-w-[230px] w-full flex-col rounded-lg border p-3 transition-shadow ${selected ? "border-warning ring-2 ring-warning/20 shadow-[0_4px_16px_oklch(0.18_0.015_258_/_0.10)]" : "border-warning/35 bg-warning/10 hover:shadow-[0_2px_8px_oklch(0.18_0.015_258_/_0.06)]"}`}>
+        <div className="mb-2 flex shrink-0 items-center gap-1.5 text-warning">
           <StickyNote className="h-3.5 w-3.5" />
           <span className="text-[10px] font-semibold uppercase tracking-[0.06em]">Nota de flujo</span>
         </div>
-        <textarea className="nodrag nopan w-full resize-none bg-transparent text-xs leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/70"
+        <textarea className="nodrag nopan min-h-[58px] w-full flex-1 resize-none bg-transparent text-xs leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/70"
           value={String(d.body ?? "")} rows={4} placeholder="Escribe una instrucción para la demo…"
           onChange={(e) => onNoteChange?.(e.target.value)} onMouseDown={(e) => e.stopPropagation()} />
-      </div>
+        </div>
+      </>
     );
   }
   const summary =
@@ -410,8 +422,8 @@ function FlowBuilder({ flowId }: { flowId: string }) {
 
   const nodeTypes = useMemo(() => ({ intake: NodeCard, extract: NodeCard, validate: NodeCard, generate: NodeCard, note: NodeCard }), []);
 
-  const setGraph = useCallback((graph: { nodes?: Array<{ id: string; kind: Kind; position: { x: number; y: number }; data: AnyData }>; edges?: Array<{ id: string; source: string; target: string }> }) => {
-    setNodes((graph.nodes ?? []).map((n) => ({ id: n.id, type: n.kind, position: n.position, data: n.data })));
+  const setGraph = useCallback((graph: { nodes?: Array<{ id: string; kind: Kind; position: { x: number; y: number }; data: AnyData; width?: number; height?: number }>; edges?: Array<{ id: string; source: string; target: string }> }) => {
+    setNodes((graph.nodes ?? []).map((n) => ({ id: n.id, type: n.kind, position: n.position, data: n.data, width: n.width, height: n.height })));
     setEdges((graph.edges ?? []).map((e) => ({ id: e.id, source: e.source, target: e.target })));
   }, [setNodes, setEdges]);
 
@@ -429,7 +441,10 @@ function FlowBuilder({ flowId }: { flowId: string }) {
 
   const addNode = (kind: Kind, at?: { x: number; y: number }) => {
     const id = `${kind}_${crypto.randomUUID().slice(0, 8)}`;
-    setNodes((ns) => [...ns, { id, type: kind, position: at ?? { x: 80 + (ns.length % 4) * 70, y: 70 + ns.length * 28 }, data: defaultData(kind) }]);
+    setNodes((ns) => [...ns, {
+      id, type: kind, position: at ?? { x: 80 + (ns.length % 4) * 70, y: 70 + ns.length * 28 }, data: defaultData(kind),
+      ...(kind === "note" ? { width: 280, height: 160 } : {}),
+    }]);
     setSelectedId(id);
   };
 
@@ -472,7 +487,12 @@ function FlowBuilder({ flowId }: { flowId: string }) {
   async function save() {
     setSaving(true); setMsg(null);
     const graph = {
-      nodes: nodes.map((n) => ({ id: n.id, kind: n.type, position: { x: Math.round(n.position.x), y: Math.round(n.position.y) }, data: n.data })),
+      nodes: nodes.map((n) => ({
+        id: n.id, kind: n.type, position: { x: Math.round(n.position.x), y: Math.round(n.position.y) }, data: n.data,
+        ...(n.type === "note" && typeof n.width === "number" && typeof n.height === "number"
+          ? { width: Math.round(n.width), height: Math.round(n.height) }
+          : {}),
+      })),
       edges: edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
     };
     try {
@@ -584,7 +604,7 @@ function FlowBuilder({ flowId }: { flowId: string }) {
               {selected.type === "extract"  && <ExtractForm  data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} />}
               {selected.type === "validate" && <ValidateForm data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} fieldsByType={fieldsByType} />}
               {selected.type === "generate" && <GenerateForm data={selected.data as AnyData} patch={patchSelected} onOpenEditor={() => setDocEditorOpen(true)} />}
-              {selected.type === "note" && <p className="text-xs leading-relaxed text-muted-foreground">Edita el texto directamente en el bloque del lienzo. Esta nota no crea reglas ni cambia el resultado del caso.</p>}
+              {selected.type === "note" && <p className="text-xs leading-relaxed text-muted-foreground">Edita el texto directamente en el bloque. Arrastra los controles de sus bordes para ajustar el ancho o alto. Esta nota no crea reglas ni cambia el resultado del caso.</p>}
             </div>
           )}
         </aside>

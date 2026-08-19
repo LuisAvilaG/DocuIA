@@ -72,6 +72,8 @@ const zGenerate = z.object({
 const zNote = z.object({
   id: z.string().min(1), kind: z.literal("note"), position: zPosition,
   data: z.object({ body: z.string().max(4000).default("") }),
+  width: z.number().positive().max(680).optional(),
+  height: z.number().positive().max(520).optional(),
 });
 
 const zNode = z.discriminatedUnion("kind", [zIntake, zExtract, zValidate, zGenerate, zNote]);

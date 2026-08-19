@@ -14,6 +14,10 @@ function tenantHomePath(homePath: unknown): "/dashboard" | "/contracts/dashboard
     : "/dashboard";
 }
 
+function isExpiredJwt(error: unknown) {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ERR_JWT_EXPIRED";
+}
+
 export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
@@ -68,7 +72,17 @@ export async function proxy(req: NextRequest) {
       const { payload } = await jwtVerify(token, jwtSecret(), { algorithms: ["HS256"] });
       if (payload.type !== "org_user") throw new Error();
       return NextResponse.next();
-    } catch {
+    } catch (error) {
+      // An expired access token can still be renewed through the rotating
+      // refresh token. Preserve that cookie and let /login restore the exact
+      // protected route instead of forcing the person to sign in again.
+      if (isExpiredJwt(error) && req.cookies.get("refresh_token")?.value) {
+        const loginUrl = new URL("/login", req.url);
+        loginUrl.searchParams.set("returnTo", `${pathname}${req.nextUrl.search}`);
+        const res = NextResponse.redirect(loginUrl);
+        res.cookies.delete("access_token");
+        return res;
+      }
       const res = NextResponse.redirect(new URL("/login", req.url));
       res.cookies.delete("access_token");
       res.cookies.delete("refresh_token");

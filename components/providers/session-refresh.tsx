@@ -14,6 +14,7 @@ let installed = false;
 
 // Endpoints that must never trigger a refresh+retry (avoids recursion / loops).
 const SKIP = ["/api/v1/auth/refresh", "/api/v1/auth/login", "/api/v1/auth/logout"];
+const REFRESH_INTERVAL_MS = 8 * 60 * 1000;
 
 function installInterceptor() {
   if (installed || typeof window === "undefined") return;
@@ -21,11 +22,15 @@ function installInterceptor() {
 
   const realFetch = window.fetch.bind(window);
   let refreshing: Promise<boolean> | null = null;
+  let lastRefreshAt = Date.now();
 
   async function doRefresh(): Promise<boolean> {
     if (!refreshing) {
       refreshing = realFetch("/api/v1/auth/refresh", { method: "POST" })
-        .then((r) => r.ok)
+        .then((r) => {
+          if (r.ok) lastRefreshAt = Date.now();
+          return r.ok;
+        })
         .catch(() => false)
         .finally(() => {
           // Release the single-flight lock on the next tick so concurrent
@@ -35,6 +40,20 @@ function installInterceptor() {
     }
     return refreshing;
   }
+
+  async function refreshIfDue(): Promise<boolean> {
+    if (Date.now() - lastRefreshAt < REFRESH_INTERVAL_MS) return true;
+    return doRefresh();
+  }
+
+  // Page navigations are server requests, not /api calls, so keep the short
+  // access token fresh before they reach the proxy. Visibility covers a tab
+  // returning from the background; the interval covers active long sessions.
+  const onVisibilityChange = () => {
+    if (document.visibilityState === "visible") void refreshIfDue();
+  };
+  document.addEventListener("visibilitychange", onVisibilityChange);
+  window.setInterval(() => { void refreshIfDue(); }, REFRESH_INTERVAL_MS);
 
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const res = await realFetch(input, init);

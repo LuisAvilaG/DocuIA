@@ -49,6 +49,30 @@ const Pill = ({ children, cls }: { children: React.ReactNode; cls: string }) => 
   <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${cls}`}>{children}</span>
 );
 
+type ValidationOutcome = { ok: boolean | null; severity: string | null };
+
+/**
+ * La severidad sólo describe qué ocurre si la regla falla. El distintivo de la
+ * tarjeta debe comunicar primero el resultado que obtuvo en este caso.
+ */
+function getRuleOutcomeTag(items: ValidationOutcome[]) {
+  if (items.length > 0 && items.every((item) => item.ok === true)) {
+    return { label: "Correcto", cls: "bg-success/10 text-success" };
+  }
+
+  const failedItem = items.find((item) => item.ok === false);
+  if (failedItem) {
+    const severityTags: Record<string, { label: string; cls: string }> = {
+      block: { label: "Bloqueante", cls: "bg-destructive/10 text-destructive" },
+      warn: { label: "Advertencia", cls: "bg-warning/10 text-warning" },
+      info: { label: "Info", cls: "bg-secondary text-muted-foreground" },
+    };
+    return severityTags[failedItem.severity ?? "warn"] ?? severityTags.warn;
+  }
+
+  return { label: "Por revisar", cls: "bg-secondary text-muted-foreground" };
+}
+
 export default async function ContractCasePage({ params }: { params: Promise<{ id: string }> }) {
   const session = await getTenantSession();
   if (!session) redirect("/login");
@@ -102,11 +126,6 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
     ok:    { Icon: ShieldCheck, cls: "bg-success/10 text-success", text: "Sin observaciones" },
     warn:  { Icon: ShieldAlert, cls: "bg-warning/10 text-warning", text: "Con advertencias" },
     block: { Icon: ShieldX,     cls: "bg-destructive/10 text-destructive", text: "Con bloqueos" },
-  };
-  const SEV_TAG: Record<string, { label: string; cls: string }> = {
-    block: { label: "Bloqueante", cls: "bg-destructive/10 text-destructive" },
-    warn:  { label: "Advertencia", cls: "bg-warning/10 text-warning" },
-    info:  { label: "Info", cls: "bg-success/10 text-success" },
   };
   const ruleGroups = new Map<string, typeof validations>();
   for (const v of validations) { const k = v.ruleName ?? "Validación"; (ruleGroups.get(k) ?? ruleGroups.set(k, []).get(k)!).push(v); }
@@ -174,29 +193,32 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
               </div>
             ) : (
               <div className="bg-card border border-border rounded-xl divide-y divide-border overflow-hidden">
-                {[...ruleGroups.entries()].map(([ruleName, items]) => (
-                  <div key={ruleName} className="px-5 py-3">
-                    <div className="flex items-center gap-2 mb-1.5">
-                      <p className="text-xs font-semibold text-foreground flex-1 min-w-0 truncate">{ruleName}</p>
-                      {items[0]?.severity && SEV_TAG[items[0].severity] && <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded shrink-0 ${SEV_TAG[items[0].severity].cls}`}>{SEV_TAG[items[0].severity].label}</span>}
-                    </div>
-                    <div className="space-y-1.5">
-                      {items.map((v) => {
-                        const Icon = v.ok === true ? CheckCircle2 : v.ok === false ? XCircle : MinusCircle;
-                        const cls = v.ok === true ? "text-success" : v.ok === false ? "text-destructive" : "text-muted-foreground";
-                        return (
-                          <div key={v.id} className="flex items-start gap-2">
-                            <Icon className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${cls}`} />
-                            <div className="min-w-0">
-                              <p className="text-[11px] text-foreground break-words"><span className="font-medium">{v.subject}</span>{v.status ? ` · ${v.status}` : ""}</p>
-                              {v.reason && <p className="text-[11px] text-muted-foreground break-words">{v.reason}</p>}
+                {[...ruleGroups.entries()].map(([ruleName, items]) => {
+                  const outcomeTag = getRuleOutcomeTag(items);
+                  return (
+                    <div key={ruleName} className="px-5 py-3">
+                      <div className="flex items-center gap-2 mb-1.5">
+                        <p className="text-xs font-semibold text-foreground flex-1 min-w-0 truncate">{ruleName}</p>
+                        <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded shrink-0 ${outcomeTag.cls}`}>{outcomeTag.label}</span>
+                      </div>
+                      <div className="space-y-1.5">
+                        {items.map((v) => {
+                          const Icon = v.ok === true ? CheckCircle2 : v.ok === false ? XCircle : MinusCircle;
+                          const cls = v.ok === true ? "text-success" : v.ok === false ? "text-destructive" : "text-muted-foreground";
+                          return (
+                            <div key={v.id} className="flex items-start gap-2">
+                              <Icon className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${cls}`} />
+                              <div className="min-w-0">
+                                <p className="text-[11px] text-foreground break-words"><span className="font-medium">{v.subject}</span>{v.status ? ` · ${v.status}` : ""}</p>
+                                {v.reason && <p className="text-[11px] text-muted-foreground break-words">{v.reason}</p>}
+                              </div>
                             </div>
-                          </div>
-                        );
-                      })}
+                          );
+                        })}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </Stage>}

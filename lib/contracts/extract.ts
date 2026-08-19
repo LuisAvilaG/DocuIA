@@ -65,6 +65,12 @@ async function geminiJson(parts: Part[], apiKeyOverride?: string): Promise<Recor
 // ── Types shared with the pipeline ────────────────────────────────────
 export interface DocTypeOption { key: string; name: string; hint?: string | null }
 export interface FieldDef { fieldKey: string; label: string; isList: boolean }
+export interface ExtractionLearning {
+  fieldKey: string;
+  originalValue: string | null;
+  correctedValue: string;
+  citation: string | null;
+}
 
 // A document source is either extracted text (born-digital) or the raw file
 // (scanned PDF/image) sent to Gemini multimodally for OCR + understanding.
@@ -76,7 +82,7 @@ export interface ClassifyFn {
   (source: ExtractSource, docTypes: DocTypeOption[], apiKey?: string, fileName?: string): Promise<string>;
 }
 export interface ExtractFn {
-  (source: ExtractSource, docTypeName: string, fields: FieldDef[], apiKey?: string):
+  (source: ExtractSource, docTypeName: string, fields: FieldDef[], apiKey?: string, learnings?: ExtractionLearning[]):
     Promise<{ values: Record<string, unknown>; citations: Record<string, unknown> }>;
 }
 
@@ -105,8 +111,13 @@ export const classifyDocument: ClassifyFn = async (source, docTypes, apiKey, fil
   return docTypes.some((d) => d.key === key) ? key : "unknown";
 };
 
-export const extractContractFields: ExtractFn = async (source, docTypeName, fields, apiKey) => {
+export const extractContractFields: ExtractFn = async (source, docTypeName, fields, apiKey, learnings = []) => {
   const fieldList = fields.map((f) => `- ${f.fieldKey} (${f.label})${f.isList ? " [lista]" : ""}`).join("\n");
+  const learningContext = learnings.length === 0 ? "" :
+    "\nAprendizajes aprobados por este tenant (son ejemplos de interpretación, NO copies sus valores si no están en este documento):\n" +
+    learnings.slice(0, 8).map((learning) =>
+      `- ${learning.fieldKey}: se corrigió de "${learning.originalValue?.slice(0, 180) || "sin valor"}" a "${learning.correctedValue.slice(0, 180)}"${learning.citation ? `, evidencia: "${learning.citation.slice(0, 180)}"` : ""}`,
+    ).join("\n") + "\nUsa estos ejemplos para reconocer el campo; extrae siempre el valor y la cita del documento actual.";
   const instruction =
     `Extrae los siguientes campos de un documento tipo "${docTypeName}". NO inventes: si un dato no está, usa null.\n` +
     `Campos:\n${fieldList}\n` +
@@ -114,7 +125,8 @@ export const extractContractFields: ExtractFn = async (source, docTypeName, fiel
     "Para campos [lista], values[campo] es un array y citations[campo] es un array de citas en el mismo orden.\n" +
     "IMPORTANTE para campos [lista]: incluye TODOS los elementos que aparezcan en CUALQUIER parte del documento " +
     "(todas las partes contratantes —mandante y contratista—, comparecencia, cláusulas de personería y bloque de firmas), " +
-    "sin omitir a ninguno. Para personas, usa el formato \"NOMBRE\" o \"NOMBRE (en representación de SOCIEDAD)\" cuando conste.";
+    "sin omitir a ninguno. Para personas, usa el formato \"NOMBRE\" o \"NOMBRE (en representación de SOCIEDAD)\" cuando conste." +
+    learningContext;
   const res = await geminiJson(buildParts(instruction, source), apiKey);
   return {
     values: (res.values ?? {}) as Record<string, unknown>,

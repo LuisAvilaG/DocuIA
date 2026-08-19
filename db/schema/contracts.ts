@@ -124,6 +124,24 @@ export const contractDocuments = pgTable("contract_documents", {
   index("contract_documents_case_idx").on(t.caseId),
 ]);
 
+// Correcciones aprobadas por un administrador del tenant. Se usan como
+// ejemplos acotados para la extracción futura del mismo tipo documental.
+export const contractExtractionLearnings = pgTable("contract_extraction_learnings", {
+  id:             bigserial("id", { mode: "number" }).primaryKey(),
+  organizationId: varchar("organization_id", { length: 36 }).notNull(),
+  documentType:   varchar("document_type", { length: 60 }).notNull(),
+  fieldKey:       varchar("field_key", { length: 80 }).notNull(),
+  originalValue:  text("original_value"),
+  correctedValue: text("corrected_value").notNull(),
+  citation:       text("citation"),
+  createdBy:      varchar("created_by", { length: 36 }),
+  isActive:       boolean("is_active").notNull().default(true),
+  createdAt:      timestamp("created_at").notNull().defaultNow(),
+}, (t) => [
+  index("contract_learning_org_type_idx").on(t.organizationId, t.documentType, t.fieldKey),
+  index("contract_learning_org_active_idx").on(t.organizationId, t.isActive),
+]);
+
 export const contractValidations = pgTable("contract_validations", {
   id:          bigserial("id", { mode: "number" }).primaryKey(),
   caseId:      varchar("case_id", { length: 36 }).notNull(),

@@ -16,9 +16,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   const kase = await db.query.contractCases.findFirst({
     where: and(eq(contractCases.id, id), eq(contractCases.organizationId, session.orgId)),
-    columns: { id: true, resultJson: true },
+    columns: { id: true, status: true, resultJson: true },
   });
   if (!kase) return NextResponse.json({ error: "Caso no encontrado" }, { status: 404 });
+  if (kase.status !== "validated") {
+    return NextResponse.json({ error: "Este caso todavía no está listo para aprobar. Espera a que finalice la validación." }, { status: 409 });
+  }
 
   const body = await req.json().catch(() => ({}));
   const reason = typeof body?.reason === "string" ? body.reason.trim() : "";

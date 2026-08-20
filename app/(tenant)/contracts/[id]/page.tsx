@@ -120,7 +120,11 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
     outputKey?: string; missing?: string[];
     decision?: { action?: string; reason?: string | null; byEmail?: string | null; at?: string | null; override?: boolean } | null;
   };
-  const status = STATUS[kase.status] ?? { label: kase.status, cls: "bg-secondary text-muted-foreground" };
+  const status = kase.status === "approved" && result.outputKey
+    ? { label: "Aprobado · documento generado", cls: "bg-success/10 text-success" }
+    : kase.status === "generated" && result.decision?.action === "approve"
+      ? { label: "Aprobado · documento generado", cls: "bg-success/10 text-success" }
+      : STATUS[kase.status] ?? { label: kase.status, cls: "bg-secondary text-muted-foreground" };
 
   const docs: CaseDoc[] = documents.map((d) => ({
     id: d.id, originalName: d.originalName, mimeType: d.mimeType, detectedType: d.detectedType,
@@ -195,7 +199,7 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
           )}
         </div>
 
-        <CaseActions caseId={kase.id} status={kase.status} verdict={validationsEnabled ? verdict : null} decision={result.decision} generationEnabled={generationEnabled} approvalEnabled={approvalFeature.isEnabled} allowOverride={approvalFeature.config.allow_override !== false} canManage={session.role === "admin"} />
+        <CaseActions caseId={kase.id} caseTitle={kase.title || `Caso ${kase.id.slice(0, 8)}`} status={kase.status} verdict={validationsEnabled ? verdict : null} decision={result.decision} hasOutput={Boolean(result.outputKey)} generationEnabled={generationEnabled} approvalEnabled={approvalFeature.isEnabled} allowOverride={approvalFeature.config.allow_override !== false} canManage={session.role === "admin"} />
         {isProcessing && <p className="text-xs text-warning">El caso está en proceso. La clasificación, extracción y validación aparecerán aquí al terminar.</p>}
         {kase.errorMessage && <div className="rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-xs px-3 py-2">{kase.errorMessage}</div>}
 
@@ -298,7 +302,9 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
                   )}
                 </div>
               ) : (
-                <p className="text-xs text-muted-foreground">Aún no se ha generado. Usa <span className="text-foreground font-medium">“Generar documento”</span> arriba.</p>
+                <p className="text-xs text-muted-foreground">{approvalFeature.isEnabled
+                  ? "El documento se habilitará cuando un administrador apruebe el caso."
+                  : "El documento se habilitará cuando termine la validación."}</p>
               )}
             </div>
           </Stage>}

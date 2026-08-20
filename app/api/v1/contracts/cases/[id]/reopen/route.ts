@@ -21,15 +21,21 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     columns: { id: true, status: true, resultJson: true },
   });
   if (!kase) return NextResponse.json({ error: "Caso no encontrado" }, { status: 404 });
-  if (kase.status !== "approved" && kase.status !== "rejected") {
+  if (kase.status !== "approved" && kase.status !== "rejected" && kase.status !== "generated") {
     return NextResponse.json({ error: "Solo se puede reabrir un caso ya decidido." }, { status: 400 });
   }
 
   const prev = (kase.resultJson ?? {}) as Record<string, unknown>;
   const decision = prev.decision ? [...((prev.decisionHistory as unknown[]) ?? []), prev.decision] : (prev.decisionHistory ?? []);
+  const { outputKey, missing, generatedAt, ...resultWithoutCurrentOutput } = prev;
+  const outputHistory = outputKey
+    ? [...((prev.outputHistory as unknown[]) ?? []), { outputKey, missing: missing ?? [], generatedAt: generatedAt ?? null }]
+    : prev.outputHistory ?? [];
   await db.update(contractCases).set({
     status: "validated",
-    resultJson: { ...prev, decision: null, decisionHistory: decision },
+    // A document produced before reopening is no longer the current output.
+    // Keep an audit reference, but require a fresh approval and generation.
+    resultJson: { ...resultWithoutCurrentOutput, decision: null, decisionHistory: decision, outputHistory },
     updatedAt: new Date(),
   }).where(eq(contractCases.id, id));
 

@@ -64,7 +64,7 @@ export function ApprovalsClient({ cases }: { cases: PendingCase[] }) {
                 <div key={c.id} className="flex items-center gap-3 px-5 py-3.5">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <Link href={`/contracts/${c.id}`} className="text-sm font-medium text-foreground truncate hover:text-primary transition-colors">{c.title}</Link>
+                      <Link href={`/cases/${c.id}`} className="text-sm font-medium text-foreground truncate hover:text-primary transition-colors">{c.title}</Link>
                       {v && <span className={`inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full ${v.cls}`}><v.Icon className="w-3 h-3" /> {v.text}</span>}
                     </div>
                     <p className="text-[11px] text-muted-foreground tabular-nums mt-0.5">{new Date(c.createdAt).toLocaleString("es-MX")} · {c.validations} validación(es)</p>
@@ -74,7 +74,7 @@ export function ApprovalsClient({ cases }: { cases: PendingCase[] }) {
                       className="inline-flex items-center gap-1 rounded-md bg-success/15 text-success px-2.5 py-1.5 text-[11px] font-medium hover:bg-success/25 transition-colors"><CheckCircle2 className="w-3.5 h-3.5" /> Aprobar</button>
                     <button onClick={() => { setReason(""); setMsg(null); setDialog({ id: c.id, action: "reject", blocked: c.verdict === "block" }); }}
                       className="inline-flex items-center gap-1 rounded-md bg-destructive/10 text-destructive px-2.5 py-1.5 text-[11px] font-medium hover:bg-destructive/20 transition-colors"><XCircle className="w-3.5 h-3.5" /> Rechazar</button>
-                    <Link href={`/contracts/${c.id}`} className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary" title="Ver caso"><ArrowRight className="w-3.5 h-3.5" /></Link>
+                    <Link href={`/cases/${c.id}`} className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary" title="Ver caso"><ArrowRight className="w-3.5 h-3.5" /></Link>
                   </div>
                 </div>
               );

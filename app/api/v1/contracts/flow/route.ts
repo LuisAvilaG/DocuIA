@@ -4,7 +4,7 @@ import { getTenantSession } from "@/lib/auth/jwt";
 import { isProductActive } from "@/lib/products";
 import { db } from "@/lib/db";
 import { contractFlows } from "@/db/schema";
-import { eq, desc } from "drizzle-orm";
+import { and, eq, desc } from "drizzle-orm";
 import { flowGraphSchema, hasCycle, validateFlowReferences } from "@/lib/contracts/flow";
 import { getContractFlowLimit, getContractFlowCount } from "@/lib/contracts/plan";
 import { isFeatureEnabled } from "@/lib/features";
@@ -21,15 +21,24 @@ async function featureGuard(orgId: string) {
 const EMPTY_GRAPH = { nodes: [], edges: [] };
 
 // List the org's flows + the quota, for the picker.
-export async function GET() {
+export async function GET(req: NextRequest) {
   const session = await getTenantSession();
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
-  if (!await featureGuard(session.orgId)) return NextResponse.json({ error: "El constructor de flujos no está habilitado" }, { status: 403 });
+  const activeOnly = req.nextUrl.searchParams.get("activeOnly") === "1";
+  if (activeOnly) {
+    if (!(await guard(session.orgId)) || !(await isFeatureEnabled(session.orgId, "contract_ai_extraction"))) {
+      return NextResponse.json({ error: "El análisis de contratos no está habilitado" }, { status: 403 });
+    }
+  } else if (!await featureGuard(session.orgId)) {
+    return NextResponse.json({ error: "El constructor de flujos no está habilitado" }, { status: 403 });
+  }
 
   const [rows, maxFlows] = await Promise.all([
     db.query.contractFlows.findMany({
-      where: eq(contractFlows.organizationId, session.orgId),
-      columns: { id: true, name: true, version: true, updatedAt: true, graphJson: true },
+      where: activeOnly
+        ? and(eq(contractFlows.organizationId, session.orgId), eq(contractFlows.isActive, true))
+        : eq(contractFlows.organizationId, session.orgId),
+      columns: { id: true, name: true, version: true, isActive: true, updatedAt: true, graphJson: true },
       orderBy: [desc(contractFlows.updatedAt)],
     }),
     getContractFlowLimit(session.orgId),
@@ -69,6 +78,7 @@ export async function POST(req: NextRequest) {
   if (refErr) return NextResponse.json({ error: refErr }, { status: 400 });
 
   const id = randomUUID();
-  await db.insert(contractFlows).values({ id, organizationId: session.orgId, name, graphJson: parsed.data });
+  // A flow must be reviewed before it can affect a real case.
+  await db.insert(contractFlows).values({ id, organizationId: session.orgId, name, graphJson: parsed.data, isActive: false });
   return NextResponse.json({ ok: true, id, name, version: 1 }, { status: 201 });
 }

@@ -33,6 +33,6 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     updatedAt: new Date(),
   }).where(eq(contractCases.id, id));
 
-  await logAudit({ orgId: session.orgId, userId: session.sub, action: "contract.reopened", resourceType: "contract_case", resourceId: id });
+  await logAudit({ orgId: session.orgId, userId: session.sub, userEmail: session.email, action: "contract.reopened", resourceType: "contract_case", resourceId: id });
   return NextResponse.json({ ok: true, status: "validated" });
 }

@@ -6,7 +6,7 @@ import Link from "next/link";
 import { Upload, Loader2, FileText, ArrowRight, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-interface CaseRow { id: string; title: string | null; status: string; createdAt: string; flowName: string }
+interface CaseRow { id: string; title: string | null; status: string; createdAt: string; updatedAt: string; flowName: string }
 interface FlowOption {
   id: string;
   name: string;
@@ -36,7 +36,7 @@ export function ContractsClient({ cases }: { cases: CaseRow[] }) {
   const [flowsError, setFlowsError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/v1/contracts/flow")
+    fetch("/api/v1/contracts/flow?activeOnly=1")
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error ?? "No se pudieron cargar los flujos");
@@ -75,8 +75,8 @@ export function ContractsClient({ cases }: { cases: CaseRow[] }) {
     <div className="flex-1 overflow-y-auto p-6">
       <div className="max-w-3xl mx-auto space-y-6">
         <div>
-          <h1 className="text-base font-semibold text-foreground">Contract Intelligence</h1>
-          <p className="text-xs text-muted-foreground mt-1">Sube los documentos de un caso; la IA los clasifica y extrae los datos con trazabilidad.</p>
+          <h1 className="text-base font-semibold text-foreground">Casos</h1>
+          <p className="text-xs text-muted-foreground mt-1">Crea un caso para clasificar, extraer y validar documentos. El historial conserva toda su trazabilidad.</p>
         </div>
 
         {/* Nuevo caso */}
@@ -142,17 +142,23 @@ export function ContractsClient({ cases }: { cases: CaseRow[] }) {
 
         {/* Lista de casos */}
         <div className="bg-card border border-border rounded-xl overflow-hidden">
-          <div className="px-5 py-3 border-b border-border"><h2 className="text-sm font-medium text-foreground">Casos</h2></div>
+          <div className="flex items-center justify-between gap-4 px-5 py-3 border-b border-border">
+            <div>
+              <h2 className="text-sm font-medium text-foreground">Casos recientes</h2>
+              <p className="mt-0.5 text-[11px] text-muted-foreground">Los últimos 10 actualizados.</p>
+            </div>
+            <Link href="/cases/history" className="shrink-0 text-[11px] font-medium text-primary hover:underline">Ver historial →</Link>
+          </div>
           {cases.length === 0 ? (
             <p className="px-5 py-8 text-center text-xs text-muted-foreground">Aún no hay casos. Sube documentos arriba para empezar.</p>
           ) : (
             <div className="divide-y divide-border">
               {cases.map((c) => (
-                <Link key={c.id} href={`/contracts/${c.id}`} className="flex items-center gap-3 px-5 py-3 hover:bg-accent/40 transition-colors">
+                <Link key={c.id} href={`/cases/${c.id}`} className="flex items-center gap-3 px-5 py-3 hover:bg-accent/40 transition-colors">
                   <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
                   <div className="flex-1 min-w-0">
                     <p className="text-xs font-medium text-foreground truncate">{c.title || `Caso ${c.id.slice(0, 8)}`}</p>
-                    <p className="text-[11px] text-muted-foreground">{new Date(c.createdAt).toLocaleString("es-MX")} · Flujo: {c.flowName}</p>
+                    <p className="text-[11px] text-muted-foreground">Actualizado {new Date(c.updatedAt).toLocaleString("es-MX")} · Flujo: {c.flowName}</p>
                   </div>
                   <span className={cn("text-[11px] font-medium", STATUS_COLOR[c.status] ?? "text-muted-foreground")}>
                     {STATUS_LABEL[c.status] ?? c.status}

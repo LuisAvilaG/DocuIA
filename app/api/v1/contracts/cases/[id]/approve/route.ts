@@ -46,6 +46,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     updatedAt: new Date(),
   }).where(eq(contractCases.id, id));
 
-  await logAudit({ orgId: session.orgId, userId: session.sub, action: "contract.approved", resourceType: "contract_case", resourceId: id, metadata: { override: blocked && override } });
+  await logAudit({ orgId: session.orgId, userId: session.sub, userEmail: session.email, action: "contract.approved", resourceType: "contract_case", resourceId: id, metadata: { override: blocked && override, reason: reason || null } });
   return NextResponse.json({ ok: true, status: "approved" });
 }

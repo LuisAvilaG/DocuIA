@@ -3,10 +3,11 @@ import { getTenantSession } from "@/lib/auth/jwt";
 import { isProductActive } from "@/lib/products";
 import { db } from "@/lib/db";
 import { contractCases, contractFlows } from "@/db/schema";
-import { eq, desc } from "drizzle-orm";
+import { and, eq, desc } from "drizzle-orm";
 import { createContractCase, type CaseFileInput } from "@/lib/contracts/pipeline";
 import { enqueueContractCase } from "@/lib/queue";
 import { isFeatureEnabled } from "@/lib/features";
+import { logAudit } from "@/lib/audit/log";
 
 const ALLOWED = new Set(["application/pdf", "image/jpeg", "image/png", "image/webp", "image/tiff", "text/plain", "text/xml", "application/xml"]);
 const MAX_FILE = 20 * 1024 * 1024;
@@ -58,6 +59,15 @@ export async function POST(req: NextRequest) {
     const flowId = String(form.get("flowId") ?? "") || undefined;
     const rawFiles = form.getAll("files").filter((f): f is File => f instanceof File);
     if (rawFiles.length === 0) return NextResponse.json({ error: "Se requiere al menos un archivo" }, { status: 400 });
+    if (flowId) {
+      const selectedFlow = await db.query.contractFlows.findFirst({
+        where: and(eq(contractFlows.id, flowId), eq(contractFlows.organizationId, session.orgId)),
+        columns: { id: true, isActive: true },
+      });
+      if (!selectedFlow || !selectedFlow.isActive) {
+        return NextResponse.json({ error: "El flujo seleccionado ya no está activo. Elige otro flujo." }, { status: 400 });
+      }
+    }
 
     const files: CaseFileInput[] = [];
     for (const f of rawFiles) {
@@ -67,6 +77,24 @@ export async function POST(req: NextRequest) {
     }
 
     const caseId = await createContractCase({ organizationId: session.orgId, createdBy: session.sub, title, flowId, files });
+    await logAudit({
+      orgId: session.orgId,
+      userId: session.sub,
+      userEmail: session.email,
+      action: "contract.case_created",
+      resourceType: "contract_case",
+      resourceId: caseId,
+      metadata: { flowId: flowId ?? null, files: rawFiles.map((file) => file.name) },
+    });
+    await logAudit({
+      orgId: session.orgId,
+      userId: session.sub,
+      userEmail: session.email,
+      action: "contract.documents_uploaded",
+      resourceType: "contract_case",
+      resourceId: caseId,
+      metadata: { files: rawFiles.map((file) => file.name) },
+    });
     await enqueueContractCase(caseId);
     return NextResponse.json({ ok: true, status: "queued", caseId }, { status: 201 });
   } catch (err) {

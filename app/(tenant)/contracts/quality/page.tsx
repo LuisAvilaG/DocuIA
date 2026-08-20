@@ -12,7 +12,7 @@ export default async function ContractQualityPage() {
   if (!session) redirect("/login");
   if (!(await isProductActive(session.orgId, "contract_intelligence"))) redirect("/dashboard");
   if (!(await isFeatureEnabled(session.orgId, "contract_ai_extraction"))) redirect("/contracts/dashboard");
-  if (session.role !== "admin") redirect("/contracts");
+  if (session.role !== "admin") redirect("/cases");
 
   const learnings = await db.query.contractExtractionLearnings.findMany({
     where: and(eq(contractExtractionLearnings.organizationId, session.orgId), eq(contractExtractionLearnings.isActive, true)),

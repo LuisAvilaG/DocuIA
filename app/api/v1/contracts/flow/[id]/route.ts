@@ -30,7 +30,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
   const parsed = flowGraphSchema.safeParse(row.graphJson);
   return NextResponse.json({
-    flow: { id: row.id, name: row.name, version: row.version, graph: parsed.success ? parsed.data : { nodes: [], edges: [] }, valid: parsed.success },
+    flow: { id: row.id, name: row.name, version: row.version, isActive: row.isActive, graph: parsed.success ? parsed.data : { nodes: [], edges: [] }, valid: parsed.success },
   });
 }
 
@@ -80,4 +80,23 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
     .returning({ id: contractFlows.id });
   if (res.length === 0) return NextResponse.json({ error: "Flujo no encontrado" }, { status: 404 });
   return NextResponse.json({ ok: true });
+}
+
+// Activation is deliberately separate from graph saving: it makes the moment a
+// draft can be selected for new cases explicit and easy to audit in the UI.
+export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const session = await getTenantSession();
+  if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+  if (session.role !== "admin") return NextResponse.json({ error: "Solo administradores" }, { status: 403 });
+  if (!await featureGuard(session.orgId)) return NextResponse.json({ error: "El constructor de flujos no está habilitado" }, { status: 403 });
+  const { id } = await params;
+  const body = await req.json().catch(() => null) as { isActive?: unknown } | null;
+  if (typeof body?.isActive !== "boolean") return NextResponse.json({ error: "Estado de flujo inválido" }, { status: 400 });
+
+  const updated = await db.update(contractFlows)
+    .set({ isActive: body.isActive, updatedAt: new Date() })
+    .where(and(eq(contractFlows.id, id), eq(contractFlows.organizationId, session.orgId)))
+    .returning({ id: contractFlows.id, isActive: contractFlows.isActive });
+  if (updated.length === 0) return NextResponse.json({ error: "Flujo no encontrado" }, { status: 404 });
+  return NextResponse.json({ ok: true, flow: updated[0] });
 }

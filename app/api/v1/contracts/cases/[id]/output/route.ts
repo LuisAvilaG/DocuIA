@@ -6,6 +6,7 @@ import { and, eq } from "drizzle-orm";
 import { getFileStream } from "@/lib/storage/minio";
 import { Readable } from "node:stream";
 import { isFeatureEnabled } from "@/lib/features";
+import { logAudit } from "@/lib/audit/log";
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getTenantSession();
@@ -21,6 +22,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   });
   const outputKey = (kase?.resultJson as { outputKey?: string } | null)?.outputKey;
   if (!outputKey) return NextResponse.json({ error: "Documento no generado" }, { status: 404 });
+  await logAudit({ orgId: session.orgId, userId: session.sub, userEmail: session.email, action: "contract.output_viewed", resourceType: "contract_case", resourceId: id });
 
   try {
     const nodeStream = await getFileStream(outputKey);

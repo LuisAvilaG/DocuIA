@@ -9,6 +9,7 @@ import { loadContractPlan } from "./plan";
 import { buildFlowTrace } from "./trace";
 import { getFeature, isFeatureEnabled } from "@/lib/features";
 import { normalizeContractDate } from "./normalization";
+import { logAudit } from "@/lib/audit/log";
 
 export interface CaseFileInput { buffer: Buffer; fileName: string; mimeType: string }
 
@@ -96,6 +97,7 @@ export async function processContractCase(caseId: string, deps: ContractExtractD
   }
 
   await db.update(contractCases).set({ status: "processing", updatedAt: new Date() }).where(eq(contractCases.id, caseId));
+  await logAudit({ orgId: kase.organizationId, action: "contract.processing_started", resourceType: "contract_case", resourceId: caseId });
 
   try {
     const [docs, plan, validationsFeature, obligationsFeature, learnings] = await Promise.all([
@@ -197,12 +199,21 @@ export async function processContractCase(caseId: string, deps: ContractExtractD
       },
       updatedAt: new Date(),
     }).where(eq(contractCases.id, caseId));
+    await logAudit({
+      orgId: kase.organizationId,
+      action: "contract.processing_completed",
+      resourceType: "contract_case",
+      resourceId: caseId,
+      metadata: { documents: summary.length, validations: validations.length, verdict },
+    });
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
     await db.update(contractCases).set({
       status: "failed",
-      errorMessage: err instanceof Error ? err.message : String(err),
+      errorMessage: message,
       updatedAt: new Date(),
     }).where(eq(contractCases.id, caseId));
+    await logAudit({ orgId: kase.organizationId, action: "contract.processing_failed", resourceType: "contract_case", resourceId: caseId, metadata: { message } });
     throw err;
   }
 }

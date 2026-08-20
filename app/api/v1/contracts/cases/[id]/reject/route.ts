@@ -32,6 +32,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     updatedAt: new Date(),
   }).where(eq(contractCases.id, id));
 
-  await logAudit({ orgId: session.orgId, userId: session.sub, action: "contract.rejected", resourceType: "contract_case", resourceId: id });
+  await logAudit({ orgId: session.orgId, userId: session.sub, userEmail: session.email, action: "contract.rejected", resourceType: "contract_case", resourceId: id, metadata: { reason } });
   return NextResponse.json({ ok: true, status: "rejected" });
 }

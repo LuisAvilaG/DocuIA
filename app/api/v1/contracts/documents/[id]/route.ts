@@ -10,7 +10,7 @@ import { isFeatureEnabled } from "@/lib/features";
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getTenantSession();
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
-  if (session.role === "viewer" || session.role === "api_key") return NextResponse.json({ error: "No tienes permiso para corregir extracciones." }, { status: 403 });
+  if (session.role !== "admin") return NextResponse.json({ error: "Solo administradores pueden corregir extracciones." }, { status: 403 });
   if (!await isFeatureEnabled(session.orgId, "contract_ai_extraction")) return NextResponse.json({ error: "La extracción de contratos no está habilitada." }, { status: 403 });
 
   const body = await request.json().catch(() => null) as { fieldKey?: unknown; value?: unknown; applyToFuture?: unknown } | null;
@@ -84,10 +84,11 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   await logAudit({
     orgId: session.orgId,
     userId: session.sub,
+    userEmail: session.email,
     action: applyToFuture ? "contract.extraction_corrected_and_learned" : "contract.extraction_corrected",
     resourceType: "contract_document",
     resourceId: id,
-    metadata: { caseId: kase.id, fieldKey, appliedToFuture: applyToFuture },
+    metadata: { caseId: kase.id, fieldKey, originalValue, correctedValue: value, appliedToFuture: applyToFuture },
   });
 
   return NextResponse.json({ ok: true, extractedJson: values, appliedToFuture: applyToFuture });

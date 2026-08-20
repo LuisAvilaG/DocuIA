@@ -7,7 +7,7 @@ import { uploadFile } from "@/lib/storage/minio";
 import { renderTemplate, renderPdf, renderDocPdf, renderHtmlPdf, defaultTemplate, assembleCaseData } from "@/lib/contracts/generate";
 import { loadContractPlan } from "@/lib/contracts/plan";
 import { logAudit } from "@/lib/audit/log";
-import { isFeatureEnabled } from "@/lib/features";
+import { getFeature, isFeatureEnabled } from "@/lib/features";
 
 export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getTenantSession();
@@ -22,6 +22,16 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     where: and(eq(contractCases.id, id), eq(contractCases.organizationId, session.orgId)),
   });
   if (!kase) return NextResponse.json({ error: "Caso no encontrado" }, { status: 404 });
+
+  const approvalFeature = await getFeature(session.orgId, "contract_approval_workflow");
+  const generationAllowed = approvalFeature.isEnabled
+    ? kase.status === "approved"
+    : kase.status === "validated";
+  if (!generationAllowed) {
+    return NextResponse.json({ error: approvalFeature.isEnabled
+      ? "Primero aprueba el caso para generar el documento."
+      : "El caso debe terminar la validación antes de generar el documento." }, { status: 409 });
+  }
 
   try {
     const [docs, validations, plan] = await Promise.all([
@@ -53,8 +63,10 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
 
     const prevResult = (kase.resultJson ?? {}) as Record<string, unknown>;
     await db.update(contractCases).set({
-      status: "generated",
-      resultJson: { ...prevResult, outputKey, missing },
+      // The approval remains the source of truth. Generation is an output of
+      // that decision, not a replacement for it in the case lifecycle.
+      status: kase.status,
+      resultJson: { ...prevResult, outputKey, missing, generatedAt: new Date().toISOString() },
       updatedAt: new Date(),
     }).where(eq(contractCases.id, id));
 

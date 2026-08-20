@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import { db } from "@/lib/db";
-import { contractCases, contractDocuments, contractExtractionLearnings, contractValidations, contractObligations } from "@/db/schema";
+import { contractCases, contractDocuments, contractExtractionLearnings, contractValidations, contractObligations, contractVisualTrainingVariants } from "@/db/schema";
 import { and, desc, eq } from "drizzle-orm";
 import { uploadFile, getFileBuffer } from "@/lib/storage/minio";
 import { realExtractDeps, type ContractExtractDeps, type ExtractSource } from "./extract";
@@ -10,6 +10,7 @@ import { buildFlowTrace } from "./trace";
 import { getFeature, isFeatureEnabled } from "@/lib/features";
 import { normalizeContractDate } from "./normalization";
 import { logAudit } from "@/lib/audit/log";
+import type { VisualTrainingVariant } from "./visual-training";
 
 export interface CaseFileInput { buffer: Buffer; fileName: string; mimeType: string }
 
@@ -111,6 +112,30 @@ export async function processContractCase(caseId: string, deps: ContractExtractD
         columns: { documentType: true, fieldKey: true, originalValue: true, correctedValue: true, citation: true },
       }),
     ]);
+    // A visual guide is scoped to the exact flow selected for this case. It is
+    // optional by design: documents without a matching trained layout retain
+    // the regular whole-document extraction path.
+    const visualRows = plan.flowId ? await db.query.contractVisualTrainingVariants.findMany({
+      where: and(
+        eq(contractVisualTrainingVariants.organizationId, kase.organizationId),
+        eq(contractVisualTrainingVariants.flowId, plan.flowId),
+        eq(contractVisualTrainingVariants.isActive, true),
+      ),
+      columns: { id: true, name: true, documentType: true, signatureText: true, mappingsJson: true },
+    }) : [];
+    const visualByType = new Map<string, VisualTrainingVariant[]>();
+    for (const row of visualRows) {
+      const rawMappings = Array.isArray(row.mappingsJson) ? row.mappingsJson : [];
+      const mappings = rawMappings.filter((mapping): mapping is VisualTrainingVariant["mappings"][number] =>
+        !!mapping && typeof mapping === "object" &&
+        typeof (mapping as { fieldKey?: unknown }).fieldKey === "string" &&
+        Number.isInteger((mapping as { page?: unknown }).page) &&
+        ["x", "y", "width", "height"].every((key) => typeof (mapping as Record<string, unknown>)[key] === "number"),
+      );
+      (visualByType.get(row.documentType) ?? visualByType.set(row.documentType, []).get(row.documentType)!).push({
+        id: row.id, name: row.name, documentType: row.documentType, signatureText: row.signatureText, mappings,
+      });
+    }
     const learningsByType = new Map<string, typeof learnings>();
     for (const learning of learnings) (learningsByType.get(learning.documentType) ?? learningsByType.set(learning.documentType, []).get(learning.documentType)!).push(learning);
 
@@ -132,7 +157,7 @@ export async function processContractCase(caseId: string, deps: ContractExtractD
       // find them.
       const fields = plan.fieldsByType[typeKey] ?? [];
 
-      const { values, citations } = await deps.extract(source, typeName, fields, undefined, learningsByType.get(typeKey) ?? []);
+      const { values, citations } = await deps.extract(source, typeName, fields, undefined, learningsByType.get(typeKey) ?? [], visualByType.get(typeKey) ?? []);
 
       await db.update(contractDocuments).set({
         detectedType:  typeKey,

@@ -2,6 +2,8 @@
 // The functions here are the REAL implementations; the pipeline accepts them as
 // injectable deps so it can be tested with stubs (no API key required).
 
+import { visualTrainingPrompt, type VisualTrainingVariant } from "./visual-training";
+
 const FLASH_MODEL = "gemini-2.5-flash";
 const GEMINI_TIMEOUT_MS = Number(process.env.GEMINI_TIMEOUT_MS) || 90_000;
 const RETRYABLE = new Set([429, 500, 502, 503, 504]);
@@ -82,7 +84,7 @@ export interface ClassifyFn {
   (source: ExtractSource, docTypes: DocTypeOption[], apiKey?: string, fileName?: string): Promise<string>;
 }
 export interface ExtractFn {
-  (source: ExtractSource, docTypeName: string, fields: FieldDef[], apiKey?: string, learnings?: ExtractionLearning[]):
+  (source: ExtractSource, docTypeName: string, fields: FieldDef[], apiKey?: string, learnings?: ExtractionLearning[], visualVariants?: VisualTrainingVariant[]):
     Promise<{ values: Record<string, unknown>; citations: Record<string, unknown> }>;
 }
 
@@ -111,7 +113,7 @@ export const classifyDocument: ClassifyFn = async (source, docTypes, apiKey, fil
   return docTypes.some((d) => d.key === key) ? key : "unknown";
 };
 
-export const extractContractFields: ExtractFn = async (source, docTypeName, fields, apiKey, learnings = []) => {
+export const extractContractFields: ExtractFn = async (source, docTypeName, fields, apiKey, learnings = [], visualVariants = []) => {
   const fieldList = fields.map((f) => `- ${f.fieldKey} (${f.label})${f.isList ? " [lista]" : ""}`).join("\n");
   const learningContext = learnings.length === 0 ? "" :
     "\nAprendizajes aprobados por este tenant (son ejemplos de interpretación, NO copies sus valores si no están en este documento):\n" +
@@ -126,7 +128,7 @@ export const extractContractFields: ExtractFn = async (source, docTypeName, fiel
     "IMPORTANTE para campos [lista]: incluye TODOS los elementos que aparezcan en CUALQUIER parte del documento " +
     "(todas las partes contratantes —mandante y contratista—, comparecencia, cláusulas de personería y bloque de firmas), " +
     "sin omitir a ninguno. Para personas, usa el formato \"NOMBRE\" o \"NOMBRE (en representación de SOCIEDAD)\" cuando conste." +
-    learningContext;
+    learningContext + visualTrainingPrompt(visualVariants);
   const res = await geminiJson(buildParts(instruction, source), apiKey);
   return {
     values: (res.values ?? {}) as Record<string, unknown>,

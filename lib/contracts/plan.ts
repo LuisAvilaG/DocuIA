@@ -31,6 +31,7 @@ export async function getContractFlowCount(orgId: string): Promise<number> {
 // otherwise we fall back to the per-table config so nothing breaks.
 export interface ContractPlan {
   source:       "flow" | "tables";
+  flowId:       string | null;
   flow:         FlowGraph | null;
   docTypes:     Array<{ key: string; name: string; hint: string | null }>;
   fieldsByType: Record<string, FieldDef[]>;
@@ -62,6 +63,7 @@ export async function loadContractPlan(orgId: string, flowId?: string | null): P
     const c = compileFlow(active.graph);
     return {
       source: "flow",
+      flowId: active.id,
       flow: active.graph,
       docTypes: c.docTypes,
       fieldsByType: c.fieldsByType,
@@ -81,6 +83,7 @@ export async function loadContractPlan(orgId: string, flowId?: string | null): P
 
   return {
     source: "tables",
+    flowId: null,
     flow: null,
     docTypes: config.docTypes.map((d) => ({ key: d.key, name: d.name, hint: d.hint ?? null })),
     fieldsByType: config.fieldsByType,

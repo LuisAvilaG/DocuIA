@@ -145,7 +145,7 @@ export function ContractsClient({ cases }: { cases: CaseRow[] }) {
           <div className="flex items-center justify-between gap-4 px-5 py-3 border-b border-border">
             <div>
               <h2 className="text-sm font-medium text-foreground">Casos recientes</h2>
-              <p className="mt-0.5 text-[11px] text-muted-foreground">Los últimos 10 actualizados.</p>
+              <p className="mt-0.5 text-[11px] text-muted-foreground">Los últimos 5 actualizados.</p>
             </div>
             <Link href="/cases/history" className="shrink-0 text-[11px] font-medium text-primary hover:underline">Ver historial →</Link>
           </div>

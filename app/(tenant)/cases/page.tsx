@@ -18,7 +18,7 @@ export default async function CasesPage() {
       where: eq(contractCases.organizationId, session.orgId),
       columns: { id: true, title: true, status: true, flowId: true, createdAt: true, updatedAt: true },
       orderBy: [desc(contractCases.updatedAt)],
-      limit: 10,
+      limit: 5,
     }),
     db.query.contractFlows.findMany({
       where: eq(contractFlows.organizationId, session.orgId),

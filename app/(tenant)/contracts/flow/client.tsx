@@ -9,9 +9,10 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import {
-  Loader2, Save, Plus, Trash2, FileInput, ListChecks, ShieldCheck, FileText, ChevronDown, ChevronUp, StickyNote,
+  Loader2, Save, Plus, Trash2, FileInput, ListChecks, ShieldCheck, FileText, ChevronDown, ChevronUp, StickyNote, PencilRuler,
 } from "lucide-react";
 import { DocEditor } from "./doc-editor";
+import { VisualTrainingWorkspace, type TrainingField } from "./visual-training-workspace";
 
 // Seed the WYSIWYG editor from stored HTML, else migrate the old text body, else blank.
 function genInitialHtml(data: Record<string, unknown>): string {
@@ -132,9 +133,11 @@ function IntakeForm({ data, patch, order, total, onMove }: { data: AnyData; patc
 }
 
 interface FieldT { fieldKey: string; label: string; isList: boolean }
-function ExtractForm({ data, patch, docTypes }: { data: AnyData; patch: (p: AnyData) => void; docTypes: DocTypeOpt[] }) {
+function ExtractForm({ data, patch, docTypes, onTrain }: { data: AnyData; patch: (p: AnyData) => void; docTypes: DocTypeOpt[]; onTrain: (input: { documentType: string; documentName: string; fields: TrainingField[] }) => void }) {
   const fields = (Array.isArray(data.fields) ? data.fields : []) as FieldT[];
   const set = (f: FieldT[]) => patch({ fields: f });
+  const documentType = String(data.docTypeKey ?? "");
+  const documentName = docTypes.find((item) => item.key === documentType)?.name || documentType;
   return (
     <div className="space-y-3">
       <FieldRow label="Documento del que extrae">
@@ -154,6 +157,10 @@ function ExtractForm({ data, patch, docTypes }: { data: AnyData; patch: (p: AnyD
           ))}
           <button onClick={() => set([...fields, { fieldKey: "", label: "", isList: false }])} className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline"><Plus className="w-3 h-3" /> Agregar campo</button>
         </div>
+      </div>
+      <div className="rounded-lg border border-primary/20 bg-primary/[0.035] p-3">
+        <div className="flex items-start gap-2"><span className="mt-0.5 rounded-md bg-primary/10 p-1 text-primary"><PencilRuler className="h-3.5 w-3.5" /></span><div><p className="text-[11px] font-semibold text-foreground">Entrenar con documento</p><p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">Sube una muestra y marca visualmente dónde aparece cada campo. Crea otra variante solo cuando cambie el formato.</p></div></div>
+        <button type="button" disabled={!documentType || fields.some((field) => !field.fieldKey)} onClick={() => onTrain({ documentType, documentName, fields: fields.filter((field) => field.fieldKey).map((field) => ({ fieldKey: field.fieldKey, label: field.label || field.fieldKey })) })} className="mt-2.5 inline-flex items-center gap-1.5 rounded-md border border-primary/30 bg-card px-2.5 py-1.5 text-[11px] font-medium text-primary hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-50"><PencilRuler className="h-3.5 w-3.5" /> Abrir entrenamiento visual</button>
       </div>
     </div>
   );
@@ -425,6 +432,7 @@ function FlowBuilder({ flowId }: { flowId: string }) {
   const [name, setName] = useState("Flujo de contratos");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [docEditorOpen, setDocEditorOpen] = useState(false);
+  const [visualTraining, setVisualTraining] = useState<{ documentType: string; documentName: string; fields: TrainingField[] } | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -622,7 +630,7 @@ function FlowBuilder({ flowId }: { flowId: string }) {
                 <button onClick={deleteSelected} className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-destructive"><Trash2 className="w-3.5 h-3.5" /> Eliminar</button>
               </div>
               {selected.type === "intake"   && <IntakeForm   data={selected.data as AnyData} patch={patchSelected} order={intakeOrder.get(selected.id)} total={intakeOrder.size} onMove={(dir) => moveIntake(selected.id, dir)} />}
-              {selected.type === "extract"  && <ExtractForm  data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} />}
+              {selected.type === "extract"  && <ExtractForm  data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} onTrain={setVisualTraining} />}
               {selected.type === "validate" && <ValidateForm data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} fieldsByType={fieldsByType} />}
               {selected.type === "generate" && <GenerateForm data={selected.data as AnyData} patch={patchSelected} onOpenEditor={() => setDocEditorOpen(true)} />}
               {selected.type === "note" && <p className="text-xs leading-relaxed text-muted-foreground">Edita el texto directamente en el bloque. Arrastra los controles de sus bordes para ajustar el ancho o alto. Esta nota no crea reglas ni cambia el resultado del caso.</p>}
@@ -639,6 +647,7 @@ function FlowBuilder({ flowId }: { flowId: string }) {
           onClose={() => setDocEditorOpen(false)}
         />
       )}
+      {visualTraining && <VisualTrainingWorkspace flowId={flowId} {...visualTraining} onClose={() => setVisualTraining(null)} />}
     </div>
   );
 }

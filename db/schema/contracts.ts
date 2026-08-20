@@ -91,6 +91,29 @@ export const contractFlows = pgTable("contract_flows", {
   index("contract_flows_org_idx").on(t.organizationId),
 ]);
 
+// Representative document layouts trained from the visual flow editor. A
+// variant belongs to a flow + document type and carries both its source file
+// (for users to revisit the marked zones) and lightweight anchors used by the
+// extractor at runtime. The PDF itself is never copied into the flow JSON.
+export const contractVisualTrainingVariants = pgTable("contract_visual_training_variants", {
+  id:             varchar("id", { length: 36 }).primaryKey(),
+  organizationId: varchar("organization_id", { length: 36 }).notNull(),
+  flowId:         varchar("flow_id", { length: 36 }).notNull(),
+  documentType:   varchar("document_type", { length: 60 }).notNull(),
+  name:           varchar("name", { length: 150 }).notNull(),
+  storageKey:     varchar("storage_key", { length: 500 }).notNull(),
+  originalName:   varchar("original_name", { length: 255 }),
+  mimeType:       varchar("mime_type", { length: 100 }),
+  signatureText:  text("signature_text"), // compact visible header/text fingerprint for variant selection
+  mappingsJson:   json("mappings_json").notNull(),
+  isActive:       boolean("is_active").notNull().default(true),
+  createdAt:      timestamp("created_at").notNull().defaultNow(),
+  updatedAt:      timestamp("updated_at").notNull().defaultNow(),
+}, (t) => [
+  index("contract_visual_variant_flow_idx").on(t.organizationId, t.flowId, t.documentType),
+  index("contract_visual_variant_active_idx").on(t.organizationId, t.isActive),
+]);
+
 // ── Runtime (a case + its documents + results) ────────────────────────
 export const contractCases = pgTable("contract_cases", {
   id:             varchar("id", { length: 36 }).primaryKey(),

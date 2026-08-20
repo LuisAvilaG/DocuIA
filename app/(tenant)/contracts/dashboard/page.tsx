@@ -6,7 +6,7 @@ import { isFeatureEnabled } from "@/lib/features";
 import { db } from "@/lib/db";
 import { contractCases, contractDocuments, contractValidations, contractObligations } from "@/db/schema";
 import { and, eq, desc, count, isNotNull } from "drizzle-orm";
-import { ScrollText, CheckCircle2, Loader, ShieldAlert, CalendarClock, ArrowRight, Upload } from "lucide-react";
+import { ScrollText, CalendarClock, ArrowRight, Upload, CheckCircle2, TriangleAlert, Clock3 } from "lucide-react";
 
 // Classify a rule-defined signer status into a semantic tone.
 function signerTone(status: string): "ok" | "warn" | "bad" {
@@ -78,13 +78,6 @@ export default async function ContractDashboardPage() {
 
   const toneCls = { ok: "bg-success", warn: "bg-warning", bad: "bg-destructive" } as const;
 
-  const kpis = [
-    { label: "Casos totales", value: totalCases, Icon: ScrollText, chip: "bg-primary/10 text-primary" },
-    { label: "Validados", value: done, Icon: CheckCircle2, chip: "bg-success/10 text-success" },
-    { label: "En proceso", value: inProgress, Icon: Loader, chip: "bg-warning/10 text-warning" },
-    { label: "Firmantes con hallazgo", value: flagged, Icon: ShieldAlert, chip: "bg-destructive/10 text-destructive" },
-  ];
-
   return (
     <div className="flex-1 overflow-y-auto p-6">
       <div className="max-w-5xl mx-auto space-y-6">
@@ -107,18 +100,17 @@ export default async function ContractDashboardPage() {
           </div>
         ) : (
           <>
-            {/* KPIs */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-              {kpis.map((k) => (
-                <div key={k.label} className="bg-card border border-border rounded-xl p-4">
-                  <div className="flex items-center justify-between">
-                    <span className={`w-7 h-7 rounded-md flex items-center justify-center ${k.chip}`}><k.Icon className="w-4 h-4" /></span>
-                  </div>
-                  <p className="text-2xl font-semibold tracking-[-0.02em] text-foreground tabular-nums mt-3">{k.value}</p>
-                  <p className="text-[10px] font-medium uppercase tracking-[0.06em] text-muted-foreground mt-0.5">{k.label}</p>
-                </div>
-              ))}
-            </div>
+            <section className="overflow-hidden rounded-xl border border-border bg-card">
+              <div className="flex flex-wrap items-baseline justify-between gap-3 border-b border-border px-5 py-3">
+                <div><h2 className="text-sm font-semibold text-foreground">Pulso operativo</h2><p className="mt-0.5 text-[11px] text-muted-foreground">Una lectura rápida de lo que está listo y lo que requiere seguimiento.</p></div>
+                <span className="text-[11px] text-muted-foreground tabular-nums">{totalCases} casos registrados</span>
+              </div>
+              <div className="grid divide-y divide-border sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+                <div className="px-5 py-4"><div className="flex items-center gap-2 text-xs font-semibold text-success"><CheckCircle2 className="h-3.5 w-3.5" /> Listos para decisión</div><p className="mt-2 text-[11px] leading-relaxed text-muted-foreground"><span className="font-semibold text-foreground tabular-nums">{done}</span> validados, generados o aprobados.</p></div>
+                <div className="px-5 py-4"><div className="flex items-center gap-2 text-xs font-semibold text-warning"><Clock3 className="h-3.5 w-3.5" /> En movimiento</div><p className="mt-2 text-[11px] leading-relaxed text-muted-foreground"><span className="font-semibold text-foreground tabular-nums">{inProgress}</span> esperando proceso o revisión.</p></div>
+                <div className="px-5 py-4"><div className="flex items-center gap-2 text-xs font-semibold text-destructive"><TriangleAlert className="h-3.5 w-3.5" /> Requieren atención</div><p className="mt-2 text-[11px] leading-relaxed text-muted-foreground"><span className="font-semibold text-foreground tabular-nums">{failed + flagged}</span> con error, rechazo o hallazgo.</p></div>
+              </div>
+            </section>
 
             <div className="grid lg:grid-cols-2 gap-4">
               {/* Estado de casos */}

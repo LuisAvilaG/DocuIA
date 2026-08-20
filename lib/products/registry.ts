@@ -104,11 +104,12 @@ export const PRODUCT_MODULES: Record<ProductKey, NavModule[]> = {
   ],
   contract_intelligence: [
     { href: "/contracts/dashboard",  label: "Panel",         icon: "LayoutDashboard" },
-    { href: "/contracts",            label: "Casos",         icon: "ScrollText",      feature: "contract_ai_extraction" },
+    { href: "/cases",                label: "Casos",         icon: "ScrollText",      feature: "contract_ai_extraction" },
+    { href: "/cases/history",        label: "Historial",     icon: "Clock",           feature: "contract_ai_extraction" },
     { href: "/contracts/approvals",  label: "Aprobaciones",  icon: "ClipboardCheck",  feature: "contract_approval_workflow", adminOnly: true },
     { href: "/contracts/metrics",    label: "Métricas",      icon: "BarChart3",       feature: "contract_metrics" },
     { href: "/contracts/quality",    label: "Calidad",       icon: "BrainCircuit",    feature: "contract_ai_extraction", adminOnly: true },
-    { href: "/contracts/flow",       label: "Configuración", icon: "Workflow",        feature: "contract_flow_builder", adminOnly: true },
+    { href: "/contracts/flow",       label: "Flujos",        icon: "Workflow",        feature: "contract_flow_builder", adminOnly: true },
   ],
 };
 

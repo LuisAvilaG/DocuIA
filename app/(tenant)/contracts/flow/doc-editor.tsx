@@ -22,8 +22,13 @@ function Sep() { return <span className="w-px h-5 bg-border mx-0.5" />; }
 // Word-like WYSIWYG editor in a full-screen modal. Stores HTML; the PDF is
 // rendered from that HTML server-side. contentEditable is uncontrolled (mounted
 // once) so React never fights the cursor.
+export interface DocEditorField {
+  key: string;
+  label: string;
+}
+
 export function DocEditor({ initialHtml, fields, onSave, onClose }: {
-  initialHtml: string; fields: string[]; onSave: (html: string) => void; onClose: () => void;
+  initialHtml: string; fields: DocEditorField[]; onSave: (html: string) => void; onClose: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -123,9 +128,9 @@ export function DocEditor({ initialHtml, fields, onSave, onClose }: {
           <input ref={fileRef} type="file" accept="image/png,image/jpeg" className="hidden" onChange={(e) => e.target.files?.[0] && onImage(e.target.files[0])} />
           <Sep />
           <select onMouseDown={(e) => e.stopPropagation()} onChange={(e) => { if (e.target.value) cmd("insertText", `{{${e.target.value}}}`); e.target.selectedIndex = 0; }}
-            className="h-8 rounded border border-border bg-card px-1.5 text-xs text-primary max-w-[160px]" title="Insertar campo del caso">
+            className="h-8 rounded border border-border bg-card px-1.5 text-xs text-primary max-w-[260px]" title="Insertar campo del caso">
             <option value="">+ Insertar campo</option>
-            {fields.map((f) => <option key={f} value={f}>{`{{${f}}}`}</option>)}
+            {fields.map((field) => <option key={field.key} value={field.key}>{field.label}</option>)}
           </select>
         </div>
 

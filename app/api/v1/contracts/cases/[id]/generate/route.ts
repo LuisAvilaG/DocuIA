@@ -12,6 +12,7 @@ import { isFeatureEnabled } from "@/lib/features";
 export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getTenantSession();
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+  if (session.role !== "admin") return NextResponse.json({ error: "Solo administradores pueden generar documentos." }, { status: 403 });
   if (!await isFeatureEnabled(session.orgId, "contract_document_generation")) {
     return NextResponse.json({ error: "La generación documental no está habilitada para este cliente." }, { status: 403 });
   }
@@ -57,7 +58,7 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
       updatedAt: new Date(),
     }).where(eq(contractCases.id, id));
 
-    await logAudit({ orgId: session.orgId, userId: session.sub, action: "contract.generated", resourceType: "contract_case", resourceId: id });
+    await logAudit({ orgId: session.orgId, userId: session.sub, userEmail: session.email, action: "contract.generated", resourceType: "contract_case", resourceId: id });
 
     return NextResponse.json({ ok: true, missing, downloadPath: `/api/v1/contracts/cases/${id}/output` });
   } catch (err) {

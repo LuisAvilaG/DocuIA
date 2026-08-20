@@ -524,7 +524,19 @@ function FlowBuilder({ flowId }: { flowId: string }) {
     const fs = (Array.isArray((n.data as AnyData).fields) ? (n.data as AnyData).fields as FieldT[] : []).map((f) => f.fieldKey).filter(Boolean);
     (fieldsByType[k] ??= []).push(...fs);
   }
-  const allFields = [...new Set(Object.values(fieldsByType).flat())].concat("_validations");
+  // The template still stores the stable key ({{field_key}}), but the editor
+  // presents the human label that the tenant configured for that field.
+  const editorFields = new Map<string, { key: string; label: string }>();
+  for (const n of nodes.filter((node) => node.type === "extract")) {
+    const docTypeKey = String((n.data as AnyData).docTypeKey ?? "");
+    const documentName = docTypeOpts.find((doc) => doc.key === docTypeKey)?.name;
+    for (const field of (Array.isArray((n.data as AnyData).fields) ? (n.data as AnyData).fields as FieldT[] : [])) {
+      if (!field.fieldKey) continue;
+      const fieldName = field.label?.trim() || field.fieldKey;
+      editorFields.set(field.fieldKey, { key: field.fieldKey, label: documentName ? `${documentName} · ${fieldName}` : fieldName });
+    }
+  }
+  editorFields.set("_validations", { key: "_validations", label: "Resultados de validación" });
 
   // Number the intake documents top-to-bottom so "which comes first" is visible.
   const intakeOrder = new Map(
@@ -622,7 +634,7 @@ function FlowBuilder({ flowId }: { flowId: string }) {
       {docEditorOpen && selected?.type === "generate" && (
         <DocEditor
           initialHtml={genInitialHtml(selected.data as AnyData)}
-          fields={allFields}
+          fields={[...editorFields.values()]}
           onSave={(html) => { patchSelected({ html }); setDocEditorOpen(false); }}
           onClose={() => setDocEditorOpen(false)}
         />

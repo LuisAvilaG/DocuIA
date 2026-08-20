@@ -93,7 +93,7 @@ export default async function ContractDashboardPage() {
             <h1 className="text-base font-semibold tracking-[-0.01em] text-foreground">Panel de contratos</h1>
             <p className="text-xs text-muted-foreground mt-1">Resumen de casos, validaciones y obligaciones.</p>
           </div>
-          {extractionEnabled && <Link href="/contracts" className="inline-flex items-center gap-1.5 rounded-md bg-primary text-primary-foreground px-3 py-2 text-xs font-medium shadow-[0_1px_3px_oklch(0.48_0.15_182_/_0.3)] hover:bg-primary/90 transition-colors">
+          {extractionEnabled && <Link href="/cases" className="inline-flex items-center gap-1.5 rounded-md bg-primary text-primary-foreground px-3 py-2 text-xs font-medium shadow-[0_1px_3px_oklch(0.48_0.15_182_/_0.3)] hover:bg-primary/90 transition-colors">
             <Upload className="w-3.5 h-3.5" /> Nuevo caso
           </Link>}
         </div>
@@ -103,7 +103,7 @@ export default async function ContractDashboardPage() {
             <div className="w-11 h-11 rounded-lg bg-primary/10 text-primary flex items-center justify-center mx-auto"><ScrollText className="w-5 h-5" /></div>
             <p className="text-sm font-medium text-foreground mt-3">Aún no hay casos</p>
             <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">{extractionEnabled ? "Sube los documentos de un caso y la IA los clasificará, extraerá y validará según tu flujo. Las métricas aparecerán aquí." : "El análisis AI de contratos no está habilitado para este cliente."}</p>
-            {extractionEnabled && <Link href="/contracts" className="inline-flex items-center gap-1.5 rounded-md bg-primary text-primary-foreground px-4 py-2 text-xs font-medium mt-4"><Upload className="w-3.5 h-3.5" /> Subir documentos</Link>}
+            {extractionEnabled && <Link href="/cases" className="inline-flex items-center gap-1.5 rounded-md bg-primary text-primary-foreground px-4 py-2 text-xs font-medium mt-4"><Upload className="w-3.5 h-3.5" /> Subir documentos</Link>}
           </div>
         ) : (
           <>
@@ -208,7 +208,7 @@ export default async function ContractDashboardPage() {
               <div className="px-5 py-3 border-b border-border"><h2 className="text-sm font-semibold text-foreground">Casos recientes</h2></div>
               <div className="divide-y divide-border">
                 {recent.map((c) => (
-                  <Link key={c.id} href={`/contracts/${c.id}`} className="flex items-center gap-3 px-5 py-3 hover:bg-secondary/50 transition-colors">
+                  <Link key={c.id} href={`/cases/${c.id}`} className="flex items-center gap-3 px-5 py-3 hover:bg-secondary/50 transition-colors">
                     <ScrollText className="w-4 h-4 text-muted-foreground shrink-0" />
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-medium text-foreground truncate">{c.title || `Caso ${c.id.slice(0, 8)}`}</p>

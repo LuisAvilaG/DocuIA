@@ -12,7 +12,7 @@ export default async function ContractApprovalsPage() {
   if (!session) redirect("/login");
   if (!(await isProductActive(session.orgId, "contract_intelligence"))) redirect("/dashboard");
   if (!(await isFeatureEnabled(session.orgId, "contract_approval_workflow"))) redirect("/contracts/dashboard");
-  if (session.role !== "admin") redirect("/contracts");
+  if (session.role !== "admin") redirect("/cases");
 
   const rows = await db.query.contractCases.findMany({
     where: and(eq(contractCases.organizationId, session.orgId), inArray(contractCases.status, ["validated", "generated", "review"])),

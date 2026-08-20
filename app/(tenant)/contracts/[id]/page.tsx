@@ -2,7 +2,7 @@ import { redirect, notFound } from "next/navigation";
 import Link from "next/link";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
-import { contractCases, contractDocuments, contractValidations, contractObligations, contractFlows } from "@/db/schema";
+import { contractCases, contractDocuments, contractValidations, contractObligations, contractFlows, orgUsers, tenantAuditLog } from "@/db/schema";
 import { and, eq, asc } from "drizzle-orm";
 import {
   CheckCircle2, XCircle, MinusCircle, ShieldCheck, ShieldAlert, ShieldX,
@@ -12,6 +12,7 @@ import { CaseActions } from "./actions";
 import { CaseDocuments, type CaseDoc } from "./case-documents";
 import { getFeature, isFeatureEnabled } from "@/lib/features";
 import { flowGraphSchema } from "@/lib/contracts/flow";
+import { CaseActivity, type CaseActivityItem } from "./case-activity";
 
 const STATUS: Record<string, { label: string; cls: string }> = {
   uploaded:   { label: "En cola",     cls: "bg-secondary text-muted-foreground" },
@@ -74,16 +75,19 @@ function getRuleOutcomeTag(items: ValidationOutcome[]) {
 }
 
 export default async function ContractCasePage({ params }: { params: Promise<{ id: string }> }) {
-  const session = await getTenantSession();
-  if (!session) redirect("/login");
   const { id } = await params;
+  const session = await getTenantSession();
+  // Access tokens are intentionally short lived. Preserve the case URL so the
+  // login page can refresh the tenant session and return the user here instead
+  // of looking like the case unexpectedly signed them out.
+  if (!session) redirect(`/login?returnTo=${encodeURIComponent(`/cases/${id}`)}`);
 
   const kase = await db.query.contractCases.findFirst({
     where: and(eq(contractCases.id, id), eq(contractCases.organizationId, session.orgId)),
   });
   if (!kase) notFound();
 
-  const [documents, validations, obligations, validationsEnabled, obligationsEnabled, generationEnabled, approvalFeature, activeFlow] = await Promise.all([
+  const [documents, validations, obligations, validationsEnabled, obligationsEnabled, generationEnabled, approvalFeature, activeFlow, auditRows, users] = await Promise.all([
     db.query.contractDocuments.findMany({ where: eq(contractDocuments.caseId, id) }),
     db.query.contractValidations.findMany({ where: eq(contractValidations.caseId, id) }),
     db.query.contractObligations.findMany({ where: eq(contractObligations.caseId, id), orderBy: [asc(contractObligations.dueDate)] }),
@@ -95,6 +99,15 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
       where: and(eq(contractFlows.id, kase.flowId), eq(contractFlows.organizationId, session.orgId)),
       columns: { id: true, name: true, graphJson: true },
     }) : Promise.resolve(null),
+    db.query.tenantAuditLog.findMany({
+      where: eq(tenantAuditLog.organizationId, session.orgId),
+      columns: { id: true, userId: true, userEmail: true, action: true, resourceId: true, metadata: true, createdAt: true },
+      orderBy: [asc(tenantAuditLog.createdAt)],
+    }),
+    db.query.orgUsers.findMany({
+      where: eq(orgUsers.organizationId, session.orgId),
+      columns: { id: true, email: true, fullName: true },
+    }),
   ]);
 
   const parsedFlow = activeFlow ? flowGraphSchema.safeParse(activeFlow.graphJson) : null;
@@ -131,13 +144,40 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
   for (const v of validations) { const k = v.ruleName ?? "Validación"; (ruleGroups.get(k) ?? ruleGroups.set(k, []).get(k)!).push(v); }
 
   const totalFields = docs.reduce((a, d) => a + Object.keys(d.extractedJson).length, 0);
+  const userNames = new Map(users.map((user) => [user.id, user.fullName || user.email]));
+  const activity: CaseActivityItem[] = auditRows
+    .filter((event) => {
+      const metadata = (event.metadata ?? {}) as Record<string, unknown>;
+      return event.resourceId === id || metadata.caseId === id;
+    })
+    .map((event) => ({
+      id: event.id,
+      action: event.action,
+      createdAt: event.createdAt.toISOString(),
+      actor: event.userEmail ?? (event.userId ? userNames.get(event.userId) ?? null : null),
+      metadata: (event.metadata ?? {}) as Record<string, unknown>,
+    }));
+  // Cases created before the audit events existed remain understandable.
+  if (!activity.some((event) => event.action === "contract.case_created")) {
+    activity.unshift({ id: `created-${kase.id}`, action: "contract.case_created", createdAt: kase.createdAt.toISOString(), actor: kase.createdBy ? userNames.get(kase.createdBy) ?? null : null });
+  }
+  if (!activity.some((event) => event.action === "contract.documents_uploaded") && documents.length > 0) {
+    activity.splice(1, 0, {
+      id: `documents-${kase.id}`,
+      action: "contract.documents_uploaded",
+      createdAt: documents.reduce((earliest, document) => document.createdAt < earliest ? document.createdAt : earliest, documents[0].createdAt).toISOString(),
+      actor: kase.createdBy ? userNames.get(kase.createdBy) ?? null : null,
+      metadata: { files: documents.map((document) => document.originalName ?? "Documento") },
+    });
+  }
+  activity.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
   return (
     <div className="flex-1 overflow-y-auto p-6">
       <div className="max-w-3xl mx-auto space-y-5">
         {/* Header */}
         <div>
-          <Link href="/contracts" className="text-xs text-muted-foreground hover:text-foreground">← Casos</Link>
+          <Link href="/cases" className="text-xs text-muted-foreground hover:text-foreground">← Casos</Link>
           <div className="flex items-center gap-3 mt-2 flex-wrap">
             <h1 className="text-lg font-semibold tracking-[-0.01em] text-foreground">{kase.title || `Caso ${kase.id.slice(0, 8)}`}</h1>
             <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full ${status.cls}`}>{status.label}</span>
@@ -155,7 +195,7 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
           )}
         </div>
 
-        <CaseActions caseId={kase.id} status={kase.status} verdict={validationsEnabled ? verdict : null} decision={result.decision} generationEnabled={generationEnabled} approvalEnabled={approvalFeature.isEnabled} allowOverride={approvalFeature.config.allow_override !== false} />
+        <CaseActions caseId={kase.id} status={kase.status} verdict={validationsEnabled ? verdict : null} decision={result.decision} generationEnabled={generationEnabled} approvalEnabled={approvalFeature.isEnabled} allowOverride={approvalFeature.config.allow_override !== false} canManage={session.role === "admin"} />
         {isProcessing && <p className="text-xs text-warning">El caso está en proceso. La clasificación, extracción y validación aparecerán aquí al terminar.</p>}
         {kase.errorMessage && <div className="rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-xs px-3 py-2">{kase.errorMessage}</div>}
 
@@ -263,6 +303,8 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
             </div>
           </Stage>}
         </div>
+
+        <CaseActivity items={activity} />
       </div>
     </div>
   );

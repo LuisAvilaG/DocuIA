@@ -6,6 +6,7 @@ import { compileFlow, flowGraphSchema, type FlowGraph } from "./flow";
 import type { FieldDef } from "./extract";
 import type { Severity } from "./validate";
 import type { ContractDoc } from "./generate";
+import type { WordTemplateConfig } from "./word-template";
 
 // Default number of flows a client may have when the superadmin hasn't set one.
 export const DEFAULT_MAX_FLOWS = 3;
@@ -36,7 +37,7 @@ export interface ContractPlan {
   docTypes:     Array<{ key: string; name: string; hint: string | null }>;
   fieldsByType: Record<string, FieldDef[]>;
   rules:        Array<{ name: string; severity?: Severity; conditionsJson: unknown }>;
-  template:     { key: string; name: string; body: string; doc?: ContractDoc; html?: string } | null;
+  template:     { key: string; name: string; body: string; doc?: ContractDoc; html?: string; source?: "editor" | "word"; wordTemplate?: WordTemplateConfig } | null;
 }
 
 // Resolve a flow to run: the one the client picked (flowId) if it belongs to the

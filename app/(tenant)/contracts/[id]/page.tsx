@@ -2,7 +2,7 @@ import { redirect, notFound } from "next/navigation";
 import Link from "next/link";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
-import { contractCases, contractDocuments, contractValidations, contractObligations, contractFlows, orgUsers, tenantAuditLog } from "@/db/schema";
+import { contractAiAnalysisResults, contractCases, contractDocuments, contractValidations, contractObligations, contractFlows, orgUsers, tenantAuditLog } from "@/db/schema";
 import { and, eq, asc } from "drizzle-orm";
 import {
   CheckCircle2, XCircle, MinusCircle, ShieldCheck, ShieldAlert, ShieldX,
@@ -13,17 +13,9 @@ import { CaseDocuments, type CaseDoc } from "./case-documents";
 import { getFeature, isFeatureEnabled } from "@/lib/features";
 import { flowGraphSchema } from "@/lib/contracts/flow";
 import { CaseActivity, type CaseActivityItem } from "./case-activity";
+import { CONTRACT_CASE_STATUS, contractStatusLabel } from "@/lib/contracts/status";
+import { AiAnalysisResults } from "./ai-analysis-results";
 
-const STATUS: Record<string, { label: string; cls: string }> = {
-  uploaded:   { label: "En cola",     cls: "bg-secondary text-muted-foreground" },
-  processing: { label: "Procesando",  cls: "bg-warning/10 text-warning" },
-  review:     { label: "En revisión", cls: "bg-warning/10 text-warning" },
-  validated:  { label: "Validado",    cls: "bg-success/10 text-success" },
-  generated:  { label: "Generado",    cls: "bg-success/10 text-success" },
-  approved:   { label: "Aprobado",    cls: "bg-success/10 text-success" },
-  rejected:   { label: "Rechazado",   cls: "bg-destructive/10 text-destructive" },
-  failed:     { label: "Error",       cls: "bg-destructive/10 text-destructive" },
-};
 const pretty = (k: string) => k.replace(/[_.]/g, " ").replace(/\s+/g, " ").trim().replace(/^\w/, (c) => c.toUpperCase());
 
 function Stage({ n, title, Icon, pill, first, last, children }: {
@@ -87,9 +79,10 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
   });
   if (!kase) notFound();
 
-  const [documents, validations, obligations, validationsEnabled, obligationsEnabled, generationEnabled, approvalFeature, activeFlow, auditRows, users] = await Promise.all([
+  const [documents, validations, analyses, obligations, validationsEnabled, obligationsEnabled, generationEnabled, approvalFeature, activeFlow, auditRows, users] = await Promise.all([
     db.query.contractDocuments.findMany({ where: eq(contractDocuments.caseId, id) }),
     db.query.contractValidations.findMany({ where: eq(contractValidations.caseId, id) }),
+    db.query.contractAiAnalysisResults.findMany({ where: eq(contractAiAnalysisResults.caseId, id) }),
     db.query.contractObligations.findMany({ where: eq(contractObligations.caseId, id), orderBy: [asc(contractObligations.dueDate)] }),
     isFeatureEnabled(session.orgId, "contract_advanced_validations"),
     isFeatureEnabled(session.orgId, "contract_obligation_tracking"),
@@ -124,7 +117,7 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
     ? { label: "Aprobado · documento generado", cls: "bg-success/10 text-success" }
     : kase.status === "generated" && result.decision?.action === "approve"
       ? { label: "Aprobado · documento generado", cls: "bg-success/10 text-success" }
-      : STATUS[kase.status] ?? { label: kase.status, cls: "bg-secondary text-muted-foreground" };
+      : CONTRACT_CASE_STATUS[kase.status as keyof typeof CONTRACT_CASE_STATUS] ?? { label: contractStatusLabel(kase.status), cls: "bg-secondary text-muted-foreground" };
 
   const docs: CaseDoc[] = documents.map((d) => ({
     id: d.id, originalName: d.originalName, mimeType: d.mimeType, detectedType: d.detectedType,
@@ -253,7 +246,7 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
                             <div key={v.id} className="flex items-start gap-2">
                               <Icon className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${cls}`} />
                               <div className="min-w-0">
-                                <p className="text-[11px] text-foreground break-words"><span className="font-medium">{v.subject}</span>{v.status ? ` · ${v.status}` : ""}</p>
+                                <p className="text-[11px] text-foreground break-words"><span className="font-medium">{v.subject}</span>{v.status ? ` · ${contractStatusLabel(v.status)}` : ""}</p>
                                 {v.reason && <p className="text-[11px] text-muted-foreground break-words">{v.reason}</p>}
                               </div>
                             </div>
@@ -265,6 +258,7 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
                 })}
               </div>
             )}
+            <AiAnalysisResults analyses={analyses} />
           </Stage>}
 
           {obligationsEnabled && <Stage n={validationsEnabled ? 4 : 3} title="Obligaciones" Icon={CalendarClock} last={!generationEnabled}

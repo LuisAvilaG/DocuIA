@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Upload, Loader2, FileText, ArrowRight, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { CONTRACT_CASE_STATUS, contractStatusLabel } from "@/lib/contracts/status";
 
 interface CaseRow { id: string; title: string | null; status: string; createdAt: string; updatedAt: string; flowName: string }
 interface FlowOption {
@@ -13,15 +14,6 @@ interface FlowOption {
   documentCount: number;
   validationCount: number;
 }
-
-const STATUS_LABEL: Record<string, string> = {
-  uploaded: "En cola", processing: "Procesando", review: "En revisión",
-  validated: "Validado", generated: "Generado", failed: "Error",
-};
-const STATUS_COLOR: Record<string, string> = {
-  uploaded: "text-muted-foreground", processing: "text-warning", review: "text-warning",
-  validated: "text-success", generated: "text-success", failed: "text-destructive",
-};
 
 export function ContractsClient({ cases }: { cases: CaseRow[] }) {
   const router = useRouter();
@@ -160,8 +152,8 @@ export function ContractsClient({ cases }: { cases: CaseRow[] }) {
                     <p className="text-xs font-medium text-foreground truncate">{c.title || `Caso ${c.id.slice(0, 8)}`}</p>
                     <p className="text-[11px] text-muted-foreground">Actualizado {new Date(c.updatedAt).toLocaleString("es-MX")} · Flujo: {c.flowName}</p>
                   </div>
-                  <span className={cn("text-[11px] font-medium", STATUS_COLOR[c.status] ?? "text-muted-foreground")}>
-                    {STATUS_LABEL[c.status] ?? c.status}
+                  <span className={cn("text-[11px] font-medium", CONTRACT_CASE_STATUS[c.status as keyof typeof CONTRACT_CASE_STATUS]?.tone ?? "text-muted-foreground")}>
+                    {contractStatusLabel(c.status)}
                   </span>
                   <ArrowRight className="w-3.5 h-3.5 text-muted-foreground/50 shrink-0" />
                 </Link>

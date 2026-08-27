@@ -7,6 +7,7 @@ import { db } from "@/lib/db";
 import { contractCases, contractDocuments, contractValidations, contractObligations } from "@/db/schema";
 import { and, eq, desc, count, isNotNull } from "drizzle-orm";
 import { ScrollText, CalendarClock, ArrowRight, Upload, CheckCircle2, TriangleAlert, Clock3 } from "lucide-react";
+import { contractStatusLabel } from "@/lib/contracts/status";
 
 // Classify a rule-defined signer status into a semantic tone.
 function signerTone(status: string): "ok" | "warn" | "bad" {
@@ -15,12 +16,6 @@ function signerTone(status: string): "ok" | "warn" | "bad" {
   if (/(indeterm|duda|unknown|pend|revi)/.test(s)) return "warn";
   return "ok";
 }
-
-const CASE_STATUS_LABEL: Record<string, string> = {
-  uploaded: "En cola", processing: "Procesando", review: "En revisión",
-  validated: "Validado", generated: "Generado", failed: "Error",
-  approved: "Aprobado", rejected: "Rechazado",
-};
 
 export default async function ContractDashboardPage() {
   const session = await getTenantSession();
@@ -140,7 +135,7 @@ export default async function ContractDashboardPage() {
                     {signerByStatus.sort((a, b) => b.n - a.n).map((s) => (
                       <div key={s.status}>
                         <div className="flex items-center justify-between text-[11px] mb-1">
-                          <span className="text-muted-foreground">{s.status}</span>
+                          <span className="text-muted-foreground">{contractStatusLabel(s.status)}</span>
                           <span className="text-foreground font-medium tabular-nums">{s.n}</span>
                         </div>
                         <div className="h-1.5 rounded-full bg-secondary overflow-hidden">
@@ -206,7 +201,7 @@ export default async function ContractDashboardPage() {
                       <p className="text-xs font-medium text-foreground truncate">{c.title || `Caso ${c.id.slice(0, 8)}`}</p>
                       <p className="text-[11px] text-muted-foreground tabular-nums">{new Date(c.createdAt).toLocaleString("es-MX")}</p>
                     </div>
-                    <span className="text-[11px] font-medium text-muted-foreground">{CASE_STATUS_LABEL[c.status] ?? c.status}</span>
+                    <span className="text-[11px] font-medium text-muted-foreground">{contractStatusLabel(c.status)}</span>
                     <ArrowRight className="w-3.5 h-3.5 text-muted-foreground/50 shrink-0" />
                   </Link>
                 ))}

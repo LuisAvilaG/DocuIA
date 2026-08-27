@@ -116,7 +116,16 @@ export type ValidationRule =
   | { kind: "date_rule"; docType: string; field: string; notExpired?: boolean; before?: Ref }
   | { kind: "field_format"; docType: string; field: string; format: "tax_id" | "email" | "date" | "number" | "nonempty"; country?: string }
   | { kind: "document_required"; docTypes: string[] }
-  | { kind: "signatures_complete"; subjects: Ref; signatures: Ref };
+  | { kind: "signatures_complete"; subjects: Ref; signatures: Ref }
+  | {
+    kind: "ai_analysis";
+    prompt: string;
+    improvedPrompt?: string;
+    internalRules?: string;
+    outputMode?: "free" | "structured" | "both";
+    outputFields?: Array<{ key: string; label: string; description?: string }>;
+    sourceDocTypes?: string[];
+  };
 
 type Finding = Omit<ValidationResult, "ruleName" | "severity">;
 const pass = (subject: string, status: string, reason: string, checks: Finding["checks"] = [], citation: string | null = null): Finding => ({ subject, ok: true, status, reason, checks, citation });
@@ -134,6 +143,7 @@ export function ruleRefs(rule: ValidationRule): Ref[] {
     case "field_format":        return [{ docType: rule.docType, field: rule.field }];
     case "document_required":   return [];
     case "signatures_complete": return [rule.subjects, rule.signatures];
+    case "ai_analysis":         return [];
   }
 }
 

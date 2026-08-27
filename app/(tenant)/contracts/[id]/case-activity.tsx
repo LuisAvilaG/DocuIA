@@ -1,4 +1,4 @@
-import { CheckCircle2, CircleDot, FileOutput, FilePenLine, FileUp, History, RotateCcw, ShieldCheck, ShieldX, Sparkles, TriangleAlert, UserRound } from "lucide-react";
+import { CheckCircle2, CircleDot, FileOutput, FilePenLine, FileSearch, FileUp, History, RotateCcw, ShieldCheck, ShieldX, TriangleAlert, UserRound } from "lucide-react";
 
 export type CaseActivityItem = {
   id: string;
@@ -11,7 +11,7 @@ export type CaseActivityItem = {
 const ACTIONS: Record<string, { title: string; Icon: typeof History; tone: string }> = {
   "contract.case_created": { title: "Caso creado", Icon: CircleDot, tone: "text-primary" },
   "contract.documents_uploaded": { title: "Documentos cargados", Icon: FileUp, tone: "text-primary" },
-  "contract.processing_started": { title: "Análisis iniciado", Icon: Sparkles, tone: "text-warning" },
+  "contract.processing_started": { title: "Análisis iniciado", Icon: FileSearch, tone: "text-primary" },
   "contract.processing_completed": { title: "Análisis y validaciones terminados", Icon: CheckCircle2, tone: "text-success" },
   "contract.processing_failed": { title: "Análisis interrumpido", Icon: TriangleAlert, tone: "text-destructive" },
   "contract.extraction_corrected": { title: "Dato extraído corregido", Icon: FilePenLine, tone: "text-primary" },
@@ -68,7 +68,7 @@ export function CaseActivity({ items }: { items: CaseActivityItem[] }) {
                     <p className="text-xs font-semibold text-foreground">{config.title}</p>
                     <time className="text-[10px] tabular-nums text-muted-foreground" dateTime={item.createdAt}>{new Date(item.createdAt).toLocaleString("es-MX")}</time>
                   </div>
-                  <p className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-muted-foreground"><UserRound className="h-3 w-3" />{item.actor ?? "DocuIA"}</p>
+                  <p className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-muted-foreground"><UserRound className="h-3 w-3" />{item.action === "contract.processing_started" ? `Iniciado por ${item.actor ?? "DocuIA"}` : item.actor ?? "DocuIA"}</p>
                   {detail && <p className="mt-1 text-[11px] leading-relaxed text-foreground/80 break-words">{detail}</p>}
                 </div>
               </li>

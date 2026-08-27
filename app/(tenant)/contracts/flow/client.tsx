@@ -9,7 +9,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import {
-  Loader2, Save, Plus, Trash2, FileInput, ListChecks, ShieldCheck, FileText, ChevronDown, ChevronUp, StickyNote, PencilRuler,
+  Loader2, Save, Plus, Trash2, FileInput, ListChecks, ShieldCheck, FileText, ChevronDown, ChevronUp, StickyNote, PencilRuler, Sparkles, BookMarked,
 } from "lucide-react";
 import { DocEditor } from "./doc-editor";
 import { VisualTrainingWorkspace, type TrainingField } from "./visual-training-workspace";
@@ -208,6 +208,7 @@ const RULE_KINDS = [
   { value: "field_format", label: "Formato / ID fiscal" },
   { value: "document_required", label: "Documento requerido" },
   { value: "signatures_complete", label: "Firmas completas" },
+  { value: "ai_analysis", label: "Análisis con IA" },
 ];
 const RULE_INFO: Record<string, string> = {
   cross_reference: "Comprueba que cada elemento de una lista (ej. los representantes del contrato) APAREZCA en otro documento (ej. la escritura de poderes). Opcional: confirmarlo con un tercer documento (ej. certificado de vigencia).",
@@ -218,6 +219,7 @@ const RULE_INFO: Record<string, string> = {
   field_format: "Verifica el formato de un campo: identificación fiscal por país (RUT, RFC, CUIT, NIT, CNPJ…), correo, fecha, número, o simplemente que no esté vacío.",
   document_required: "Exige que el caso incluya ciertos tipos de documento. Ej: contrato + escritura + certificado. Marca los que falten.",
   signatures_complete: "Verifica que todas las partes esperadas hayan firmado el documento.",
+  ai_analysis: "Interpreta el expediente con una instrucción configurable. Puede devolver un análisis libre, una tabla estructurada o ambos, siempre con evidencia del documento.",
 };
 const COUNTRIES = ["CL", "MX", "AR", "CO", "PE", "EC", "BR", "PY"].map((c) => ({ value: c, label: c }));
 const FORMATS = [
@@ -248,8 +250,131 @@ function defaultRule(kind: string): Record<string, unknown> {
     case "field_format":        return { kind, docType: "", field: "", format: "nonempty" };
     case "document_required":   return { kind, docTypes: [] };
     case "signatures_complete": return { kind, subjects: { docType: "", field: "" }, signatures: { docType: "", field: "" } };
+    case "ai_analysis":         return { kind, prompt: "Analiza el expediente e identifica los hallazgos y recomendaciones que requieren revisión.", outputMode: "both", outputFields: [], sourceDocTypes: [] };
     default:                    return { kind: "cross_reference", subjects: { docType: "", field: "" }, membership: { docType: "", field: "", label: "En documento" }, statusLabels: { pass: "válido", fail: "no válido", unknown: "indeterminado" } };
   }
+}
+
+type AiTemplate = { id: string; name: string; description: string | null; config: Record<string, unknown> | null };
+type OutputField = { key: string; label: string; description?: string };
+
+function AiAnalysisForm({ rule, setRule, docTypes }: { rule: Record<string, unknown>; setRule: (rule: Record<string, unknown>) => void; docTypes: DocTypeOpt[] }) {
+  const [templates, setTemplates] = useState<AiTemplate[]>([]);
+  const [templatesLoading, setTemplatesLoading] = useState(true);
+  const [improving, setImproving] = useState(false);
+  const [savingTemplate, setSavingTemplate] = useState(false);
+  const [templateName, setTemplateName] = useState("");
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const fields = (Array.isArray(rule.outputFields) ? rule.outputFields : []) as OutputField[];
+  const selectedDocs = (Array.isArray(rule.sourceDocTypes) ? rule.sourceDocTypes : []) as string[];
+  const outputMode = String(rule.outputMode ?? "free");
+  const patch = (input: Record<string, unknown>) => setRule({ ...rule, ...input });
+
+  const loadTemplates = useCallback(async () => {
+    setTemplatesLoading(true);
+    try {
+      const response = await fetch("/api/v1/contracts/ai-analysis/templates");
+      const payload = await response.json() as { templates?: AiTemplate[] };
+      if (response.ok) setTemplates(payload.templates ?? []);
+    } finally { setTemplatesLoading(false); }
+  }, []);
+  useEffect(() => { void loadTemplates(); }, [loadTemplates]);
+
+  const improve = async () => {
+    const prompt = String(rule.prompt ?? "").trim();
+    if (prompt.length < 12) { setMessage({ ok: false, text: "Describe primero qué debe analizar la IA." }); return; }
+    setImproving(true); setMessage(null);
+    try {
+      const response = await fetch("/api/v1/contracts/ai-analysis/improve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt }) });
+      const payload = await response.json() as { prompt?: string; error?: string };
+      if (!response.ok || !payload.prompt) throw new Error(payload.error || "No se pudo mejorar la instrucción.");
+      patch({ improvedPrompt: payload.prompt });
+      setMessage({ ok: true, text: "Versión mejorada lista. Puedes seguir editándola." });
+    } catch (error) { setMessage({ ok: false, text: error instanceof Error ? error.message : "No se pudo mejorar la instrucción." }); }
+    finally { setImproving(false); }
+  };
+
+  const saveTemplate = async () => {
+    const name = templateName.trim();
+    const prompt = String(rule.prompt ?? "").trim();
+    if (!name) { setMessage({ ok: false, text: "Ponle un nombre a la plantilla." }); return; }
+    if (!prompt) { setMessage({ ok: false, text: "La plantilla necesita una instrucción." }); return; }
+    setSavingTemplate(true); setMessage(null);
+    try {
+      const response = await fetch("/api/v1/contracts/ai-analysis/templates", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, config: { ...rule, kind: "ai_analysis" } }),
+      });
+      const payload = await response.json() as { template?: AiTemplate; error?: string };
+      if (!response.ok || !payload.template) throw new Error(payload.error || "No se pudo guardar la plantilla.");
+      setTemplates((current) => [payload.template!, ...current]); setTemplateName("");
+      setMessage({ ok: true, text: "Plantilla guardada para futuros flujos." });
+    } catch (error) { setMessage({ ok: false, text: error instanceof Error ? error.message : "No se pudo guardar la plantilla." }); }
+    finally { setSavingTemplate(false); }
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-lg border border-primary/20 bg-primary/[0.035] p-3">
+        <div className="flex gap-2"><span className="mt-0.5 rounded-md bg-primary/10 p-1 text-primary"><Sparkles className="h-3.5 w-3.5" /></span><div><p className="text-[11px] font-semibold text-foreground">Análisis con evidencia</p><p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">La IA analiza los datos extraídos y sus citas. Si falta evidencia, debe indicarlo, no inventar una recomendación.</p></div></div>
+      </div>
+
+      <FieldRow label="Usar una plantilla guardada">
+        <Select value="" onChange={(id) => { const template = templates.find((item) => item.id === id); if (template?.config) { setRule({ ...template.config, kind: "ai_analysis" }); setMessage({ ok: true, text: `Plantilla “${template.name}” aplicada al flujo.` }); } }} options={templates.filter((item) => item.config).map((item) => ({ value: item.id, label: item.name }))} placeholder={templatesLoading ? "Cargando plantillas…" : "Selecciona una plantilla"} disabled={templatesLoading} />
+      </FieldRow>
+
+      <div>
+        <div className="flex items-center justify-between gap-2"><span className={lbl}>Instrucción para la IA</span><button type="button" onClick={() => void improve()} disabled={improving} className="inline-flex items-center gap-1 rounded-md border border-primary/25 bg-card px-2 py-1 text-[10px] font-medium text-primary hover:bg-primary/5 disabled:opacity-50">{improving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />} Mejorar con IA</button></div>
+        <textarea rows={5} className={`${inp} mt-1 resize-y leading-relaxed`} value={String(rule.prompt ?? "")} onChange={(event) => patch({ prompt: event.target.value })} placeholder="Ej. Identifica las pólizas exigidas por el contrato y recomienda coberturas basadas solo en sus obligaciones." />
+      </div>
+
+      {typeof rule.improvedPrompt === "string" && rule.improvedPrompt.trim() && (
+        <div className="rounded-md border border-success/25 bg-success/5 p-2.5 space-y-1.5">
+          <div className="flex items-center justify-between gap-2"><span className="text-[10px] font-semibold text-success">Versión mejorada</span><button type="button" onClick={() => patch({ prompt: rule.improvedPrompt, improvedPrompt: undefined })} className="text-[10px] font-medium text-primary hover:underline">Usar esta versión</button></div>
+          <p className="text-[10px] leading-relaxed text-foreground/80 whitespace-pre-wrap">{rule.improvedPrompt}</p>
+        </div>
+      )}
+
+      <FieldRow label="Reglas internas o criterios de la compañía">
+        <textarea rows={4} className={`${inp} resize-y leading-relaxed`} value={String(rule.internalRules ?? "")} onChange={(event) => patch({ internalRules: event.target.value })} placeholder="Ej. Para obra civil, revisar cumplimiento y responsabilidad civil. Nunca proponer una cobertura sin respaldo contractual o regla interna." />
+      </FieldRow>
+
+      <div>
+        <span className={lbl}>Documentos que debe considerar</span>
+        <p className="mt-0.5 text-[10px] text-muted-foreground">Si no marcas ninguno, considera todo el expediente.</p>
+        <div className="mt-1.5 space-y-1.5">
+          {docTypes.map((doc) => {
+            const selected = selectedDocs.includes(doc.key);
+            return <label key={doc.key} className="flex items-center gap-2 text-[11px] text-foreground"><input type="checkbox" checked={selected} onChange={(event) => patch({ sourceDocTypes: event.target.checked ? [...selectedDocs, doc.key] : selectedDocs.filter((key) => key !== doc.key) })} /> {doc.name}</label>;
+          })}
+        </div>
+      </div>
+
+      <FieldRow label="Formato de respuesta">
+        <Select value={outputMode} onChange={(value) => patch({ outputMode: value })} options={[
+          { value: "free", label: "Respuesta libre" },
+          { value: "structured", label: "Tabla estructurada" },
+          { value: "both", label: "Respuesta libre y tabla" },
+        ]} />
+      </FieldRow>
+
+      {outputMode !== "free" && (
+        <div className="rounded-lg border border-border bg-background/60 p-2.5">
+          <div className="mb-2"><p className="text-[11px] font-semibold text-foreground">Columnas de los hallazgos</p><p className="text-[10px] text-muted-foreground">Cada hallazgo se mostrará y podrá incorporarse en el documento final.</p></div>
+          <div className="space-y-1.5">
+            {fields.map((field, index) => <div key={index} className="grid grid-cols-[92px_1fr_auto] gap-1.5"><input className={`${inp} !py-1 font-mono`} placeholder="clave" value={field.key} onChange={(event) => patch({ outputFields: fields.map((item, i) => i === index ? { ...item, key: event.target.value } : item) })} /><input className={`${inp} !py-1`} placeholder="Etiqueta" value={field.label} onChange={(event) => patch({ outputFields: fields.map((item, i) => i === index ? { ...item, label: event.target.value } : item) })} /><button type="button" onClick={() => patch({ outputFields: fields.filter((_, i) => i !== index) })} className="text-muted-foreground hover:text-destructive"><Trash2 className="h-3.5 w-3.5" /></button></div>)}
+            <button type="button" onClick={() => patch({ outputFields: [...fields, { key: "", label: "" }] })} className="inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"><Plus className="h-3 w-3" /> Agregar columna</button>
+          </div>
+        </div>
+      )}
+
+      <div className="border-t border-border pt-3">
+        <div className="flex items-center gap-1.5"><BookMarked className="h-3.5 w-3.5 text-primary" /><span className="text-[11px] font-semibold text-foreground">Guardar como plantilla</span></div>
+        <div className="mt-2 flex gap-1.5"><input className={`${inp} !py-1`} value={templateName} onChange={(event) => setTemplateName(event.target.value)} placeholder="Ej. Requisitos de aseguramiento" /><button type="button" onClick={() => void saveTemplate()} disabled={savingTemplate} className="shrink-0 rounded-md bg-primary px-2.5 py-1.5 text-[11px] font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50">{savingTemplate ? "Guardando…" : "Guardar"}</button></div>
+      </div>
+      {message && <p className={`text-[11px] leading-relaxed ${message.ok ? "text-success" : "text-destructive"}`}>{message.text}</p>}
+    </div>
+  );
 }
 
 function ValidateForm({ data, patch, docTypes, fieldsByType }: { data: AnyData; patch: (p: AnyData) => void; docTypes: DocTypeOpt[]; fieldsByType: Record<string, string[]> }) {
@@ -282,6 +407,8 @@ function ValidateForm({ data, patch, docTypes, fieldsByType }: { data: AnyData; 
           <li><span className="text-success font-medium">OK / Info</span>: informativo; nunca bloquea.</li>
         </ul>
       </div>
+
+      {kind === "ai_analysis" && <AiAnalysisForm rule={rule} setRule={(updated) => patch({ rule: updated })} docTypes={docTypes} />}
 
       {kind === "cross_reference" && (() => {
         const sl = (rule.statusLabels as { pass: string; fail: string; unknown: string }) ?? { pass: "válido", fail: "no válido", unknown: "indeterminado" };
@@ -545,6 +672,8 @@ function FlowBuilder({ flowId }: { flowId: string }) {
     }
   }
   editorFields.set("_validations", { key: "_validations", label: "Resultados de validación" });
+  editorFields.set("_ai_analysis", { key: "_ai_analysis", label: "Análisis con IA" });
+  editorFields.set("_ai_findings", { key: "_ai_findings", label: "Hallazgos estructurados de IA" });
 
   // Number the intake documents top-to-bottom so "which comes first" is visible.
   const intakeOrder = new Map(

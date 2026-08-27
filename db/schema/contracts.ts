@@ -58,6 +58,22 @@ export const contractValidationRules = pgTable("contract_validation_rules", {
   index("contract_rules_org_idx").on(t.organizationId),
 ]);
 
+// Reusable AI-analysis playbooks. A flow may copy one into an "Análisis con
+// IA" validation, while the original remains available to use in future flows.
+export const contractAiAnalysisTemplates = pgTable("contract_ai_analysis_templates", {
+  id:             varchar("id", { length: 36 }).primaryKey(),
+  organizationId: varchar("organization_id", { length: 36 }).notNull(),
+  name:           varchar("name", { length: 150 }).notNull(),
+  description:    text("description"),
+  configJson:     json("config_json").notNull(),
+  createdBy:      varchar("created_by", { length: 36 }),
+  isActive:       boolean("is_active").notNull().default(true),
+  createdAt:      timestamp("created_at").notNull().defaultNow(),
+  updatedAt:      timestamp("updated_at").notNull().defaultNow(),
+}, (t) => [
+  index("contract_ai_templates_org_idx").on(t.organizationId, t.updatedAt),
+]);
+
 // Output document templates (e.g. insurance quote) with letterhead + field mapping.
 export const contractOutputTemplates = pgTable("contract_output_templates", {
   id:              bigserial("id", { mode: "number" }).primaryKey(),
@@ -178,6 +194,24 @@ export const contractValidations = pgTable("contract_validations", {
   citation:    text("citation"),
 }, (t) => [
   index("contract_validations_case_idx").on(t.caseId),
+]);
+
+// Full response of an AI-analysis validation. The compact outcome also goes to
+// contract_validations so the existing verdict and approval process remain the
+// single source of truth, while this table preserves the actionable answer.
+export const contractAiAnalysisResults = pgTable("contract_ai_analysis_results", {
+  id:             varchar("id", { length: 36 }).primaryKey(),
+  caseId:         varchar("case_id", { length: 36 }).notNull(),
+  ruleName:       varchar("rule_name", { length: 150 }).notNull(),
+  severity:       varchar("severity", { length: 10 }).notNull(),
+  outputMode:     varchar("output_mode", { length: 16 }).notNull(),
+  outcome:        varchar("outcome", { length: 16 }).notNull(),
+  summary:        text("summary"),
+  itemsJson:      json("items_json"),
+  citationsJson:  json("citations_json"),
+  createdAt:      timestamp("created_at").notNull().defaultNow(),
+}, (t) => [
+  index("contract_ai_results_case_idx").on(t.caseId),
 ]);
 
 export const contractObligations = pgTable("contract_obligations", {

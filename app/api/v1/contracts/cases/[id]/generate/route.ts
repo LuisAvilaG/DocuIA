@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
-import { contractCases, contractDocuments, contractValidations } from "@/db/schema";
+import { contractAiAnalysisResults, contractCases, contractDocuments, contractValidations } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
 import { uploadFile } from "@/lib/storage/minio";
 import { renderTemplate, renderPdf, renderDocPdf, renderHtmlPdf, defaultTemplate, assembleCaseData } from "@/lib/contracts/generate";
@@ -34,13 +34,14 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
   }
 
   try {
-    const [docs, validations, plan] = await Promise.all([
+    const [docs, validations, analyses, plan] = await Promise.all([
       db.query.contractDocuments.findMany({ where: eq(contractDocuments.caseId, id), columns: { detectedType: true, extractedJson: true } }),
       db.query.contractValidations.findMany({ where: eq(contractValidations.caseId, id), columns: { subject: true, status: true, reason: true } }),
+      db.query.contractAiAnalysisResults.findMany({ where: eq(contractAiAnalysisResults.caseId, id), columns: { ruleName: true, summary: true, itemsJson: true } }),
       loadContractPlan(session.orgId, kase.flowId),
     ]);
 
-    const data = assembleCaseData(docs, validations);
+    const data = assembleCaseData(docs, validations, analyses);
     const tpl = plan.template;
     const title = tpl?.name ?? kase.title ?? "Documento generado";
 

@@ -38,6 +38,13 @@ export function buildFlowTrace(
       };
     }
     if (n.kind === "validate") {
+      if (n.data.rule.kind === "ai_analysis") {
+        return {
+          nodeId: n.id, kind: n.kind, label: `Analiza: ${n.data.name}`,
+          status: "done",
+          detail: "Análisis con IA y evidencia contractual",
+        };
+      }
       const res = runValidations([{ name: n.data.name, severity: n.data.severity, conditionsJson: n.data.rule }], docsByType, new Date());
       const by: Record<string, number> = {};
       for (const r of res) by[r.status] = (by[r.status] ?? 0) + 1;

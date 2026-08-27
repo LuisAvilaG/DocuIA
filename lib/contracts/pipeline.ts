@@ -1,16 +1,17 @@
 import { randomUUID } from "crypto";
 import { db } from "@/lib/db";
-import { contractCases, contractDocuments, contractExtractionLearnings, contractValidations, contractObligations, contractVisualTrainingVariants } from "@/db/schema";
+import { contractCases, contractDocuments, contractExtractionLearnings, contractValidations, contractObligations, contractVisualTrainingVariants, contractAiAnalysisResults } from "@/db/schema";
 import { and, desc, eq } from "drizzle-orm";
 import { uploadFile, getFileBuffer } from "@/lib/storage/minio";
 import { realExtractDeps, type ContractExtractDeps, type ExtractSource } from "./extract";
-import { runValidations, caseVerdict, type DocsByType } from "./validate";
+import { runValidations, caseVerdict, type DocsByType, type ValidationResult } from "./validate";
 import { loadContractPlan } from "./plan";
 import { buildFlowTrace } from "./trace";
 import { getFeature, isFeatureEnabled } from "@/lib/features";
 import { normalizeContractDate } from "./normalization";
 import { logAudit } from "@/lib/audit/log";
 import type { VisualTrainingVariant } from "./visual-training";
+import { runAiAnalysis, type AiAnalysisRule } from "./ai-analysis";
 
 export interface CaseFileInput { buffer: Buffer; fileName: string; mimeType: string }
 
@@ -172,7 +173,53 @@ export async function processContractCase(caseId: string, deps: ContractExtractD
     }
 
     // Cross-document validation (declarative rules from the active flow or tables).
-    const validations = validationsFeature ? runValidations(plan.rules, docsByType, new Date()) : [];
+    // AI analysis is deliberately a validation kind too, but its rich response
+    // is stored separately while a compact outcome participates in the same
+    // verdict and approval mechanics as every other rule.
+    const regularRules = plan.rules.filter((rule) => (rule.conditionsJson as { kind?: unknown } | null)?.kind !== "ai_analysis");
+    const aiRules = plan.rules.filter((rule): rule is typeof rule & { conditionsJson: AiAnalysisRule } =>
+      (rule.conditionsJson as { kind?: unknown } | null)?.kind === "ai_analysis",
+    );
+    const baseValidations = validationsFeature ? runValidations(regularRules, docsByType, new Date()) : [];
+    const analyses = validationsFeature
+      ? await Promise.all(aiRules.map(async (configured) => {
+        try {
+          return {
+            ruleName: configured.name,
+            severity: configured.severity ?? "warn",
+            outputMode: configured.conditionsJson.outputMode ?? "free",
+            response: await runAiAnalysis(configured.conditionsJson, docsByType),
+          };
+        } catch (error) {
+          // A transient model/provider failure must not discard an otherwise
+          // valid case. It becomes a visible review item that can be rerun.
+          return {
+            ruleName: configured.name,
+            severity: configured.severity ?? "warn",
+            outputMode: configured.conditionsJson.outputMode ?? "free",
+            response: {
+              outcome: "review" as const,
+              summary: `No se pudo completar este análisis con IA: ${error instanceof Error ? error.message : "error desconocido"}`,
+              items: [],
+              citations: [],
+            },
+          };
+        }
+      }))
+      : [];
+    const aiValidations: ValidationResult[] = analyses.map((analysis) => ({
+      ruleName: analysis.ruleName,
+      // An explicit block from the governed prompt must remain a block even
+      // if the node was originally configured as a softer review rule.
+      severity: analysis.response.outcome === "block" ? "block" : analysis.severity,
+      subject: "Análisis con IA",
+      status: analysis.response.outcome === "pass" ? "sin observaciones" : analysis.response.outcome === "block" ? "bloqueado" : "requiere revisión",
+      ok: analysis.response.outcome === "pass" ? true : analysis.response.outcome === "block" ? false : null,
+      reason: analysis.response.summary ?? (analysis.response.items.length > 0 ? `${analysis.response.items.length} hallazgo(s) estructurado(s).` : "El análisis requiere revisión."),
+      checks: [],
+      citation: analysis.response.citations[0] ?? null,
+    }));
+    const validations = [...baseValidations, ...aiValidations];
     const verdict = caseVerdict(validations);
 
     // Replace any prior validations for this case, then persist fresh results.
@@ -188,6 +235,21 @@ export async function processContractCase(caseId: string, deps: ContractExtractD
         reason:     v.reason,
         checksJson: v.checks,
         citation:   v.citation,
+      })));
+    }
+
+    await db.delete(contractAiAnalysisResults).where(eq(contractAiAnalysisResults.caseId, caseId));
+    if (analyses.length > 0) {
+      await db.insert(contractAiAnalysisResults).values(analyses.map((analysis) => ({
+        id: randomUUID(),
+        caseId,
+        ruleName: analysis.ruleName,
+        severity: analysis.response.outcome === "block" ? "block" : analysis.severity,
+        outputMode: analysis.outputMode,
+        outcome: analysis.response.outcome,
+        summary: analysis.response.summary,
+        itemsJson: analysis.response.items,
+        citationsJson: analysis.response.citations,
       })));
     }
 
@@ -219,6 +281,7 @@ export async function processContractCase(caseId: string, deps: ContractExtractD
       resultJson: {
         documents: summary,
         validations: validations.length,
+        analyses: analyses.length,
         verdict,
         flow: { source: plan.source, stages },
       },
@@ -229,7 +292,7 @@ export async function processContractCase(caseId: string, deps: ContractExtractD
       action: "contract.processing_completed",
       resourceType: "contract_case",
       resourceId: caseId,
-      metadata: { documents: summary.length, validations: validations.length, verdict },
+      metadata: { documents: summary.length, validations: validations.length, analyses: analyses.length, verdict },
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

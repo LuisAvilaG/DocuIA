@@ -366,6 +366,7 @@ export async function renderHtmlPdf(
 export function assembleCaseData(
   docs: Array<{ detectedType: string | null; extractedJson: unknown }>,
   validations: Array<{ subject: string; status: string; reason: string | null }>,
+  analyses: Array<{ ruleName: string; summary: string | null; itemsJson: unknown }> = [],
 ): Record<string, unknown> {
   const data: Record<string, unknown> = {};
   for (const d of docs) {
@@ -376,5 +377,16 @@ export function assembleCaseData(
     }
   }
   data._validations = validations.map((v) => `${v.subject}: ${v.status}${v.reason ? ` — ${v.reason}` : ""}`);
+  data._ai_analysis = analyses.map((analysis) => `${analysis.ruleName}: ${analysis.summary ?? "Sin resumen"}`);
+  data._ai_findings = analyses.flatMap((analysis) => {
+    if (!Array.isArray(analysis.itemsJson)) return [];
+    return analysis.itemsJson.map((item) => {
+      if (!item || typeof item !== "object") return "";
+      const values = (item as { values?: unknown }).values;
+      return values && typeof values === "object"
+        ? Object.entries(values as Record<string, unknown>).map(([key, value]) => `${key}: ${String(value ?? "")}`).join(" · ")
+        : "";
+    }).filter(Boolean);
+  });
   return data;
 }

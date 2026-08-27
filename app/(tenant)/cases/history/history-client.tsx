@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { ArrowRight, CalendarDays, FileText, Filter, RotateCcw, Search, Workflow } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { CONTRACT_CASE_STATUS, contractStatusLabel } from "@/lib/contracts/status";
 
 export type HistoryCase = {
   id: string;
@@ -15,17 +16,6 @@ export type HistoryCase = {
   approver: string | null;
   createdAt: string;
   updatedAt: string;
-};
-
-const STATUS: Record<string, { label: string; cls: string }> = {
-  uploaded: { label: "En cola", cls: "bg-secondary text-muted-foreground" },
-  processing: { label: "Procesando", cls: "bg-warning/10 text-warning" },
-  review: { label: "En revisión", cls: "bg-warning/10 text-warning" },
-  validated: { label: "Validado", cls: "bg-success/10 text-success" },
-  generated: { label: "Generado", cls: "bg-success/10 text-success" },
-  approved: { label: "Aprobado", cls: "bg-success/10 text-success" },
-  rejected: { label: "Rechazado", cls: "bg-destructive/10 text-destructive" },
-  failed: { label: "Error", cls: "bg-destructive/10 text-destructive" },
 };
 
 const PAGE_SIZE = 25;
@@ -88,7 +78,7 @@ export function CasesHistoryClient({ cases }: { cases: HistoryCase[] }) {
           </div>
           <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
             <label className="relative lg:col-span-2"><span className="sr-only">Buscar</span><Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" /><input value={query} onChange={setFilter(setQuery)} placeholder="Buscar por caso, persona o documento" className="w-full rounded-md border border-border bg-background py-2 pl-8 pr-3 text-xs text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary/60" /></label>
-            <FilterSelect label="Estado" value={status} onChange={setFilter(setStatus)} options={Object.entries(STATUS).map(([value, item]) => ({ value, label: item.label }))} />
+            <FilterSelect label="Estado" value={status} onChange={setFilter(setStatus)} options={Object.entries(CONTRACT_CASE_STATUS).map(([value, item]) => ({ value, label: item.label }))} />
             <FilterSelect label="Flujo" value={flow} onChange={setFilter(setFlow)} options={flows.map((value) => ({ value, label: value }))} />
             <FilterSelect label="Tipo de documento" value={documentType} onChange={setFilter(setDocumentType)} options={documentTypes.map((value) => ({ value, label: value }))} />
             <FilterSelect label="Creado por" value={creator} onChange={setFilter(setCreator)} options={creators.map((value) => ({ value, label: value }))} />
@@ -103,7 +93,7 @@ export function CasesHistoryClient({ cases }: { cases: HistoryCase[] }) {
           {displayed.length === 0 ? <div className="px-5 py-14 text-center"><FileText className="mx-auto h-5 w-5 text-muted-foreground" /><p className="mt-3 text-xs font-medium text-foreground">No hay casos con estos filtros</p><p className="mt-1 text-[11px] text-muted-foreground">Ajusta los criterios o limpia la búsqueda.</p></div> : (
             <div className="divide-y divide-border">
               {displayed.map((item) => {
-                const current = STATUS[item.status] ?? { label: item.status, cls: "bg-secondary text-muted-foreground" };
+                const current = CONTRACT_CASE_STATUS[item.status as keyof typeof CONTRACT_CASE_STATUS] ?? { label: contractStatusLabel(item.status), cls: "bg-secondary text-muted-foreground" };
                 return <Link key={item.id} href={`/cases/${item.id}`} className="group grid gap-3 px-5 py-4 transition-colors hover:bg-secondary/55 sm:grid-cols-[minmax(0,1.5fr)_minmax(10rem,1fr)_auto] sm:items-center">
                   <div className="min-w-0"><p className="truncate text-xs font-semibold text-foreground group-hover:text-primary">{item.title}</p><p className="mt-1 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground"><Workflow className="h-3 w-3 shrink-0" /><span className="truncate">{item.flowName}</span></p></div>
                   <div className="min-w-0 text-[11px] text-muted-foreground"><p className="truncate">Creó: <span className="text-foreground/80">{item.creator ?? "Sin registro"}</span></p><p className="mt-1 truncate">Aprobó: <span className="text-foreground/80">{item.approver ?? "Pendiente"}</span></p><p className="mt-1 truncate">Docs: <span className="text-foreground/80">{item.documentTypes.join(", ") || "Sin clasificar"}</span></p></div>

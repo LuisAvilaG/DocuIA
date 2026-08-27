@@ -3,15 +3,12 @@
 import { useMemo, useState } from "react";
 import { BarChart3, CalendarDays, ChevronDown, Clock3, Files, Filter, ShieldCheck, TriangleAlert } from "lucide-react";
 import { FlowBars, SignerDonut, ThroughputArea } from "./charts";
+import { CONTRACT_CASE_STATUS, contractStatusLabel } from "@/lib/contracts/status";
 
 type CaseItem = { id: string; createdAt: string; updatedAt: string; status: string; flowId: string | null };
 type ValidationItem = { caseId: string; ok: boolean | null; severity: string };
 
 const DONE = new Set(["validated", "generated", "approved"]);
-const STATUS: Record<string, string> = {
-  uploaded: "En cola", processing: "Procesando", review: "En revisión", validated: "Validado",
-  generated: "Generado", approved: "Aprobado", rejected: "Rechazado", failed: "Error",
-};
 const PERIODS = [
   { value: "7", label: "Últimos 7 días" }, { value: "30", label: "Últimos 30 días" },
   { value: "90", label: "Últimos 90 días" }, { value: "all", label: "Todo el historial" },
@@ -99,7 +96,7 @@ export function ContractMetricsClient({ referenceDate, cases, documents, validat
       <span className="mr-1 inline-flex items-center gap-1.5 text-xs font-semibold text-foreground"><Filter className="h-3.5 w-3.5 text-primary" /> Alcance</span>
       <Select value={period} onChange={setPeriod} options={PERIODS} label="Periodo" />
       <Select value={flowId} onChange={setFlowId} options={[{ value: "", label: "Todos los flujos" }, ...flows.map((flow) => ({ value: flow.id, label: flow.name }))]} label="Flujo" />
-      <Select value={status} onChange={setStatus} options={[{ value: "", label: "Todos los estados" }, ...Object.entries(STATUS).map(([value, label]) => ({ value, label }))]} label="Estado" />
+      <Select value={status} onChange={setStatus} options={[{ value: "", label: "Todos los estados" }, ...Object.entries(CONTRACT_CASE_STATUS).map(([value, entry]) => ({ value, label: entry.label }))]} label="Estado" />
       <span className="ml-auto text-[11px] tabular-nums text-muted-foreground">{total} caso{total === 1 ? "" : "s"} analizado{total === 1 ? "" : "s"}</span>
     </section>
     {total === 0 ? <EmptyMetrics /> : <>
@@ -117,7 +114,7 @@ export function ContractMetricsClient({ referenceDate, cases, documents, validat
         <section className="rounded-xl border border-border bg-card p-5"><PanelTitle title="Uso por flujo" subtitle="Qué proceso está recibiendo más casos." /><div className="mt-4"><FlowBars data={perFlow} /></div></section>
         <section className="rounded-xl border border-border bg-card p-5"><PanelTitle title="Documentos procesados" subtitle="Distribución por tipo documental detectado." /><div className="mt-4"><FlowBars data={perType} /></div></section>
       </div>
-      <section className="overflow-hidden rounded-xl border border-border bg-card"><div className="flex items-center justify-between gap-3 border-b border-border px-5 py-3"><div><h2 className="text-sm font-semibold text-foreground">Última actividad</h2><p className="mt-0.5 text-[11px] text-muted-foreground">Los casos más recientes dentro de este alcance.</p></div><span className="text-[11px] text-muted-foreground">{latest.length} visibles</span></div><div className="divide-y divide-border">{latest.map((item) => <div key={item.id} className="grid gap-1 px-5 py-3 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center sm:gap-4"><p className="text-xs font-medium text-foreground">{item.flowId ? flowNames.get(item.flowId) ?? "Flujo eliminado" : "Sin flujo asignado"}</p><span className="text-[11px] text-muted-foreground">{STATUS[item.status] ?? item.status}</span><time className="text-[11px] tabular-nums text-muted-foreground" dateTime={item.updatedAt}>{new Date(item.updatedAt).toLocaleString("es-MX")}</time></div>)}</div></section>
+      <section className="overflow-hidden rounded-xl border border-border bg-card"><div className="flex items-center justify-between gap-3 border-b border-border px-5 py-3"><div><h2 className="text-sm font-semibold text-foreground">Última actividad</h2><p className="mt-0.5 text-[11px] text-muted-foreground">Los casos más recientes dentro de este alcance.</p></div><span className="text-[11px] text-muted-foreground">{latest.length} visibles</span></div><div className="divide-y divide-border">{latest.map((item) => <div key={item.id} className="grid gap-1 px-5 py-3 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center sm:gap-4"><p className="text-xs font-medium text-foreground">{item.flowId ? flowNames.get(item.flowId) ?? "Flujo eliminado" : "Sin flujo asignado"}</p><span className="text-[11px] text-muted-foreground">{contractStatusLabel(item.status)}</span><time className="text-[11px] tabular-nums text-muted-foreground" dateTime={item.updatedAt}>{new Date(item.updatedAt).toLocaleString("es-MX")}</time></div>)}</div></section>
     </>}
   </div></div>;
 }

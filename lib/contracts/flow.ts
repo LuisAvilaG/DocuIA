@@ -43,6 +43,15 @@ const zRule = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("field_format"), docType: z.string().min(1), field: z.string().min(1), format: z.enum(["tax_id", "email", "date", "number", "nonempty"]), country: z.string().optional() }),
   z.object({ kind: z.literal("document_required"), docTypes: z.array(z.string().min(1)).min(1) }),
   z.object({ kind: z.literal("signatures_complete"), subjects: zRef, signatures: zRef }),
+  z.object({
+    kind: z.literal("ai_analysis"),
+    prompt: z.string().min(1).max(12000),
+    improvedPrompt: z.string().max(12000).optional(),
+    internalRules: z.string().max(12000).optional(),
+    outputMode: z.enum(["free", "structured", "both"]).default("free"),
+    outputFields: z.array(z.object({ key: z.string().min(1).max(80), label: z.string().min(1).max(150), description: z.string().max(500).optional() })).max(24).default([]),
+    sourceDocTypes: z.array(z.string().min(1)).max(30).optional(),
+  }),
 ]);
 
 const zIntake = z.object({
@@ -109,7 +118,7 @@ export function compileFlow(graph: FlowGraph): CompiledFlow {
     } else if (n.kind === "extract") {
       (fieldsByType[n.data.docTypeKey] ??= []).push(...n.data.fields);
     } else if (n.kind === "validate") {
-      const rule = n.data.rule as ValidationRule;
+      const rule = n.data.rule as unknown as ValidationRule;
       rules.push({ name: n.data.name, severity: n.data.severity, appliesTo: ruleRefs(rule)[0]?.field ?? rule.kind, conditionsJson: rule });
     } else if (n.kind === "generate") {
       if (!template) template = { key: n.data.templateKey, name: n.data.name, body: n.data.body, doc: n.data.doc as ContractDoc | undefined, html: n.data.html };
@@ -231,7 +240,7 @@ export function presetToFlow(preset: ContractPreset): FlowGraph {
   preset.rules.forEach((r, i) => {
     const id = `validate_${i}`;
     validateIds.push(id);
-    nodes.push({ id, kind: "validate", position: { x: COL * 2, y: i * ROW }, data: { name: r.name, severity: "block", rule: r.conditions as ValidationRule } });
+    nodes.push({ id, kind: "validate", position: { x: COL * 2, y: i * ROW }, data: { name: r.name, severity: "block", rule: r.conditions as never } });
     preset.docTypes.forEach((dt) => edges.push({ id: `e_extract_${dt.key}_${id}`, source: `extract_${dt.key}`, target: id }));
   });
 

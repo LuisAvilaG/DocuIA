@@ -9,10 +9,12 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import {
-  Loader2, Save, Plus, Trash2, FileInput, ListChecks, ShieldCheck, FileText, ChevronDown, ChevronUp, StickyNote, PencilRuler, Sparkles, BookMarked,
+  Loader2, Save, Plus, Trash2, FileInput, ListChecks, ShieldCheck, FileText, ChevronDown, ChevronUp, StickyNote, PencilRuler, Sparkles, BookMarked, FileUp, PanelLeft,
 } from "lucide-react";
 import { DocEditor } from "./doc-editor";
 import { VisualTrainingWorkspace, type TrainingField } from "./visual-training-workspace";
+import { WordTemplateWorkspace } from "./word-template-workspace";
+import type { WordTemplateConfig } from "@/lib/contracts/word-template";
 
 // Seed the WYSIWYG editor from stored HTML, else migrate the old text body, else blank.
 function genInitialHtml(data: Record<string, unknown>): string {
@@ -45,7 +47,7 @@ function defaultData(kind: Kind): AnyData {
       membership: { docType: "", field: "", label: "En documento" },
       statusLabels: { pass: "vigente", fail: "no_vigente", unknown: "indeterminado" },
     } };
-    case "generate": return { templateKey: "salida", name: "Documento de salida", body: "" };
+    case "generate": return { templateKey: "salida", name: "Documento de salida", body: "", source: "editor" };
     case "note":     return { body: "Escribe aquí la instrucción o comentario para este flujo." };
   }
 }
@@ -503,17 +505,22 @@ function ValidateForm({ data, patch, docTypes, fieldsByType }: { data: AnyData; 
   );
 }
 
-function GenerateForm({ data, patch, onOpenEditor }: { data: AnyData; patch: (p: AnyData) => void; onOpenEditor: () => void }) {
+function GenerateForm({ data, patch, onOpenEditor, onOpenWordTemplate }: { data: AnyData; patch: (p: AnyData) => void; onOpenEditor: () => void; onOpenWordTemplate: () => void }) {
   const hasContent = !!(data.html || data.body);
+  const source = data.source === "word" ? "word" : "editor";
   return (
     <div className="space-y-3">
       <FieldRow label="Nombre del documento"><input className={inp} value={String(data.name ?? "")} onChange={(e) => patch({ name: e.target.value })} placeholder="Cotización" /></FieldRow>
-      <button onClick={onOpenEditor}
-        className="w-full flex items-center justify-center gap-2 rounded-lg bg-primary text-primary-foreground px-4 py-3 text-sm font-medium shadow-[0_1px_3px_oklch(0.48_0.15_182_/_0.3)] hover:bg-primary/90 transition-colors">
-        <FileText className="w-4 h-4" /> Abrir editor del documento
-      </button>
-      <p className="text-[11px] text-muted-foreground leading-relaxed">Diseña el documento como en Word: títulos, negrita, colores, listas, <strong className="text-foreground font-medium">tablas</strong>, <strong className="text-foreground font-medium">imágenes/logo</strong>, e inserta campos del caso. Se exporta a PDF. {hasContent ? "Ya tiene contenido guardado." : "Aún sin contenido."}</p>
-      <p className="text-[10px] text-muted-foreground">Tip: también puedes hacer <strong className="text-foreground font-medium">doble clic</strong> en el nodo de Generación para abrirlo.</p>
+      <div className="grid grid-cols-2 gap-2 rounded-lg bg-secondary/60 p-1">
+        <button type="button" onClick={() => patch({ source: "editor" })} className={`rounded-md px-2 py-2 text-xs font-medium transition-colors ${source === "editor" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}><PanelLeft className="mr-1 inline h-3.5 w-3.5" /> Editor</button>
+        <button type="button" onClick={() => { patch({ source: "word" }); onOpenWordTemplate(); }} className={`rounded-md px-2 py-2 text-xs font-medium transition-colors ${source === "word" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}><FileUp className="mr-1 inline h-3.5 w-3.5" /> Plantilla Word</button>
+      </div>
+      {source === "editor" ? <><button onClick={onOpenEditor}
+        className="w-full flex items-center justify-center gap-2 rounded-lg bg-primary text-primary-foreground px-4 py-3 text-sm font-medium shadow-[0_1px_3px_oklch(0.48_0.15_182_/_0.3)] hover:bg-primary/90 transition-colors"><FileText className="w-4 h-4" /> Abrir editor del documento</button>
+        <p className="text-[11px] text-muted-foreground leading-relaxed">Diseña el documento desde cero: títulos, tablas, imágenes/logo y campos del caso. Se exporta a PDF. {hasContent ? "Ya tiene contenido guardado." : "Aún sin contenido."}</p></> : <><button onClick={onOpenWordTemplate}
+        className="w-full flex items-center justify-center gap-2 rounded-lg bg-primary text-primary-foreground px-4 py-3 text-sm font-medium shadow-[0_1px_3px_oklch(0.48_0.15_182_/_0.3)] hover:bg-primary/90 transition-colors"><FileUp className="w-4 h-4" /> {data.wordTemplate ? "Abrir plantilla y mapeo" : "Cargar plantilla Word"}</button>
+        <p className="text-[11px] text-muted-foreground leading-relaxed">Sube el Word corporativo y selecciona en él qué texto representa cada campo. La salida conserva su diseño y queda como Word editable.</p></>}
+      <p className="text-[10px] text-muted-foreground">Tip: también puedes hacer <strong className="text-foreground font-medium">doble clic</strong> en el nodo de Generación para abrir el modo seleccionado.</p>
     </div>
   );
 }
@@ -559,6 +566,7 @@ function FlowBuilder({ flowId }: { flowId: string }) {
   const [name, setName] = useState("Flujo de contratos");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [docEditorOpen, setDocEditorOpen] = useState(false);
+  const [wordTemplateOpen, setWordTemplateOpen] = useState(false);
   const [visualTraining, setVisualTraining] = useState<{ documentType: string; documentName: string; fields: TrainingField[] } | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -708,7 +716,12 @@ function FlowBuilder({ flowId }: { flowId: string }) {
             nodes={displayNodes} edges={edges} nodeTypes={nodeTypes}
             onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect}
             onNodeClick={(_, n) => setSelectedId(n.id)} onPaneClick={() => setSelectedId(null)}
-            onNodeDoubleClick={(_, n) => { setSelectedId(n.id); if (n.type === "generate") setDocEditorOpen(true); }}
+            onNodeDoubleClick={(_, n) => {
+              setSelectedId(n.id);
+              if (n.type !== "generate") return;
+              if ((n.data as AnyData).source === "word") setWordTemplateOpen(true);
+              else setDocEditorOpen(true);
+            }}
             deleteKeyCode={["Backspace", "Delete"]}
             defaultEdgeOptions={{
               type: "smoothstep",
@@ -761,7 +774,7 @@ function FlowBuilder({ flowId }: { flowId: string }) {
               {selected.type === "intake"   && <IntakeForm   data={selected.data as AnyData} patch={patchSelected} order={intakeOrder.get(selected.id)} total={intakeOrder.size} onMove={(dir) => moveIntake(selected.id, dir)} />}
               {selected.type === "extract"  && <ExtractForm  data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} onTrain={setVisualTraining} />}
               {selected.type === "validate" && <ValidateForm data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} fieldsByType={fieldsByType} />}
-              {selected.type === "generate" && <GenerateForm data={selected.data as AnyData} patch={patchSelected} onOpenEditor={() => setDocEditorOpen(true)} />}
+              {selected.type === "generate" && <GenerateForm data={selected.data as AnyData} patch={patchSelected} onOpenEditor={() => setDocEditorOpen(true)} onOpenWordTemplate={() => setWordTemplateOpen(true)} />}
               {selected.type === "note" && <p className="text-xs leading-relaxed text-muted-foreground">Edita el texto directamente en el bloque. Arrastra los controles de sus bordes para ajustar el ancho o alto. Esta nota no crea reglas ni cambia el resultado del caso.</p>}
             </div>
           )}
@@ -774,6 +787,16 @@ function FlowBuilder({ flowId }: { flowId: string }) {
           fields={[...editorFields.values()]}
           onSave={(html) => { patchSelected({ html }); setDocEditorOpen(false); }}
           onClose={() => setDocEditorOpen(false)}
+        />
+      )}
+      {wordTemplateOpen && selected?.type === "generate" && (
+        <WordTemplateWorkspace
+          flowId={flowId}
+          nodeId={selected.id}
+          fields={[...editorFields.values()]}
+          initialTemplate={(selected.data as AnyData).wordTemplate as WordTemplateConfig | undefined}
+          onSave={(wordTemplate) => { patchSelected({ source: "word", wordTemplate }); setWordTemplateOpen(false); }}
+          onClose={() => setWordTemplateOpen(false)}
         />
       )}
       {visualTraining && <VisualTrainingWorkspace flowId={flowId} {...visualTraining} onClose={() => setVisualTraining(null)} />}

@@ -20,7 +20,8 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     where: and(eq(contractCases.id, id), eq(contractCases.organizationId, session.orgId)),
     columns: { resultJson: true },
   });
-  const outputKey = (kase?.resultJson as { outputKey?: string } | null)?.outputKey;
+  const result = (kase?.resultJson as { outputKey?: string; outputMime?: string; outputName?: string } | null);
+  const outputKey = result?.outputKey;
   if (!outputKey) return NextResponse.json({ error: "Documento no generado" }, { status: 404 });
   await logAudit({ orgId: session.orgId, userId: session.sub, userEmail: session.email, action: "contract.output_viewed", resourceType: "contract_case", resourceId: id });
 
@@ -29,9 +30,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     const webStream = Readable.toWeb(nodeStream) as unknown as ReadableStream<Uint8Array>;
     return new NextResponse(webStream, {
       headers: {
-        "Content-Type": "application/pdf",
+        "Content-Type": result?.outputMime || "application/pdf",
         "Cache-Control": "private, max-age=3600",
-        "Content-Disposition": `inline; filename="contrato-${id.slice(0, 8)}.pdf"`,
+        "Content-Disposition": `${result?.outputMime === "application/pdf" ? "inline" : "attachment"}; filename="${(result?.outputName || `contrato-${id.slice(0, 8)}.pdf`).replace(/[\r\n"]/g, "")}"`,
       },
     });
   } catch {

@@ -110,7 +110,7 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
   const isProcessing = kase.status === "uploaded" || kase.status === "processing";
 
   const result = (kase.resultJson ?? {}) as {
-    outputKey?: string; missing?: string[];
+    outputKey?: string; outputMime?: string; outputName?: string; missing?: string[];
     decision?: { action?: string; reason?: string | null; byEmail?: string | null; at?: string | null; override?: boolean } | null;
   };
   const status = kase.status === "approved" && result.outputKey
@@ -288,7 +288,7 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
                 <div className="space-y-2">
                   <div className="flex items-center gap-2 rounded-lg border border-border bg-secondary/40 px-3 py-2.5">
                     <FileText className="w-4 h-4 text-primary shrink-0" />
-                    <span className="text-xs text-foreground flex-1 truncate">Documento PDF</span>
+                    <span className="text-xs text-foreground flex-1 truncate">{result.outputMime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ? "Documento Word editable" : "Documento PDF"}</span>
                     <a href={`/api/v1/contracts/cases/${kase.id}/output`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline shrink-0"><Download className="w-3.5 h-3.5" /> Ver / descargar</a>
                   </div>
                   {result.missing && result.missing.length > 0 && (

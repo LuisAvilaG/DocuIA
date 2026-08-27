@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { ContractPreset } from "./presets";
 import { ruleRefs, type ValidationRule, type Severity } from "./validate";
 import type { ContractDoc } from "./generate";
+import type { WordTemplateConfig } from "./word-template";
 
 // ── Flow graph model ──────────────────────────────────────────────────
 // The visual canvas builder produces this graph. compileFlow() turns it into
@@ -74,7 +75,15 @@ const zDocBlock = z.discriminatedUnion("type", [
 const zDoc = z.object({ brandColor: z.string().optional(), logo: z.string().optional(), blocks: z.array(zDocBlock).default([]) });
 const zGenerate = z.object({
   id: z.string().min(1), kind: z.literal("generate"), position: zPosition,
-  data: z.object({ templateKey: z.string().min(1), name: z.string().min(1), body: z.string().default(""), doc: zDoc.optional(), html: z.string().optional() }),
+  data: z.object({
+    templateKey: z.string().min(1), name: z.string().min(1), body: z.string().default(""), doc: zDoc.optional(), html: z.string().optional(),
+    source: z.enum(["editor", "word"]).default("editor"),
+    wordTemplate: z.object({
+      storageKey: z.string().min(1), originalName: z.string().min(1),
+      mimeType: z.literal("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+      mappings: z.array(z.object({ id: z.string().min(1), anchorText: z.string().min(1).max(500), fieldKey: z.string().min(1).max(120), fieldLabel: z.string().min(1).max(200) })).max(120),
+    }).optional(),
+  }),
 });
 // Notes are visual annotations for the team. They are deliberately ignored by
 // compilation, validation and execution.
@@ -103,7 +112,7 @@ export interface CompiledFlow {
   docTypes: Array<{ key: string; name: string; hint: string | null }>;
   fieldsByType: Record<string, FlowField[]>;
   rules: Array<{ name: string; severity: Severity; appliesTo: string; conditionsJson: ValidationRule }>;
-  template: { key: string; name: string; body: string; doc?: ContractDoc; html?: string } | null;
+  template: { key: string; name: string; body: string; doc?: ContractDoc; html?: string; source?: "editor" | "word"; wordTemplate?: WordTemplateConfig } | null;
 }
 
 export function compileFlow(graph: FlowGraph): CompiledFlow {
@@ -121,7 +130,7 @@ export function compileFlow(graph: FlowGraph): CompiledFlow {
       const rule = n.data.rule as unknown as ValidationRule;
       rules.push({ name: n.data.name, severity: n.data.severity, appliesTo: ruleRefs(rule)[0]?.field ?? rule.kind, conditionsJson: rule });
     } else if (n.kind === "generate") {
-      if (!template) template = { key: n.data.templateKey, name: n.data.name, body: n.data.body, doc: n.data.doc as ContractDoc | undefined, html: n.data.html };
+      if (!template) template = { key: n.data.templateKey, name: n.data.name, body: n.data.body, doc: n.data.doc as ContractDoc | undefined, html: n.data.html, source: n.data.source, wordTemplate: n.data.wordTemplate as WordTemplateConfig | undefined };
     }
   }
   return { docTypes, fieldsByType, rules, template };
@@ -245,7 +254,7 @@ export function presetToFlow(preset: ContractPreset): FlowGraph {
   });
 
   const genId = "generate_out";
-  nodes.push({ id: genId, kind: "generate", position: { x: COL * 3, y: 0 }, data: { templateKey: preset.template.key, name: preset.template.name, body: preset.template.body } });
+  nodes.push({ id: genId, kind: "generate", position: { x: COL * 3, y: 0 }, data: { templateKey: preset.template.key, name: preset.template.name, body: preset.template.body, source: "editor" } });
   const genSources = validateIds.length ? validateIds : preset.docTypes.map((dt) => `extract_${dt.key}`);
   genSources.forEach((src) => edges.push({ id: `e_${src}_${genId}`, source: src, target: genId }));
 

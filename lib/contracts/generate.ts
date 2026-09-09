@@ -18,7 +18,15 @@ function pdfSafe(s: string): string {
 }
 
 function flatten(v: unknown): string {
-  if (Array.isArray(v)) return v.map((x) => String(x)).filter(Boolean).join(", ");
+  if (Array.isArray(v)) return v.map((x) => flatten(x)).filter(Boolean).join("\n");
+  if (v && typeof v === "object") {
+    const row = v as Record<string, unknown>;
+    const label = String(row.amparo ?? row.nombre ?? row.name ?? row.concepto ?? "").trim();
+    const value = row.value === null || row.value === undefined ? "" : String(row.value);
+    return [label, value].filter(Boolean).join(": ") || Object.entries(row)
+      .filter(([key]) => key !== "evidence" && key !== "status")
+      .map(([key, item]) => `${key}: ${String(item ?? "")}`).join(" · ");
+  }
   if (v === null || v === undefined) return "";
   return String(v);
 }

@@ -38,7 +38,7 @@ export interface ContractPlan {
   docTypes:     Array<{ key: string; name: string; hint: string | null }>;
   fieldsByType: Record<string, FieldDef[]>;
   calculations:  CalculationDefinition[];
-  rules:        Array<{ name: string; severity?: Severity; conditionsJson: unknown }>;
+  rules:        Array<{ nodeId?: string; name: string; severity?: Severity; conditionsJson: unknown }>;
   template:     { key: string; name: string; body: string; doc?: ContractDoc; html?: string; source?: "editor" | "word"; wordTemplate?: WordTemplateConfig } | null;
 }
 
@@ -71,7 +71,7 @@ export async function loadContractPlan(orgId: string, flowId?: string | null): P
       docTypes: c.docTypes,
       fieldsByType: c.fieldsByType,
       calculations: c.calculations,
-      rules: c.rules.map((r) => ({ name: r.name, severity: r.severity, conditionsJson: r.conditionsJson })),
+      rules: c.rules.map((r) => ({ nodeId: r.nodeId, name: r.name, severity: r.severity, conditionsJson: r.conditionsJson })),
       template: c.template,
     };
   }

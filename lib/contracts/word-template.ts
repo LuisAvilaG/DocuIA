@@ -82,6 +82,13 @@ function replaceTextInXml(xml: string, anchor: string, replacement: string): str
 
 function printable(value: unknown): string {
   if (Array.isArray(value)) return value.map((item) => printable(item)).filter(Boolean).join(", ");
+  if (value && typeof value === "object") {
+    const row = value as Record<string, unknown>;
+    const label = String(row.amparo ?? row.nombre ?? row.name ?? row.concepto ?? "").trim();
+    const calculated = row.value === null || row.value === undefined ? "" : String(row.value);
+    if (label || calculated) return [label, calculated].filter(Boolean).join(": ");
+    return Object.entries(row).filter(([key]) => key !== "evidence" && key !== "status").map(([key, item]) => `${key}: ${String(item ?? "")}`).join(" · ");
+  }
   if (value === null || value === undefined || value === "") return "[POR COMPLETAR]";
   return String(value);
 }

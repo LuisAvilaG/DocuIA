@@ -42,7 +42,7 @@ function defaultData(kind: Kind): AnyData {
   switch (kind) {
     case "intake":   return { docTypeKey: "nuevo_tipo", name: "Nuevo documento", hint: "" };
     case "extract":  return { docTypeKey: "nuevo_tipo", fields: [] };
-    case "calculate": return { name: "Nuevo cálculo", key: "resultado_calculado", label: "Resultado calculado", base: { docType: "", field: "" }, operation: "percentage", operand: 10, decimals: 0 };
+    case "calculate": return { name: "Nuevo cálculo", key: "resultado_calculado", label: "Resultado calculado", base: { type: "field", docType: "", field: "" }, operation: "percentage", operand: { type: "number", value: 10 }, decimals: 0, fixedValues: [], mode: "single" };
     case "validate": return { name: "Nueva validación", rule: {
       kind: "cross_reference",
       subjects: { docType: "", field: "" },
@@ -179,13 +179,31 @@ const CALC_OPERATIONS = [
   { value: "divide", label: "Dividir entre un valor" },
 ];
 
-function CalculationForm({ data, patch, docTypes, fieldsByType }: { data: AnyData; patch: (p: AnyData) => void; docTypes: DocTypeOpt[]; fieldsByType: Record<string, string[]> }) {
-  const base = (data.base && typeof data.base === "object" ? data.base : {}) as { docType?: string; field?: string };
+type FixedValue = { key: string; label: string; value: number };
+type AnalysisNodeOption = { id: string; name: string };
+
+function CalculationForm({ data, patch, docTypes, fieldsByType, analysisNodes }: { data: AnyData; patch: (p: AnyData) => void; docTypes: DocTypeOpt[]; fieldsByType: Record<string, string[]>; analysisNodes: AnalysisNodeOption[] }) {
+  const base = (data.base && typeof data.base === "object" ? data.base : {}) as { type?: "field" | "fixed"; docType?: string; field?: string; key?: string };
   const operation = String(data.operation ?? "percentage");
-  const operand = Number(data.operand ?? 0);
-  const baseField = base.field || "campo base";
-  const operatorText = operation === "percentage" ? `× ${operand}%` : operation === "multiply" ? `× ${operand}` : operation === "add" ? `+ ${operand}` : operation === "subtract" ? `− ${operand}` : `÷ ${operand}`;
-  const setBase = (next: Partial<{ docType: string; field: string }>) => patch({ base: { docType: base.docType ?? "", field: base.field ?? "", ...next } });
+  const fixedValues = (Array.isArray(data.fixedValues) ? data.fixedValues : []) as FixedValue[];
+  const mode = data.mode === "each_analysis_item" ? "each_analysis_item" : "single";
+  const rawOperand = data.operand;
+  const operand = typeof rawOperand === "number" ? { type: "number", value: rawOperand } : (rawOperand && typeof rawOperand === "object" ? rawOperand : { type: "number", value: 0 }) as { type?: string; value?: number; key?: string };
+  const baseField = base.type === "fixed" ? base.key || "valor fijo" : base.field || "campo base";
+  const operandName = operand.type === "fixed" || operand.type === "item" ? operand.key || "valor" : String(operand.value ?? 0);
+  const operatorText = operation === "percentage" ? `× ${operandName}%` : operation === "multiply" ? `× ${operandName}` : operation === "add" ? `+ ${operandName}` : operation === "subtract" ? `− ${operandName}` : `÷ ${operandName}`;
+  const setBase = (next: Record<string, unknown>) => patch({ base: { type: base.type ?? "field", docType: base.docType ?? "", field: base.field ?? "", ...next } });
+  const setFixed = (values: FixedValue[]) => patch({ fixedValues: values });
+  const setOperand = (next: Record<string, unknown>) => patch({ operand: next });
+  const currentFilter = (data.itemFilter && typeof data.itemFilter === "object" ? data.itemFilter : {}) as { key?: string; value?: string };
+  const [filterDraft, setFilterDraft] = useState({ key: currentFilter.key ?? "", value: currentFilter.value ?? "" });
+  const setFilter = (part: "key" | "value", value: string) => {
+    const next = { ...filterDraft, [part]: value };
+    setFilterDraft(next);
+    // Do not persist a half-filled optional filter: the flow schema rightly
+    // rejects it and users should still be able to save a work-in-progress node.
+    patch({ itemFilter: next.key?.trim() && next.value?.trim() ? next : undefined });
+  };
   return (
     <div className="space-y-3">
       <FieldRow label="Nombre del cálculo"><input className={inp} value={String(data.name ?? "")} onChange={(event) => patch({ name: event.target.value })} placeholder="Valor asegurado de seriedad" /></FieldRow>
@@ -193,22 +211,41 @@ function CalculationForm({ data, patch, docTypes, fieldsByType }: { data: AnyDat
         <FieldRow label="Clave de resultado"><input className={`${inp} font-mono`} value={String(data.key ?? "")} onChange={(event) => patch({ key: event.target.value.replace(/\s+/g, "_") })} placeholder="valor_asegurado" /></FieldRow>
         <FieldRow label="Etiqueta visible"><input className={inp} value={String(data.label ?? "")} onChange={(event) => patch({ label: event.target.value })} placeholder="Valor asegurado" /></FieldRow>
       </div>
-      <div>
-        <span className={lbl}>Campo base</span>
-        <div className="mt-1 grid grid-cols-2 gap-1.5">
-          <Select value={base.docType ?? ""} onChange={(value) => setBase({ docType: value, field: "" })} options={docTypes.map((doc) => ({ value: doc.key, label: doc.name }))} placeholder="Documento" />
-          <Select value={base.field ?? ""} onChange={(value) => setBase({ field: value })} options={(fieldsByType[base.docType ?? ""] ?? []).map((field) => ({ value: field, label: field }))} placeholder={base.docType ? "Campo" : "elige doc"} disabled={!base.docType} />
-        </div>
+      <div className="rounded-lg border border-border bg-background/60 p-3 space-y-2.5">
+        <div><p className="text-[11px] font-semibold text-foreground">Valores fijos del cálculo</p><p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">Úsalos para tasas, límites, SMMLV, UVT o cualquier dato que no proviene del documento.</p></div>
+        {fixedValues.map((value, index) => <div key={`${value.key}-${index}`} className="grid grid-cols-[88px_1fr_80px_20px] items-center gap-1.5">
+          <input className={`${inp} !py-1 font-mono`} value={value.key} placeholder="smmlv" onChange={(event) => setFixed(fixedValues.map((item, i) => i === index ? { ...item, key: event.target.value.replace(/\s+/g, "_") } : item))} />
+          <input className={`${inp} !py-1`} value={value.label} placeholder="Salario mínimo" onChange={(event) => setFixed(fixedValues.map((item, i) => i === index ? { ...item, label: event.target.value } : item))} />
+          <input className={`${inp} !py-1 tabular-nums`} type="number" step="any" value={Number.isFinite(value.value) ? value.value : ""} onChange={(event) => setFixed(fixedValues.map((item, i) => i === index ? { ...item, value: Number(event.target.value) } : item))} />
+          <button type="button" onClick={() => setFixed(fixedValues.filter((_, i) => i !== index))} className="text-muted-foreground hover:text-destructive"><Trash2 className="h-3.5 w-3.5" /></button>
+        </div>)}
+        <button type="button" onClick={() => setFixed([...fixedValues, { key: "", label: "", value: 0 }])} className="inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"><Plus className="h-3 w-3" /> Agregar valor fijo</button>
       </div>
-      <div className="grid grid-cols-[1fr_92px] gap-2">
+      <div>
+        <span className={lbl}>Valor base</span>
+        <div className="mt-1 grid grid-cols-2 gap-1.5">
+          <Select value={base.type === "fixed" ? "fixed" : "field"} onChange={(value) => setBase(value === "fixed" ? { type: "fixed", key: "", docType: undefined, field: undefined } : { type: "field", key: undefined, docType: "", field: "" })} options={[{ value: "field", label: "Campo extraído" }, { value: "fixed", label: "Valor fijo" }]} />
+          {base.type === "fixed" ? <Select value={base.key ?? ""} onChange={(value) => setBase({ key: value })} options={fixedValues.filter((item) => item.key).map((item) => ({ value: item.key, label: item.label || item.key }))} placeholder="Elige valor" /> : <Select value={base.docType ?? ""} onChange={(value) => setBase({ docType: value, field: "" })} options={docTypes.map((doc) => ({ value: doc.key, label: doc.name }))} placeholder="Documento" />}
+        </div>
+        {base.type !== "fixed" && <div className="mt-1.5"><Select value={base.field ?? ""} onChange={(value) => setBase({ field: value })} options={(fieldsByType[base.docType ?? ""] ?? []).map((field) => ({ value: field, label: field }))} placeholder={base.docType ? "Campo" : "Elige primero el documento"} disabled={!base.docType} /></div>}
+      </div>
+      <div className="grid grid-cols-2 gap-2">
         <FieldRow label="Operación"><Select value={operation} onChange={(value) => patch({ operation: value })} options={CALC_OPERATIONS} /></FieldRow>
-        <FieldRow label={operation === "percentage" ? "Porcentaje" : "Valor"}><input className={`${inp} tabular-nums`} type="number" step="any" value={Number.isFinite(operand) ? operand : ""} onChange={(event) => patch({ operand: Number(event.target.value) })} /></FieldRow>
+        <FieldRow label="Segundo valor"><Select value={operand.type === "fixed" ? "fixed" : operand.type === "item" ? "item" : "number"} onChange={(value) => setOperand(value === "fixed" ? { type: "fixed", key: "" } : value === "item" ? { type: "item", key: "" } : { type: "number", value: 0 })} options={[{ value: "number", label: operation === "percentage" ? "Número / porcentaje" : "Número" }, { value: "fixed", label: "Valor fijo" }, ...(mode === "each_analysis_item" ? [{ value: "item", label: "Campo del elemento" }] : [])]} /></FieldRow>
+      </div>
+      {operand.type === "fixed" ? <Select value={operand.key ?? ""} onChange={(value) => setOperand({ type: "fixed", key: value })} options={fixedValues.filter((item) => item.key).map((item) => ({ value: item.key, label: item.label || item.key }))} placeholder="Elige valor fijo" /> : operand.type === "item" ? <input className={`${inp} font-mono`} value={operand.key ?? ""} onChange={(event) => setOperand({ type: "item", key: event.target.value.replace(/\s+/g, "_") })} placeholder="Campo de cada elemento, ej. cantidad" /> : <input className={`${inp} tabular-nums`} type="number" step="any" value={Number.isFinite(Number(operand.value)) ? Number(operand.value) : ""} onChange={(event) => setOperand({ type: "number", value: Number(event.target.value) })} />}
+      <div className="rounded-lg border border-border bg-background/60 p-3 space-y-2">
+        <div className="flex items-start justify-between gap-3"><div><p className="text-[11px] font-semibold text-foreground">Aplicación</p><p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">Calcula una vez o una vez por cada hallazgo estructurado de un análisis IA.</p></div><Select value={mode} onChange={(value) => patch({ mode: value })} options={[{ value: "single", label: "Una vez" }, { value: "each_analysis_item", label: "Por elemento" }]} /></div>
+        {mode === "each_analysis_item" && <>
+          <Select value={String(data.analysisNodeId ?? "")} onChange={(value) => patch({ analysisNodeId: value })} options={analysisNodes.map((item) => ({ value: item.id, label: item.name }))} placeholder="Análisis IA estructurado" />
+          <div className="grid grid-cols-2 gap-1.5"><input className={`${inp} !py-1 font-mono`} value={filterDraft.key} onChange={(event) => setFilter("key", event.target.value)} placeholder="Filtro opcional, ej. tipo" /><input className={`${inp} !py-1`} value={filterDraft.value} onChange={(event) => setFilter("value", event.target.value)} placeholder="Valor, ej. SMMLV" /></div>
+        </>}
       </div>
       <FieldRow label="Decimales"><input className={`${inp} tabular-nums`} type="number" min="0" max="6" value={Number(data.decimals ?? 0)} onChange={(event) => patch({ decimals: Math.max(0, Math.min(6, Math.round(Number(event.target.value)))) })} /></FieldRow>
       <div className="rounded-lg border border-primary/20 bg-primary/[0.035] px-3 py-2.5">
         <p className="text-[10px] font-medium uppercase tracking-[0.06em] text-primary">Fórmula</p>
         <p className="mt-1 text-xs font-medium text-foreground"><span className="font-mono">{String(data.key || "resultado")}</span> = {baseField} {operatorText}</p>
-        <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">El resultado se calcula de forma determinística tras la extracción y queda disponible para el PDF.</p>
+        <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">DocuIA solo aporta los datos extraídos. Esta fórmula se ejecuta de forma determinística y queda disponible para el Word.</p>
       </div>
     </div>
   );
@@ -713,6 +750,9 @@ function FlowBuilder({ flowId }: { flowId: string }) {
     const fs = (Array.isArray((n.data as AnyData).fields) ? (n.data as AnyData).fields as FieldT[] : []).map((f) => f.fieldKey).filter(Boolean);
     (fieldsByType[k] ??= []).push(...fs);
   }
+  const analysisNodes: AnalysisNodeOption[] = nodes
+    .filter((node) => node.type === "validate" && (node.data as AnyData).rule && typeof (node.data as AnyData).rule === "object" && ((node.data as AnyData).rule as { kind?: unknown }).kind === "ai_analysis")
+    .map((node) => ({ id: node.id, name: String((node.data as AnyData).name || "Análisis con IA") }));
   // The template still stores the stable key ({{field_key}}), but the editor
   // presents the human label that the tenant configured for that field.
   const editorFields = new Map<string, { key: string; label: string }>();
@@ -824,7 +864,7 @@ function FlowBuilder({ flowId }: { flowId: string }) {
               </div>
               {selected.type === "intake"   && <IntakeForm   data={selected.data as AnyData} patch={patchSelected} order={intakeOrder.get(selected.id)} total={intakeOrder.size} onMove={(dir) => moveIntake(selected.id, dir)} />}
               {selected.type === "extract"  && <ExtractForm  data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} onTrain={setVisualTraining} />}
-              {selected.type === "calculate" && <CalculationForm data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} fieldsByType={fieldsByType} />}
+              {selected.type === "calculate" && <CalculationForm key={selected.id} data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} fieldsByType={fieldsByType} analysisNodes={analysisNodes} />}
               {selected.type === "validate" && <ValidateForm data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} fieldsByType={fieldsByType} />}
               {selected.type === "generate" && <GenerateForm data={selected.data as AnyData} patch={patchSelected} onOpenEditor={() => setDocEditorOpen(true)} onOpenWordTemplate={() => setWordTemplateOpen(true)} />}
               {selected.type === "note" && <p className="text-xs leading-relaxed text-muted-foreground">Edita el texto directamente en el bloque. Arrastra los controles de sus bordes para ajustar el ancho o alto. Esta nota no crea reglas ni cambia el resultado del caso.</p>}

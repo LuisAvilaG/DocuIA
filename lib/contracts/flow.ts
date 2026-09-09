@@ -29,6 +29,16 @@ const zField = z.object({
 // Validation rule shapes — one discriminated union per rule kind. Mirrors the
 // ValidationRule type in validate.ts so compiled conditionsJson runs as-is.
 const zRef = z.object({ docType: z.string().min(1), field: z.string().min(1) });
+const zCalculationRef = z.union([
+  zRef.extend({ type: z.literal("field").optional() }),
+  z.object({ type: z.literal("fixed"), key: z.string().min(1).max(120) }),
+]);
+const zCalculationOperand = z.union([
+  z.number().finite(),
+  z.object({ type: z.literal("number"), value: z.number().finite() }),
+  zCalculationRef,
+  z.object({ type: z.literal("item"), key: z.string().min(1).max(120) }),
+]);
 const zRefLabeled = z.object({ docType: z.string().min(1), field: z.string().min(1), label: z.string().min(1) });
 
 const zRule = z.discriminatedUnion("kind", [
@@ -75,10 +85,14 @@ const zCalculate = z.object({
     name: z.string().min(1),
     key: z.string().min(1).max(120),
     label: z.string().min(1).max(200),
-    base: zRef,
+    base: zCalculationRef,
     operation: z.enum(CALCULATION_OPERATIONS),
-    operand: z.number().finite(),
+    operand: zCalculationOperand,
     decimals: z.number().int().min(0).max(6).default(0),
+    fixedValues: z.array(z.object({ key: z.string().min(1).max(120), label: z.string().min(1).max(200), value: z.number().finite() })).max(32).default([]),
+    mode: z.enum(["single", "each_analysis_item"]).default("single"),
+    analysisNodeId: z.string().min(1).optional(),
+    itemFilter: z.object({ key: z.string().min(1).max(120), value: z.string().max(300) }).optional(),
   }),
 });
 const zDocBlock = z.discriminatedUnion("type", [
@@ -126,7 +140,7 @@ export interface CompiledFlow {
   docTypes: Array<{ key: string; name: string; hint: string | null }>;
   fieldsByType: Record<string, FlowField[]>;
   calculations: CalculationDefinition[];
-  rules: Array<{ name: string; severity: Severity; appliesTo: string; conditionsJson: ValidationRule }>;
+  rules: Array<{ nodeId?: string; name: string; severity: Severity; appliesTo: string; conditionsJson: ValidationRule }>;
   template: { key: string; name: string; body: string; doc?: ContractDoc; html?: string; source?: "editor" | "word"; wordTemplate?: WordTemplateConfig } | null;
 }
 
@@ -143,10 +157,10 @@ export function compileFlow(graph: FlowGraph): CompiledFlow {
     } else if (n.kind === "extract") {
       (fieldsByType[n.data.docTypeKey] ??= []).push(...n.data.fields);
     } else if (n.kind === "calculate") {
-      calculations.push({ key: n.data.key, label: n.data.label, base: n.data.base, operation: n.data.operation, operand: n.data.operand, decimals: n.data.decimals });
+      calculations.push({ key: n.data.key, label: n.data.label, base: n.data.base, operation: n.data.operation, operand: n.data.operand, decimals: n.data.decimals, fixedValues: n.data.fixedValues, mode: n.data.mode, analysisNodeId: n.data.analysisNodeId, itemFilter: n.data.itemFilter });
     } else if (n.kind === "validate") {
       const rule = n.data.rule as unknown as ValidationRule;
-      rules.push({ name: n.data.name, severity: n.data.severity, appliesTo: ruleRefs(rule)[0]?.field ?? rule.kind, conditionsJson: rule });
+      rules.push({ nodeId: n.id, name: n.data.name, severity: n.data.severity, appliesTo: ruleRefs(rule)[0]?.field ?? rule.kind, conditionsJson: rule });
     } else if (n.kind === "generate") {
       if (!template) template = { key: n.data.templateKey, name: n.data.name, body: n.data.body, doc: n.data.doc as ContractDoc | undefined, html: n.data.html, source: n.data.source, wordTemplate: n.data.wordTemplate as WordTemplateConfig | undefined };
     }
@@ -233,8 +247,10 @@ export function validateFlowReferences(graph: FlowGraph): string | null {
 
   for (const n of graph.nodes) {
     if (n.kind === "calculate") {
-      const err = checkRef(n.data.base, `cálculo "${n.data.name}"`);
-      if (err) return err;
+      if (n.data.base.type !== "fixed") {
+        const err = checkRef(n.data.base, `cálculo "${n.data.name}"`);
+        if (err) return err;
+      }
     }
     if (n.kind !== "validate") continue;
     const rule = n.data.rule as ValidationRule;

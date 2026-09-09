@@ -43,7 +43,8 @@ const Pill = ({ children, cls }: { children: React.ReactNode; cls: string }) => 
 );
 
 type ValidationOutcome = { ok: boolean | null; severity: string | null };
-type CalculationOutcome = { key: string; label: string; value: number | null; status: "ok" | "missing" | "error"; formula: string; reason?: string };
+type CalculationItemOutcome = { values: Record<string, string>; value: number | null; status: "ok" | "missing" | "error"; reason?: string };
+type CalculationOutcome = { key: string; label: string; value: number | null; status: "ok" | "missing" | "error"; formula: string; reason?: string; items?: CalculationItemOutcome[] };
 
 /**
  * La severidad sólo describe qué ocurre si la regla falla. El distintivo de la
@@ -223,9 +224,10 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
             pill={<Pill cls={calculations.every((item) => item.status === "ok") ? "bg-success/10 text-success" : "bg-warning/10 text-warning"}>{calculations.length} resultado{calculations.length === 1 ? "" : "s"}</Pill>}>
             <div className="overflow-hidden rounded-xl border border-border bg-card divide-y divide-border">
               {calculations.map((item) => (
-                <div key={item.key} className="flex items-start gap-3 px-5 py-3">
+                <div key={item.key} className="flex flex-wrap items-start gap-3 px-5 py-3">
                   <div className="min-w-0 flex-1"><p className="text-xs font-semibold text-foreground">{item.label}</p><p className="mt-0.5 text-[11px] text-muted-foreground">{item.formula}{item.reason ? ` · ${item.reason}` : ""}</p></div>
-                  <span className={`shrink-0 text-xs font-semibold tabular-nums ${item.status === "ok" ? "text-foreground" : "text-warning"}`}>{item.value === null ? "Por revisar" : item.value.toLocaleString("es-CO", { maximumFractionDigits: 6 })}</span>
+                  {item.items?.length ? <span className={`shrink-0 text-xs font-semibold tabular-nums ${item.status === "ok" ? "text-foreground" : "text-warning"}`}>{item.items.length} fila{item.items.length === 1 ? "" : "s"}</span> : <span className={`shrink-0 text-xs font-semibold tabular-nums ${item.status === "ok" ? "text-foreground" : "text-warning"}`}>{item.value === null ? "Por revisar" : item.value.toLocaleString("es-CO", { maximumFractionDigits: 6 })}</span>}
+                  {item.items?.length ? <div className="basis-full space-y-1 border-t border-border/70 pt-2 text-[11px] text-muted-foreground">{item.items.map((entry, index) => <div key={index} className="flex items-center justify-between gap-3"><span className="truncate">{entry.values.amparo || entry.values.nombre || entry.values.concepto || `Elemento ${index + 1}`}</span><span className={entry.status === "ok" ? "tabular-nums text-foreground" : "text-warning"}>{entry.value === null ? "Por revisar" : entry.value.toLocaleString("es-CO", { maximumFractionDigits: 6 })}</span></div>)}</div> : null}
                 </div>
               ))}
             </div>

@@ -7,6 +7,7 @@ import type { FieldDef } from "./extract";
 import type { Severity } from "./validate";
 import type { ContractDoc } from "./generate";
 import type { WordTemplateConfig } from "./word-template";
+import type { CalculationDefinition } from "./calculations";
 
 // Default number of flows a client may have when the superadmin hasn't set one.
 export const DEFAULT_MAX_FLOWS = 3;
@@ -36,6 +37,7 @@ export interface ContractPlan {
   flow:         FlowGraph | null;
   docTypes:     Array<{ key: string; name: string; hint: string | null }>;
   fieldsByType: Record<string, FieldDef[]>;
+  calculations:  CalculationDefinition[];
   rules:        Array<{ name: string; severity?: Severity; conditionsJson: unknown }>;
   template:     { key: string; name: string; body: string; doc?: ContractDoc; html?: string; source?: "editor" | "word"; wordTemplate?: WordTemplateConfig } | null;
 }
@@ -68,6 +70,7 @@ export async function loadContractPlan(orgId: string, flowId?: string | null): P
       flow: active.graph,
       docTypes: c.docTypes,
       fieldsByType: c.fieldsByType,
+      calculations: c.calculations,
       rules: c.rules.map((r) => ({ name: r.name, severity: r.severity, conditionsJson: r.conditionsJson })),
       template: c.template,
     };
@@ -88,6 +91,7 @@ export async function loadContractPlan(orgId: string, flowId?: string | null): P
     flow: null,
     docTypes: config.docTypes.map((d) => ({ key: d.key, name: d.name, hint: d.hint ?? null })),
     fieldsByType: config.fieldsByType,
+    calculations: [],
     rules: rules.map((r) => ({ name: r.name, conditionsJson: r.conditionsJson })),
     template: templates[0] ? { key: templates[0].key, name: templates[0].name, body: templates[0].body } : null,
   };

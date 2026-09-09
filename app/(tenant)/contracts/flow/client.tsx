@@ -9,7 +9,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import {
-  Loader2, Save, Plus, Trash2, FileInput, ListChecks, ShieldCheck, FileText, ChevronDown, ChevronUp, StickyNote, PencilRuler, Sparkles, BookMarked, FileUp, PanelLeft,
+  Loader2, Save, Plus, Trash2, FileInput, ListChecks, Calculator, ShieldCheck, FileText, FileSearch, ChevronDown, ChevronUp, StickyNote, PencilRuler, Sparkles, BookMarked, FileUp, PanelLeft,
 } from "lucide-react";
 import { DocEditor } from "./doc-editor";
 import { VisualTrainingWorkspace, type TrainingField } from "./visual-training-workspace";
@@ -25,11 +25,12 @@ function genInitialHtml(data: Record<string, unknown>): string {
 }
 
 // ── Node kinds ────────────────────────────────────────────────────────
-type Kind = "intake" | "extract" | "validate" | "generate" | "note";
+type Kind = "intake" | "extract" | "calculate" | "validate" | "generate" | "note";
 
 const KIND_META: Record<Kind, { title: string; hint: string; Icon: typeof FileInput; hasIn: boolean; hasOut: boolean }> = {
   intake:   { title: "Entrada",    hint: "Qué documento entra",       Icon: FileInput,   hasIn: false, hasOut: true },
   extract:  { title: "Extracción", hint: "Qué datos saca la IA",       Icon: ListChecks,  hasIn: true,  hasOut: true },
+  calculate:{ title: "Cálculo",    hint: "Valor derivado con fórmula", Icon: Calculator,   hasIn: true,  hasOut: true },
   validate: { title: "Validación", hint: "Regla de cruce entre docs",  Icon: ShieldCheck, hasIn: true,  hasOut: true },
   generate: { title: "Generación", hint: "Documento final",            Icon: FileText,    hasIn: true,  hasOut: false },
   note:     { title: "Nota",       hint: "Comentario para el equipo",  Icon: StickyNote,  hasIn: false, hasOut: false },
@@ -41,6 +42,7 @@ function defaultData(kind: Kind): AnyData {
   switch (kind) {
     case "intake":   return { docTypeKey: "nuevo_tipo", name: "Nuevo documento", hint: "" };
     case "extract":  return { docTypeKey: "nuevo_tipo", fields: [] };
+    case "calculate": return { name: "Nuevo cálculo", key: "resultado_calculado", label: "Resultado calculado", base: { docType: "", field: "" }, operation: "percentage", operand: 10, decimals: 0 };
     case "validate": return { name: "Nueva validación", rule: {
       kind: "cross_reference",
       subjects: { docType: "", field: "" },
@@ -89,6 +91,7 @@ function NodeCard({ type, data, selected }: NodeProps) {
   const summary =
     type === "intake"   ? String(d.name || d.docTypeKey || "Sin nombre") :
     type === "extract"  ? `${String(d.docTypeKey || "—")} · ${Array.isArray(d.fields) ? d.fields.length : 0} campos` :
+    type === "calculate" ? String(d.label || d.name || "Sin nombre") :
     type === "validate" ? String(d.name || "Sin nombre") :
                           String(d.name || d.templateKey || "Sin nombre");
   return (
@@ -163,6 +166,49 @@ function ExtractForm({ data, patch, docTypes, onTrain }: { data: AnyData; patch:
       <div className="rounded-lg border border-primary/20 bg-primary/[0.035] p-3">
         <div className="flex items-start gap-2"><span className="mt-0.5 rounded-md bg-primary/10 p-1 text-primary"><PencilRuler className="h-3.5 w-3.5" /></span><div><p className="text-[11px] font-semibold text-foreground">Entrenar con documento</p><p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">Sube una muestra y marca visualmente dónde aparece cada campo. Crea otra variante solo cuando cambie el formato.</p></div></div>
         <button type="button" disabled={!documentType || fields.some((field) => !field.fieldKey)} onClick={() => onTrain({ documentType, documentName, fields: fields.filter((field) => field.fieldKey).map((field) => ({ fieldKey: field.fieldKey, label: field.label || field.fieldKey })) })} className="mt-2.5 inline-flex items-center gap-1.5 rounded-md border border-primary/30 bg-card px-2.5 py-1.5 text-[11px] font-medium text-primary hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-50"><PencilRuler className="h-3.5 w-3.5" /> Abrir entrenamiento visual</button>
+      </div>
+    </div>
+  );
+}
+
+const CALC_OPERATIONS = [
+  { value: "percentage", label: "Porcentaje de la base" },
+  { value: "multiply", label: "Multiplicar por un valor" },
+  { value: "add", label: "Sumar un valor" },
+  { value: "subtract", label: "Restar un valor" },
+  { value: "divide", label: "Dividir entre un valor" },
+];
+
+function CalculationForm({ data, patch, docTypes, fieldsByType }: { data: AnyData; patch: (p: AnyData) => void; docTypes: DocTypeOpt[]; fieldsByType: Record<string, string[]> }) {
+  const base = (data.base && typeof data.base === "object" ? data.base : {}) as { docType?: string; field?: string };
+  const operation = String(data.operation ?? "percentage");
+  const operand = Number(data.operand ?? 0);
+  const baseField = base.field || "campo base";
+  const operatorText = operation === "percentage" ? `× ${operand}%` : operation === "multiply" ? `× ${operand}` : operation === "add" ? `+ ${operand}` : operation === "subtract" ? `− ${operand}` : `÷ ${operand}`;
+  const setBase = (next: Partial<{ docType: string; field: string }>) => patch({ base: { docType: base.docType ?? "", field: base.field ?? "", ...next } });
+  return (
+    <div className="space-y-3">
+      <FieldRow label="Nombre del cálculo"><input className={inp} value={String(data.name ?? "")} onChange={(event) => patch({ name: event.target.value })} placeholder="Valor asegurado de seriedad" /></FieldRow>
+      <div className="grid grid-cols-2 gap-2">
+        <FieldRow label="Clave de resultado"><input className={`${inp} font-mono`} value={String(data.key ?? "")} onChange={(event) => patch({ key: event.target.value.replace(/\s+/g, "_") })} placeholder="valor_asegurado" /></FieldRow>
+        <FieldRow label="Etiqueta visible"><input className={inp} value={String(data.label ?? "")} onChange={(event) => patch({ label: event.target.value })} placeholder="Valor asegurado" /></FieldRow>
+      </div>
+      <div>
+        <span className={lbl}>Campo base</span>
+        <div className="mt-1 grid grid-cols-2 gap-1.5">
+          <Select value={base.docType ?? ""} onChange={(value) => setBase({ docType: value, field: "" })} options={docTypes.map((doc) => ({ value: doc.key, label: doc.name }))} placeholder="Documento" />
+          <Select value={base.field ?? ""} onChange={(value) => setBase({ field: value })} options={(fieldsByType[base.docType ?? ""] ?? []).map((field) => ({ value: field, label: field }))} placeholder={base.docType ? "Campo" : "elige doc"} disabled={!base.docType} />
+        </div>
+      </div>
+      <div className="grid grid-cols-[1fr_92px] gap-2">
+        <FieldRow label="Operación"><Select value={operation} onChange={(value) => patch({ operation: value })} options={CALC_OPERATIONS} /></FieldRow>
+        <FieldRow label={operation === "percentage" ? "Porcentaje" : "Valor"}><input className={`${inp} tabular-nums`} type="number" step="any" value={Number.isFinite(operand) ? operand : ""} onChange={(event) => patch({ operand: Number(event.target.value) })} /></FieldRow>
+      </div>
+      <FieldRow label="Decimales"><input className={`${inp} tabular-nums`} type="number" min="0" max="6" value={Number(data.decimals ?? 0)} onChange={(event) => patch({ decimals: Math.max(0, Math.min(6, Math.round(Number(event.target.value)))) })} /></FieldRow>
+      <div className="rounded-lg border border-primary/20 bg-primary/[0.035] px-3 py-2.5">
+        <p className="text-[10px] font-medium uppercase tracking-[0.06em] text-primary">Fórmula</p>
+        <p className="mt-1 text-xs font-medium text-foreground"><span className="font-mono">{String(data.key || "resultado")}</span> = {baseField} {operatorText}</p>
+        <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">El resultado se calcula de forma determinística tras la extracción y queda disponible para el PDF.</p>
       </div>
     </div>
   );
@@ -318,7 +364,7 @@ function AiAnalysisForm({ rule, setRule, docTypes }: { rule: Record<string, unkn
   return (
     <div className="space-y-3">
       <div className="rounded-lg border border-primary/20 bg-primary/[0.035] p-3">
-        <div className="flex gap-2"><span className="mt-0.5 rounded-md bg-primary/10 p-1 text-primary"><Sparkles className="h-3.5 w-3.5" /></span><div><p className="text-[11px] font-semibold text-foreground">Análisis con evidencia</p><p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">La IA analiza los datos extraídos y sus citas. Si falta evidencia, debe indicarlo, no inventar una recomendación.</p></div></div>
+        <div className="flex gap-2"><span className="mt-0.5 rounded-md bg-primary/10 p-1 text-primary"><FileSearch className="h-3.5 w-3.5" /></span><div><p className="text-[11px] font-semibold text-foreground">Análisis con evidencia</p><p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">La IA analiza los datos extraídos y sus citas. Si falta evidencia, debe indicarlo, no inventar una recomendación.</p></div></div>
       </div>
 
       <FieldRow label="Usar una plantilla guardada">
@@ -572,7 +618,7 @@ function FlowBuilder({ flowId }: { flowId: string }) {
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
-  const nodeTypes = useMemo(() => ({ intake: NodeCard, extract: NodeCard, validate: NodeCard, generate: NodeCard, note: NodeCard }), []);
+  const nodeTypes = useMemo(() => ({ intake: NodeCard, extract: NodeCard, calculate: NodeCard, validate: NodeCard, generate: NodeCard, note: NodeCard }), []);
 
   const setGraph = useCallback((graph: { nodes?: Array<{ id: string; kind: Kind; position: { x: number; y: number }; data: AnyData; width?: number; height?: number }>; edges?: Array<{ id: string; source: string; target: string }> }) => {
     setNodes((graph.nodes ?? []).map((n) => ({ id: n.id, type: n.kind, position: n.position, data: n.data, width: n.width, height: n.height })));
@@ -679,6 +725,11 @@ function FlowBuilder({ flowId }: { flowId: string }) {
       editorFields.set(field.fieldKey, { key: field.fieldKey, label: documentName ? `${documentName} · ${fieldName}` : fieldName });
     }
   }
+  for (const n of nodes.filter((node) => node.type === "calculate")) {
+    const data = n.data as AnyData;
+    const key = String(data.key ?? "").trim();
+    if (key) editorFields.set(key, { key, label: String(data.label ?? data.name ?? key) });
+  }
   editorFields.set("_validations", { key: "_validations", label: "Resultados de validación" });
   editorFields.set("_ai_analysis", { key: "_ai_analysis", label: "Análisis con IA" });
   editorFields.set("_ai_findings", { key: "_ai_findings", label: "Hallazgos estructurados de IA" });
@@ -741,7 +792,7 @@ function FlowBuilder({ flowId }: { flowId: string }) {
             <div className="p-5 space-y-4">
               <div>
                 <h2 className="text-sm font-semibold text-foreground">Agrega una etapa</h2>
-                <p className="text-xs text-muted-foreground mt-1 leading-relaxed"><strong className="text-foreground font-medium">Arrastra</strong> una tarjeta al lienzo (o haz clic para añadirla), luego conecta los nodos arrastrando del punto derecho de uno al izquierdo del siguiente. Orden: Entrada → Extracción → Validación → Generación. La Nota es solo visual y no altera el procesamiento.</p>
+                <p className="text-xs text-muted-foreground mt-1 leading-relaxed"><strong className="text-foreground font-medium">Arrastra</strong> una tarjeta al lienzo (o haz clic para añadirla), luego conecta los nodos arrastrando del punto derecho de uno al izquierdo del siguiente. Orden: Entrada → Extracción → Cálculo → Validación → Generación. La Nota es solo visual y no altera el procesamiento.</p>
               </div>
               <div className="space-y-2">
                 {(Object.keys(KIND_META) as Kind[]).map((k, i) => {
@@ -773,6 +824,7 @@ function FlowBuilder({ flowId }: { flowId: string }) {
               </div>
               {selected.type === "intake"   && <IntakeForm   data={selected.data as AnyData} patch={patchSelected} order={intakeOrder.get(selected.id)} total={intakeOrder.size} onMove={(dir) => moveIntake(selected.id, dir)} />}
               {selected.type === "extract"  && <ExtractForm  data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} onTrain={setVisualTraining} />}
+              {selected.type === "calculate" && <CalculationForm data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} fieldsByType={fieldsByType} />}
               {selected.type === "validate" && <ValidateForm data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} fieldsByType={fieldsByType} />}
               {selected.type === "generate" && <GenerateForm data={selected.data as AnyData} patch={patchSelected} onOpenEditor={() => setDocEditorOpen(true)} onOpenWordTemplate={() => setWordTemplateOpen(true)} />}
               {selected.type === "note" && <p className="text-xs leading-relaxed text-muted-foreground">Edita el texto directamente en el bloque. Arrastra los controles de sus bordes para ajustar el ancho o alto. Esta nota no crea reglas ni cambia el resultado del caso.</p>}

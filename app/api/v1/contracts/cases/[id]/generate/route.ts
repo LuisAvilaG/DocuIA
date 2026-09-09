@@ -42,7 +42,12 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
       loadContractPlan(session.orgId, kase.flowId),
     ]);
 
-    const data = assembleCaseData(docs, validations, analyses);
+    const extractedData = assembleCaseData(docs, validations, analyses);
+    const storedValues = (kase.resultJson as { calculationValues?: unknown } | null)?.calculationValues;
+    const calculationValues = storedValues && typeof storedValues === "object" && !Array.isArray(storedValues)
+      ? storedValues as Record<string, unknown>
+      : {};
+    const data = { ...extractedData, ...calculationValues };
     const tpl = plan.template;
     const title = tpl?.name ?? kase.title ?? "Documento generado";
 

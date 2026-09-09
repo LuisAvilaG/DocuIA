@@ -3,6 +3,7 @@ import type { ContractPreset } from "./presets";
 import { ruleRefs, type ValidationRule, type Severity } from "./validate";
 import type { ContractDoc } from "./generate";
 import type { WordTemplateConfig } from "./word-template";
+import { CALCULATION_OPERATIONS, type CalculationDefinition } from "./calculations";
 
 // ── Flow graph model ──────────────────────────────────────────────────
 // The visual canvas builder produces this graph. compileFlow() turns it into
@@ -12,10 +13,11 @@ import type { WordTemplateConfig } from "./word-template";
 // Node kinds map 1:1 to the user's mental model:
 //   intake   → "entra este documento"   (which doc type is expected)
 //   extract  → "extrae estos campos"    (fields to pull from that doc)
+//   calculate → "calcula esto"          (deterministic fields from extraction)
 //   validate → "valida esto"            (cross-document rule)
 //   generate → "al final genera esto"   (output template)
 
-export type FlowNodeKind = "intake" | "extract" | "validate" | "generate" | "note";
+export type FlowNodeKind = "intake" | "extract" | "calculate" | "validate" | "generate" | "note";
 
 const zPosition = z.object({ x: z.number(), y: z.number() });
 const zField = z.object({
@@ -67,6 +69,18 @@ const zValidate = z.object({
   id: z.string().min(1), kind: z.literal("validate"), position: zPosition,
   data: z.object({ name: z.string().min(1), severity: z.enum(["info", "warn", "block"]).default("warn"), rule: zRule }),
 });
+const zCalculate = z.object({
+  id: z.string().min(1), kind: z.literal("calculate"), position: zPosition,
+  data: z.object({
+    name: z.string().min(1),
+    key: z.string().min(1).max(120),
+    label: z.string().min(1).max(200),
+    base: zRef,
+    operation: z.enum(CALCULATION_OPERATIONS),
+    operand: z.number().finite(),
+    decimals: z.number().int().min(0).max(6).default(0),
+  }),
+});
 const zDocBlock = z.discriminatedUnion("type", [
   z.object({ type: z.literal("heading"), text: z.string() }),
   z.object({ type: z.literal("text"), text: z.string() }),
@@ -94,7 +108,7 @@ const zNote = z.object({
   height: z.number().positive().max(520).optional(),
 });
 
-const zNode = z.discriminatedUnion("kind", [zIntake, zExtract, zValidate, zGenerate, zNote]);
+const zNode = z.discriminatedUnion("kind", [zIntake, zExtract, zCalculate, zValidate, zGenerate, zNote]);
 const zEdge = z.object({ id: z.string().min(1), source: z.string().min(1), target: z.string().min(1) });
 
 export const flowGraphSchema = z.object({
@@ -111,6 +125,7 @@ export type FlowField = z.infer<typeof zField>;
 export interface CompiledFlow {
   docTypes: Array<{ key: string; name: string; hint: string | null }>;
   fieldsByType: Record<string, FlowField[]>;
+  calculations: CalculationDefinition[];
   rules: Array<{ name: string; severity: Severity; appliesTo: string; conditionsJson: ValidationRule }>;
   template: { key: string; name: string; body: string; doc?: ContractDoc; html?: string; source?: "editor" | "word"; wordTemplate?: WordTemplateConfig } | null;
 }
@@ -119,6 +134,7 @@ export function compileFlow(graph: FlowGraph): CompiledFlow {
   const docTypes: CompiledFlow["docTypes"] = [];
   const fieldsByType: Record<string, FlowField[]> = {};
   const rules: CompiledFlow["rules"] = [];
+  const calculations: CalculationDefinition[] = [];
   let template: CompiledFlow["template"] = null;
 
   for (const n of graph.nodes) {
@@ -126,6 +142,8 @@ export function compileFlow(graph: FlowGraph): CompiledFlow {
       docTypes.push({ key: n.data.docTypeKey, name: n.data.name, hint: n.data.hint ?? null });
     } else if (n.kind === "extract") {
       (fieldsByType[n.data.docTypeKey] ??= []).push(...n.data.fields);
+    } else if (n.kind === "calculate") {
+      calculations.push({ key: n.data.key, label: n.data.label, base: n.data.base, operation: n.data.operation, operand: n.data.operand, decimals: n.data.decimals });
     } else if (n.kind === "validate") {
       const rule = n.data.rule as unknown as ValidationRule;
       rules.push({ name: n.data.name, severity: n.data.severity, appliesTo: ruleRefs(rule)[0]?.field ?? rule.kind, conditionsJson: rule });
@@ -133,7 +151,7 @@ export function compileFlow(graph: FlowGraph): CompiledFlow {
       if (!template) template = { key: n.data.templateKey, name: n.data.name, body: n.data.body, doc: n.data.doc as ContractDoc | undefined, html: n.data.html, source: n.data.source, wordTemplate: n.data.wordTemplate as WordTemplateConfig | undefined };
     }
   }
-  return { docTypes, fieldsByType, rules, template };
+  return { docTypes, fieldsByType, calculations, rules, template };
 }
 
 // ── Execution order ───────────────────────────────────────────────────
@@ -214,6 +232,10 @@ export function validateFlowReferences(graph: FlowGraph): string | null {
   };
 
   for (const n of graph.nodes) {
+    if (n.kind === "calculate") {
+      const err = checkRef(n.data.base, `cálculo "${n.data.name}"`);
+      if (err) return err;
+    }
     if (n.kind !== "validate") continue;
     const rule = n.data.rule as ValidationRule;
     for (const ref of ruleRefs(rule)) {

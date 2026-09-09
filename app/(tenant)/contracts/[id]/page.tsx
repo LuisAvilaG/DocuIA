@@ -6,7 +6,7 @@ import { contractAiAnalysisResults, contractCases, contractDocuments, contractVa
 import { and, eq, asc } from "drizzle-orm";
 import {
   CheckCircle2, XCircle, MinusCircle, ShieldCheck, ShieldAlert, ShieldX,
-  FileText, Download, CalendarClock, FileInput, ListChecks, FileType, Workflow,
+  FileText, Download, CalendarClock, FileInput, ListChecks, Calculator, FileType, Workflow,
 } from "lucide-react";
 import { CaseActions } from "./actions";
 import { CaseDocuments, type CaseDoc } from "./case-documents";
@@ -43,6 +43,7 @@ const Pill = ({ children, cls }: { children: React.ReactNode; cls: string }) => 
 );
 
 type ValidationOutcome = { ok: boolean | null; severity: string | null };
+type CalculationOutcome = { key: string; label: string; value: number | null; status: "ok" | "missing" | "error"; formula: string; reason?: string };
 
 /**
  * La severidad sólo describe qué ocurre si la regla falla. El distintivo de la
@@ -112,7 +113,9 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
   const result = (kase.resultJson ?? {}) as {
     outputKey?: string; outputMime?: string; outputName?: string; missing?: string[];
     decision?: { action?: string; reason?: string | null; byEmail?: string | null; at?: string | null; override?: boolean } | null;
+    calculations?: CalculationOutcome[];
   };
+  const calculations = Array.isArray(result.calculations) ? result.calculations : [];
   const status = kase.status === "approved" && result.outputKey
     ? { label: "Aprobado · documento generado", cls: "bg-success/10 text-success" }
     : kase.status === "generated" && result.decision?.action === "approve"
@@ -212,11 +215,23 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
             )}
           </Stage>
 
-          <Stage n={2} title="Extracción" Icon={ListChecks} last={!validationsEnabled && !obligationsEnabled && !generationEnabled} pill={<Pill cls="bg-secondary text-muted-foreground">{totalFields} datos</Pill>}>
+          <Stage n={2} title="Extracción" Icon={ListChecks} last={!calculations.length && !validationsEnabled && !obligationsEnabled && !generationEnabled} pill={<Pill cls="bg-secondary text-muted-foreground">{totalFields} datos</Pill>}>
             <CaseDocuments documents={docs} canTrain={session.role === "admin"} />
           </Stage>
 
-          {validationsEnabled && <Stage n={3} title="Validación" Icon={ShieldCheck} last={!obligationsEnabled && !generationEnabled}
+          {calculations.length > 0 && <Stage n={3} title="Cálculos" Icon={Calculator} last={!validationsEnabled && !obligationsEnabled && !generationEnabled}
+            pill={<Pill cls={calculations.every((item) => item.status === "ok") ? "bg-success/10 text-success" : "bg-warning/10 text-warning"}>{calculations.length} resultado{calculations.length === 1 ? "" : "s"}</Pill>}>
+            <div className="overflow-hidden rounded-xl border border-border bg-card divide-y divide-border">
+              {calculations.map((item) => (
+                <div key={item.key} className="flex items-start gap-3 px-5 py-3">
+                  <div className="min-w-0 flex-1"><p className="text-xs font-semibold text-foreground">{item.label}</p><p className="mt-0.5 text-[11px] text-muted-foreground">{item.formula}{item.reason ? ` · ${item.reason}` : ""}</p></div>
+                  <span className={`shrink-0 text-xs font-semibold tabular-nums ${item.status === "ok" ? "text-foreground" : "text-warning"}`}>{item.value === null ? "Por revisar" : item.value.toLocaleString("es-CO", { maximumFractionDigits: 6 })}</span>
+                </div>
+              ))}
+            </div>
+          </Stage>}
+
+          {validationsEnabled && <Stage n={calculations.length ? 4 : 3} title="Validación" Icon={ShieldCheck} last={!obligationsEnabled && !generationEnabled}
             pill={isProcessing
               ? <Pill cls="bg-warning/10 text-warning">pendiente</Pill>
               : verdict ? (() => { const b = VERDICT[verdict]; return <Pill cls={b.cls}>{b.text}</Pill>; })() : <Pill cls="bg-secondary text-muted-foreground">sin reglas</Pill>}>
@@ -261,7 +276,7 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
             <AiAnalysisResults analyses={analyses} />
           </Stage>}
 
-          {obligationsEnabled && <Stage n={validationsEnabled ? 4 : 3} title="Obligaciones" Icon={CalendarClock} last={!generationEnabled}
+          {obligationsEnabled && <Stage n={(validationsEnabled ? 4 : 3) + (calculations.length ? 1 : 0)} title="Obligaciones" Icon={CalendarClock} last={!generationEnabled}
             pill={<Pill cls="bg-secondary text-muted-foreground">{obligations.length}</Pill>}>
             {obligations.length === 0 ? (
               <div className="bg-card border border-border rounded-xl px-5 py-4">
@@ -281,7 +296,7 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
             )}
           </Stage>}
 
-          {generationEnabled && <Stage n={(validationsEnabled ? 3 : 2) + (obligationsEnabled ? 1 : 0) + 1} title="Generación" Icon={FileType} last
+          {generationEnabled && <Stage n={(validationsEnabled ? 3 : 2) + (obligationsEnabled ? 1 : 0) + (calculations.length ? 1 : 0) + 1} title="Generación" Icon={FileType} last
             pill={result.outputKey ? <Pill cls="bg-success/10 text-success">listo</Pill> : <Pill cls="bg-secondary text-muted-foreground">pendiente</Pill>}>
             <div className="bg-card border border-border rounded-xl px-5 py-4">
               {result.outputKey ? (

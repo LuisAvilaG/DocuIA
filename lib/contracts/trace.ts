@@ -1,5 +1,6 @@
 import { topoOrder, type FlowGraph, type FlowNodeKind } from "./flow";
 import { runValidations, type DocsByType } from "./validate";
+import type { CalculationResult } from "./calculations";
 
 // A per-stage record of how a case ran through the flow, in execution order.
 // Persisted on the case so the UI can show the flow advancing node by node.
@@ -18,6 +19,7 @@ export function buildFlowTrace(
   docsByType: DocsByType,
   docs: DocMeta[],
   hasTemplate: boolean,
+  calculations: CalculationResult[] = [],
 ): FlowStage[] {
   return topoOrder(graph).map((n): FlowStage => {
     if (n.kind === "intake") {
@@ -35,6 +37,14 @@ export function buildFlowTrace(
         nodeId: n.id, kind: n.kind, label: `Extrae: ${n.data.docTypeKey}`,
         status: matched.length ? "done" : "empty",
         detail: matched.length ? `${fields} campo(s) extraído(s)` : "sin documento",
+      };
+    }
+    if (n.kind === "calculate") {
+      const result = calculations.find((item) => item.key === n.data.key);
+      return {
+        nodeId: n.id, kind: n.kind, label: `Calcula: ${n.data.name}`,
+        status: result?.status === "ok" ? "done" : "empty",
+        detail: result?.status === "ok" ? `${result.label}: ${result.value?.toLocaleString("es-CO")}` : result?.reason ?? "sin valor base",
       };
     }
     if (n.kind === "validate") {

@@ -6,7 +6,7 @@ import { contractAiAnalysisResults, contractCases, contractDocuments, contractVa
 import { and, eq, asc } from "drizzle-orm";
 import {
   CheckCircle2, XCircle, MinusCircle, ShieldCheck, ShieldAlert, ShieldX,
-  FileText, Download, CalendarClock, FileInput, ListChecks, Calculator, FileType, Workflow,
+  FileText, CalendarClock, FileInput, ListChecks, Calculator, FileType, Workflow,
 } from "lucide-react";
 import { CaseActions } from "./actions";
 import { CaseDocuments, type CaseDoc } from "./case-documents";
@@ -15,6 +15,7 @@ import { flowGraphSchema } from "@/lib/contracts/flow";
 import { CaseActivity, type CaseActivityItem } from "./case-activity";
 import { CONTRACT_CASE_STATUS, contractStatusLabel } from "@/lib/contracts/status";
 import { AiAnalysisResults } from "./ai-analysis-results";
+import { OutputDownloads } from "./output-downloads";
 
 const pretty = (k: string) => k.replace(/[_.]/g, " ").replace(/\s+/g, " ").trim().replace(/^\w/, (c) => c.toUpperCase());
 
@@ -305,8 +306,8 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
                 <div className="space-y-2">
                   <div className="flex items-center gap-2 rounded-lg border border-border bg-secondary/40 px-3 py-2.5">
                     <FileText className="w-4 h-4 text-primary shrink-0" />
-                    <span className="text-xs text-foreground flex-1 truncate">{result.outputMime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ? "Documento Word editable" : "Documento PDF"}</span>
-                    <a href={`/api/v1/contracts/cases/${kase.id}/output`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline shrink-0"><Download className="w-3.5 h-3.5" /> Ver / descargar</a>
+                    <span className="text-xs text-foreground flex-1 truncate">{result.outputMime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ? "Documento listo para descarga" : "Documento PDF"}</span>
+                    <OutputDownloads caseId={kase.id} hasWord={result.outputMime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document"} />
                   </div>
                   {result.missing && result.missing.length > 0 && (
                     <p className="text-[11px] text-warning">Campos sin dato ({result.missing.length}): {result.missing.slice(0, 6).map(pretty).join(", ")}{result.missing.length > 6 ? "…" : ""}</p>

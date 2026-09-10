@@ -21,8 +21,10 @@ ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 
-# Run as non-root.
-RUN addgroup -g 1001 -S nodejs && adduser -S nextjs -u 1001
+# LibreOffice renders tenant-provided Word templates as faithful PDF copies
+# when the user chooses the PDF download. Noto supplies a dependable Unicode
+# fallback for documents that use a client-specific font.
+RUN apk add --no-cache libreoffice font-noto && addgroup -g 1001 -S nodejs && adduser -S nextjs -u 1001
 
 # public/ (includes the self-hosted pdf.js worker) + the standalone server + static assets.
 COPY --from=builder /app/public ./public

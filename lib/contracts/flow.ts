@@ -109,7 +109,8 @@ const zGenerate = z.object({
     wordTemplate: z.object({
       storageKey: z.string().min(1), originalName: z.string().min(1),
       mimeType: z.literal("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
-      mappings: z.array(z.object({ id: z.string().min(1), anchorText: z.string().min(1).max(500), fieldKey: z.string().min(1).max(120), fieldLabel: z.string().min(1).max(200) })).max(120),
+      mappings: z.array(z.object({ id: z.string().min(1), anchorText: z.string().min(1).max(500), fieldKey: z.string().min(1).max(120), fieldLabel: z.string().min(1).max(200), format: z.enum(["text", "number", "currency"]).optional() })).max(120),
+      tableRepeats: z.array(z.object({ id: z.string().min(1), rowAnchorText: z.string().min(1).max(500), fieldKey: z.string().min(1).max(120), fieldLabel: z.string().min(1).max(200) })).max(24).default([]),
     }).optional(),
   }),
 });

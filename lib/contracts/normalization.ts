@@ -1,7 +1,11 @@
-export type ComparisonNormalizer = "auto" | "date" | "number" | "name" | "text";
+export type ComparisonNormalizer = "auto" | "date" | "number" | "identifier" | "name" | "text";
 
 const DATE_FIELD_RE = /(date|fecha|vigenc|vencim|expir|expiry|start|end|inicio|termin)/i;
 const NUMBER_FIELD_RE = /(amount|monto|sum|suma|premium|prima|total|valor|value|price|precio|deducible|deductible|limit|limite|l[ií]mite)/i;
+// Tax IDs are identifiers, not amounts. A NIT such as 860.505.064-1 must
+// match the same ID written as 8605050641, without treating the hyphen as a
+// negative sign or a formatting difference as a mismatch.
+const IDENTIFIER_FIELD_RE = /(nit|tax[ _-]?id|ruc|rut|cuit|cuil|rfc|identif|identificaci[oó]n|id[ _-]?fiscal)/i;
 
 const MONTHS: Record<string, number> = {
   enero: 1, febrero: 2, marzo: 3, abril: 4, mayo: 5, junio: 6,
@@ -53,7 +57,9 @@ export function normalizeContractDate(value: unknown): string | null {
 export function normalizeContractNumber(value: unknown): number | null {
   const raw = cleanText(value);
   if (!raw) return null;
-  const minus = raw.includes("-") ? -1 : 1;
+  // Hyphens inside IDs and account numbers are separators; only a leading
+  // hyphen denotes a negative amount.
+  const minus = /^\s*-/.test(raw) ? -1 : 1;
   const numeric = raw.replace(/[^\d.,]/g, "");
   if (!/\d/.test(numeric)) return null;
   const groupsAsThousands = /^\d{1,3}([.,]\d{3})+$/.test(numeric);
@@ -76,6 +82,11 @@ export function normalizeContractNumber(value: unknown): number | null {
 
 export function normalizeContractText(value: unknown): string {
   return normalizeWord(cleanText(value)).replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+/** Removes visual punctuation from fiscal and document identifiers. */
+export function normalizeContractIdentifier(value: unknown): string {
+  return cleanText(value).normalize("NFKC").toUpperCase().replace(/[^A-Z0-9]/g, "");
 }
 
 export function textValuesMatch(left: unknown, right: unknown): boolean {
@@ -114,6 +125,11 @@ export function compareContractValues(input: {
 
   if (normalizer === "date" || (normalizer === "auto" && dateLeft !== null && dateRight !== null && DATE_FIELD_RE.test(fieldNames))) {
     return dateLeft !== null && dateRight !== null && dateLeft === dateRight;
+  }
+  if (normalizer === "identifier" || (normalizer === "auto" && IDENTIFIER_FIELD_RE.test(fieldNames))) {
+    const identifierLeft = normalizeContractIdentifier(input.left);
+    const identifierRight = normalizeContractIdentifier(input.right);
+    return Boolean(identifierLeft && identifierRight && identifierLeft === identifierRight);
   }
   if (normalizer === "number" || (normalizer === "auto" && numberLeft !== null && numberRight !== null && (NUMBER_FIELD_RE.test(fieldNames) || (looksLikeNumber(input.left) && looksLikeNumber(input.right))))) {
     return numberLeft !== null && numberRight !== null && Math.abs(numberLeft - numberRight) <= (input.numericTolerance ?? 0);

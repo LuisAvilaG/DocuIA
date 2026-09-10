@@ -318,6 +318,7 @@ const COMPARISON_NORMALIZERS = [
   { value: "auto", label: "Automático según el dato" },
   { value: "date", label: "Fecha, sin importar el formato" },
   { value: "number", label: "Monto o número" },
+  { value: "identifier", label: "NIT / ID fiscal, sin importar puntos o guiones" },
   { value: "name", label: "Nombre o empresa" },
   { value: "text", label: "Texto flexible" },
 ];

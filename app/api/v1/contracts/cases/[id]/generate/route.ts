@@ -60,7 +60,12 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     let outputName = `${title}.pdf`;
     if (tpl?.source === "word" && tpl.wordTemplate) {
       output = fillWordTemplate(await getFileBuffer(tpl.wordTemplate.storageKey), tpl.wordTemplate, data);
-      missing = tpl.wordTemplate.mappings.filter((mapping) => data[mapping.fieldKey] === undefined || data[mapping.fieldKey] === null || data[mapping.fieldKey] === "").map((mapping) => mapping.fieldKey);
+      missing = [...tpl.wordTemplate.mappings, ...(tpl.wordTemplate.tableRepeats ?? [])]
+        .filter((mapping) => {
+          const value = data[mapping.fieldKey];
+          return value === undefined || value === null || value === "" || (Array.isArray(value) && value.length === 0);
+        })
+        .map((mapping) => mapping.fieldKey);
       outputMime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
       outputName = `${title}.docx`;
     } else if (tpl?.html && tpl.html.trim()) {

@@ -3,10 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, FileUp, Link2, Loader2, Trash2, X } from "lucide-react";
 import type { DocEditorField } from "./doc-editor";
-import type { WordTemplateConfig, WordTemplateMapping } from "@/lib/contracts/word-template";
+import type { WordTemplateConfig, WordTemplateMapping, WordTableRepeat } from "@/lib/contracts/word-template";
 
-function highlightMappings(root: HTMLElement, mappings: WordTemplateMapping[]) {
-  const anchors = [...new Set(mappings.map((mapping) => mapping.anchorText).filter(Boolean))].sort((a, b) => b.length - a.length);
+function highlightMappings(root: HTMLElement, mappings: WordTemplateMapping[], tableRepeats: WordTableRepeat[] = []) {
+  const anchors = [...new Set([...mappings.map((mapping) => mapping.anchorText), ...tableRepeats.map((repeat) => repeat.rowAnchorText)].filter(Boolean))].sort((a, b) => b.length - a.length);
   if (!anchors.length) return;
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   const nodes: Text[] = [];
@@ -43,6 +43,7 @@ export function WordTemplateWorkspace({ flowId, nodeId, fields, initialTemplate,
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [selectedText, setSelectedText] = useState("");
   const [selectedField, setSelectedField] = useState(fields[0]?.key ?? "");
+  const [selectedFormat, setSelectedFormat] = useState<WordTemplateMapping["format"]>("text");
   const [loading, setLoading] = useState(Boolean(initialTemplate));
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -75,12 +76,12 @@ export function WordTemplateWorkspace({ flowId, nodeId, fields, initialTemplate,
         if (cancelled) return;
         host.replaceChildren();
         await renderAsync(buffer, host, undefined, { inWrapper: true, ignoreWidth: false, ignoreHeight: false });
-        if (!cancelled) highlightMappings(host, template?.mappings ?? []);
+        if (!cancelled) highlightMappings(host, template?.mappings ?? [], template?.tableRepeats ?? []);
       })
       .catch(() => { if (!cancelled) setError("No pudimos mostrar esta plantilla. Puedes cargar otro archivo .docx."); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [previewUrl, template?.mappings]);
+  }, [previewUrl, template?.mappings, template?.tableRepeats]);
 
   const upload = async (file: File) => {
     if (!file.name.toLowerCase().endsWith(".docx")) {
@@ -109,10 +110,19 @@ export function WordTemplateWorkspace({ flowId, nodeId, fields, initialTemplate,
     if (!template || !selectedText || !selectedField) return;
     const field = fields.find((item) => item.key === selectedField);
     if (!field) return;
-    const next: WordTemplateMapping = { id: crypto.randomUUID(), anchorText: selectedText, fieldKey: field.key, fieldLabel: field.label };
+    const next: WordTemplateMapping = { id: crypto.randomUUID(), anchorText: selectedText, fieldKey: field.key, fieldLabel: field.label, format: selectedFormat };
     setTemplate({ ...template, mappings: [...template.mappings.filter((item) => item.fieldKey !== field.key), next] });
     setSelectedText("");
   };
+  const addTableRepeat = () => {
+    if (!template || !selectedText || !selectedField) return;
+    const field = fields.find((item) => item.key === selectedField);
+    if (!field) return;
+    const next: WordTableRepeat = { id: crypto.randomUUID(), rowAnchorText: selectedText, fieldKey: field.key, fieldLabel: field.label };
+    setTemplate({ ...template, tableRepeats: [...(template.tableRepeats ?? []).filter((item) => item.fieldKey !== field.key), next] });
+    setSelectedText("");
+  };
+  const repeatTables = template?.tableRepeats ?? [];
 
   return (
     <div className="fixed inset-0 z-[60] bg-black/45 p-3 sm:p-5" onMouseDown={onClose}>
@@ -132,9 +142,10 @@ export function WordTemplateWorkspace({ flowId, nodeId, fields, initialTemplate,
           </main>
           <aside className="overflow-y-auto border-l border-border p-4">
             <p className="text-xs font-semibold">Vínculos de la plantilla</p>
-            {selectedText ? <div className="mt-3 rounded-lg border border-primary/30 bg-primary/5 p-3"><p className="text-[10px] font-semibold uppercase tracking-wide text-primary">Texto seleccionado</p><p className="mt-1 text-xs leading-relaxed">“{selectedText}”</p><button onClick={addMapping} disabled={!selectedField || !template} className="mt-3 inline-flex w-full items-center justify-center gap-1.5 rounded-md bg-primary px-2.5 py-2 text-xs font-medium text-primary-foreground disabled:opacity-50"><Link2 className="h-3.5 w-3.5" /> Vincular campo</button></div> : <p className="mt-3 rounded-lg border border-dashed border-border p-3 text-[11px] leading-relaxed text-muted-foreground">Selecciona un texto que hoy sea un ejemplo, etiqueta o espacio reservado en el documento.</p>}
-            <div className="mt-4 space-y-2">{template?.mappings.map((mapping) => <div key={mapping.id} className="rounded-lg border border-border p-2.5"><div className="flex items-start justify-between gap-2"><p className="min-w-0 truncate text-xs font-medium">{mapping.fieldLabel}</p><button onClick={() => setTemplate({ ...template, mappings: template.mappings.filter((item) => item.id !== mapping.id) })} className="shrink-0 text-muted-foreground hover:text-destructive"><Trash2 className="h-3.5 w-3.5" /></button></div><p className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">Reemplaza: “{mapping.anchorText}”</p></div>)}</div>
-            {template && !template.mappings.length && <p className="mt-4 text-[11px] leading-relaxed text-muted-foreground">Aún no hay campos vinculados. El documento se generará igual, pero conservará el texto original.</p>}
+            {selectedText ? <div className="mt-3 rounded-lg border border-primary/30 bg-primary/5 p-3"><p className="text-[10px] font-semibold uppercase tracking-wide text-primary">Texto seleccionado</p><p className="mt-1 text-xs leading-relaxed">“{selectedText}”</p><label className="mt-3 block text-[10px] font-medium text-muted-foreground">Formato de dato<select value={selectedFormat ?? "text"} onChange={(event) => setSelectedFormat(event.target.value as WordTemplateMapping["format"])} className="mt-1 w-full rounded-md border border-border bg-card px-2 py-1.5 text-xs text-foreground"><option value="text">Texto original</option><option value="number">Número con separadores</option><option value="currency">Moneda COP</option></select></label><button onClick={addMapping} disabled={!selectedField || !template} className="mt-3 inline-flex w-full items-center justify-center gap-1.5 rounded-md bg-primary px-2.5 py-2 text-xs font-medium text-primary-foreground disabled:opacity-50"><Link2 className="h-3.5 w-3.5" /> Vincular campo</button><button onClick={addTableRepeat} disabled={!selectedField || !template} className="mt-2 inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-primary/30 bg-card px-2.5 py-2 text-xs font-medium text-primary disabled:opacity-50"><FileUp className="h-3.5 w-3.5" /> Repetir fila de tabla</button><p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">Úsalo solo al seleccionar el marcador de una fila, por ejemplo <span className="font-mono">{"{{repeat:garantias}}"}</span>. Esa fila se duplica por cada resultado.</p></div> : <p className="mt-3 rounded-lg border border-dashed border-border p-3 text-[11px] leading-relaxed text-muted-foreground">Selecciona un texto que hoy sea un ejemplo, etiqueta o espacio reservado en el documento.</p>}
+            <div className="mt-4 space-y-2">{template?.mappings.map((mapping) => <div key={mapping.id} className="rounded-lg border border-border p-2.5"><div className="flex items-start justify-between gap-2"><p className="min-w-0 truncate text-xs font-medium">{mapping.fieldLabel}</p><button onClick={() => setTemplate((current) => current ? { ...current, mappings: current.mappings.filter((item) => item.id !== mapping.id) } : current)} className="shrink-0 text-muted-foreground hover:text-destructive"><Trash2 className="h-3.5 w-3.5" /></button></div><p className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">{mapping.format === "currency" ? "Moneda COP" : mapping.format === "number" ? "Número" : "Texto"} · Reemplaza: “{mapping.anchorText}”</p></div>)}</div>
+            {repeatTables.length > 0 && <div className="mt-4 space-y-2"><p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Filas repetibles</p>{repeatTables.map((repeat) => <div key={repeat.id} className="rounded-lg border border-border p-2.5"><div className="flex items-start justify-between gap-2"><p className="min-w-0 truncate text-xs font-medium">{repeat.fieldLabel}</p><button onClick={() => setTemplate((current) => current ? { ...current, tableRepeats: (current.tableRepeats ?? []).filter((item) => item.id !== repeat.id) } : current)} className="shrink-0 text-muted-foreground hover:text-destructive"><Trash2 className="h-3.5 w-3.5" /></button></div><p className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">Duplica la fila: “{repeat.rowAnchorText}”</p></div>)}</div>}
+            {template && !template.mappings.length && !repeatTables.length && <p className="mt-4 text-[11px] leading-relaxed text-muted-foreground">Aún no hay campos vinculados. El documento se generará igual, pero conservará el texto original.</p>}
             {error && <p className="mt-3 text-xs text-destructive">{error}</p>}
           </aside>
         </div>

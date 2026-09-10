@@ -6,6 +6,16 @@ export interface WordTemplateMapping {
   anchorText: string;
   fieldKey: string;
   fieldLabel: string;
+  format?: "text" | "number" | "currency";
+}
+
+export interface WordTableRepeat {
+  id: string;
+  /** A marker inside one Word table row, for example {{repeat:guarantees}}. */
+  rowAnchorText: string;
+  /** A calculated list or other structured list from the case. */
+  fieldKey: string;
+  fieldLabel: string;
 }
 
 export interface WordTemplateConfig {
@@ -13,6 +23,8 @@ export interface WordTemplateConfig {
   originalName: string;
   mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
   mappings: WordTemplateMapping[];
+  /** Rows duplicated once per element of a structured case result. */
+  tableRepeats?: WordTableRepeat[];
 }
 
 function decodeXml(value: string): string {
@@ -80,6 +92,73 @@ function replaceTextInXml(xml: string, anchor: string, replacement: string): str
   return xml.replace(/<w:p\b[\s\S]*?<\/w:p>/g, (paragraph) => replaceInParagraph(paragraph, anchor, replacement));
 }
 
+function visibleText(xml: string): string {
+  return [...xml.matchAll(/<w:t\b[^>]*>([\s\S]*?)<\/w:t>/g)].map((match) => decodeXml(match[1])).join("");
+}
+
+function printableCell(value: unknown): string {
+  if (typeof value === "number" && Number.isFinite(value)) return value.toLocaleString("es-CO", { maximumFractionDigits: 6 });
+  return printable(value);
+}
+
+function numericValue(value: unknown): number | null {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value !== "string") return null;
+  const raw = value.trim();
+  if (!/^\$?\s*[\d.,]+$/.test(raw)) return null;
+  const stripped = raw.replace(/[^\d.,]/g, "");
+  const separator = Math.max(stripped.lastIndexOf(","), stripped.lastIndexOf("."));
+  const decimals = separator >= 0 ? stripped.length - separator - 1 : 0;
+  const normalized = decimals === 3 || (stripped.match(/[.,]/g)?.length ?? 0) > 1
+    ? stripped.replace(/[.,]/g, "")
+    : separator >= 0
+      ? stripped.replace(/[.,]/g, (part, index) => index === separator ? "." : "")
+      : stripped;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function printableMapping(value: unknown, format: WordTemplateMapping["format"]): string {
+  if (!format || format === "text") return printable(value);
+  const number = numericValue(value);
+  if (number === null) return printable(value);
+  const rendered = number.toLocaleString("es-CO", { maximumFractionDigits: 6 });
+  return format === "currency" ? `COP ${rendered}` : rendered;
+}
+
+/**
+ * Repeats a Word table row for every structured result in a case. The row
+ * contains a marker such as {{repeat:guarantees}} and ordinary placeholders
+ * such as {{amparo}}, {{cantidad}} and {{value}}. This preserves the tenant's
+ * native Word styling, widths and cell borders instead of rebuilding a table.
+ */
+function repeatTableRows(xml: string, repeat: WordTableRepeat, data: Record<string, unknown>): string {
+  const input = data[repeat.fieldKey];
+  const rows = Array.isArray(input)
+    ? input.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+    : [];
+
+  return xml.replace(/<w:tr\b[\s\S]*?<\/w:tr>/g, (tableRow) => {
+    if (!visibleText(tableRow).includes(repeat.rowAnchorText)) return tableRow;
+    if (!rows.length) return replaceTextInXml(tableRow, repeat.rowAnchorText, "[POR COMPLETAR]");
+
+    return rows.map((item, index) => {
+      let copy = replaceTextInXml(tableRow, repeat.rowAnchorText, "");
+      const tokens = [...new Set([...visibleText(copy).matchAll(/\{\{\s*(?:item\.)?([\w.-]+)\s*\}\}/g)].map((match) => match[1]))];
+      for (const token of tokens) {
+        // Tokens that are not properties of an item may be ordinary case
+        // fields (for example {{valor_contrato}}). Leave them for the normal
+        // template mapping pass that runs after table expansion.
+        if (token !== "index" && !(token in item)) continue;
+        const replacement = token === "index" ? String(index + 1) : printableCell(item[token]);
+        copy = replaceTextInXml(copy, `{{${token}}}`, replacement);
+        copy = replaceTextInXml(copy, `{{item.${token}}}`, replacement);
+      }
+      return copy;
+    }).join("");
+  });
+}
+
 function printable(value: unknown): string {
   if (Array.isArray(value)) return value.map((item) => printable(item)).filter(Boolean).join(", ");
   if (value && typeof value === "object") {
@@ -102,8 +181,17 @@ function printable(value: unknown): string {
 export function fillWordTemplate(source: Buffer, template: WordTemplateConfig, data: Record<string, unknown>): Buffer {
   const zip = new PizZip(source);
   const parts = Object.keys(zip.files).filter((name) => /^word\/.+\.xml$/i.test(name));
+  for (const repeat of template.tableRepeats ?? []) {
+    for (const path of parts) {
+      const file = zip.file(path);
+      if (!file) continue;
+      const xml = file.asText();
+      const replaced = repeatTableRows(xml, repeat, data);
+      if (replaced !== xml) zip.file(path, replaced);
+    }
+  }
   for (const mapping of template.mappings) {
-    const value = printable(data[mapping.fieldKey]);
+    const value = printableMapping(data[mapping.fieldKey], mapping.format);
     for (const path of parts) {
       const file = zip.file(path);
       if (!file) continue;
@@ -118,5 +206,6 @@ export function fillWordTemplate(source: Buffer, template: WordTemplateConfig, d
 export function isWordTemplate(value: unknown): value is WordTemplateConfig {
   if (!value || typeof value !== "object") return false;
   const raw = value as Partial<WordTemplateConfig>;
-  return typeof raw.storageKey === "string" && typeof raw.originalName === "string" && Array.isArray(raw.mappings);
+  return typeof raw.storageKey === "string" && typeof raw.originalName === "string" && Array.isArray(raw.mappings)
+    && (raw.tableRepeats === undefined || Array.isArray(raw.tableRepeats));
 }

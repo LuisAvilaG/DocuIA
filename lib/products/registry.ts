@@ -110,6 +110,7 @@ export const PRODUCT_MODULES: Record<ProductKey, NavModule[]> = {
     { href: "/history",     label: "Historial",    icon: "Clock" },
     { href: "/exceptions",  label: "Excepciones",  icon: "AlertTriangle", feature: "exception_queue" },
     { href: "/mappings",    label: "Mapeos",       icon: "GitMerge",      feature: "auto_mapping" },
+    { href: "/vendor-rules", label: "Reglas de proveedores", icon: "ListChecks", feature: "vendor_rules", adminOnly: true },
     { href: "/catalogs",    label: "Catálogos",    icon: "Database" },
     { href: "/statistics",  label: "Estadísticas", icon: "BarChart3",     feature: "advanced_analytics" },
   ],

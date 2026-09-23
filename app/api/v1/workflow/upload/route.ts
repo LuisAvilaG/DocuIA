@@ -8,6 +8,7 @@ import { eq, and } from "drizzle-orm";
 import { runPipeline, createQueuedDocument } from "@/lib/workflow/pipeline";
 import { enqueuePipeline } from "@/lib/queue";
 import { isFeatureEnabled } from "@/lib/features";
+import { uploadFile } from "@/lib/storage/minio";
 
 const ALLOWED_MIME_TYPES = new Set([
   "application/pdf",
@@ -83,6 +84,26 @@ async function handlePOST(req: NextRequest) {
     const fileBuffer = Buffer.from(await file.arrayBuffer());
     if (!matchesFileType(fileBuffer, file.type)) return NextResponse.json({ error: "El contenido no corresponde al tipo de archivo" }, { status: 415 });
     if (!["invoice", "purchase_order", "xml_cfdi"].includes(documentType)) return NextResponse.json({ error: "Tipo de documento inválido" }, { status: 400 });
+    if (documentType === "xml_cfdi" && file.type !== "text/xml" && file.type !== "application/xml") {
+      return NextResponse.json({ error: "El método CFDI requiere el XML del comprobante" }, { status: 400 });
+    }
+
+    const storageEnabled = await isFeatureEnabled(session.orgId, "document_storage");
+
+    // CFDI method: optional PDF of the same invoice, attached to the ERP bill.
+    let attachmentKey: string | undefined;
+    const pdf = formData.get("pdf");
+    if (documentType === "xml_cfdi" && pdf instanceof File && pdf.size > 0) {
+      if (pdf.type !== "application/pdf" || pdf.size > MAX_FILE_SIZE) {
+        return NextResponse.json({ error: "El archivo que acompaña al XML debe ser un PDF de hasta 20 MB" }, { status: 415 });
+      }
+      const pdfBuffer = Buffer.from(await pdf.arrayBuffer());
+      if (!matchesFileType(pdfBuffer, "application/pdf")) return NextResponse.json({ error: "El PDF no es válido" }, { status: 415 });
+      if (storageEnabled) {
+        attachmentKey = `${session.orgId}/${subsidiaryId}/${Date.now()}-${pdf.name.replace(/[^\w.-]+/g, "_")}`;
+        await uploadFile(pdfBuffer, attachmentKey, "application/pdf");
+      }
+    }
 
     const pipelineInput = {
       organizationId: session.orgId,
@@ -93,12 +114,12 @@ async function handlePOST(req: NextRequest) {
       fileBuffer,
       requestedBy: session.sub,
       autoProcessThreshold: org?.autoProcessThreshold ?? undefined,
+      attachmentKey,
     };
 
     // ── Async path: only when the file is durably stored (document_storage).
     // The pipeline runs off the HTTP thread in a pg-boss worker; the client
     // polls /status. Falls back to inline processing if enqueue fails.
-    const storageEnabled = await isFeatureEnabled(session.orgId, "document_storage");
     if (storageEnabled) {
       try {
         const { documentId, storageKey } = await createQueuedDocument(pipelineInput);
@@ -112,6 +133,7 @@ async function handlePOST(req: NextRequest) {
           mimeType: file.type,
           requestedBy: session.sub,
           autoProcessThreshold: org?.autoProcessThreshold ?? undefined,
+          attachmentKey,
         });
         return NextResponse.json({ ok: true, status: "queued", documentId });
       } catch (queueErr) {

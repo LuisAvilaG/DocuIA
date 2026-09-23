@@ -34,6 +34,10 @@ async function handlePATCH(req: NextRequest, { params }: Params) {
     if (typeof body.currency === "string" && body.currency.trim()) {
       updates.currency = body.currency.trim().toUpperCase();
     }
+    if (typeof body.taxId === "string") {
+      const taxId = body.taxId.toUpperCase().replace(/[^A-Z0-9&Ñ]/g, "").slice(0, 20);
+      updates.taxId = taxId || null;
+    }
     if (typeof body.locale === "string") {
       updates.locale = body.locale.trim() || null;
     }

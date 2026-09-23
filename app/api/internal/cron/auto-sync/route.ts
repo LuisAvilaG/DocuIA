@@ -164,7 +164,8 @@ async function handleGET(req: NextRequest) {
                   subsidiaryId: sub.id, internalId: row.internal_id,
                   entityid: row.entityid || null, name: row.name || null,
                   email: row.email || null, phone: row.phone || null,
-                  rfc: row.rfc || null, isInactive: row.inactive ?? false, updatedAt: now,
+                  rfc: row.rfc || null, categoryId: row.category_id || null, categoryName: row.category_name || null,
+                  isInactive: row.inactive ?? false, updatedAt: now,
                 }));
                 if (values.length) {
                   await db.insert(catalogVendors).values(values).onConflictDoUpdate({
@@ -173,6 +174,7 @@ async function handleGET(req: NextRequest) {
                       entityid: sql`excluded.entityid`, name: sql`excluded.name`,
                       email: sql`excluded.email`, phone: sql`excluded.phone`,
                       rfc: sql`excluded.rfc`, isInactive: sql`excluded.is_inactive`,
+                      categoryId: sql`excluded.category_id`, categoryName: sql`excluded.category_name`,
                       updatedAt: sql`excluded.updated_at`,
                     },
                   });

@@ -72,6 +72,7 @@ export async function createQueuedDocument(input: PipelineInput): Promise<{ docu
       documentType:   input.documentType,
       status:         "uploaded",
       storageKey,
+      attachmentKey:  input.attachmentKey ?? null,
       processedBy:    input.requestedBy ?? null,
     })
     .returning({ id: historyDocuments.id });
@@ -162,6 +163,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
         documentType:   input.documentType,
         status:         "extracting",
         storageKey:     storageEnabled ? storageKey : null,
+        attachmentKey:  input.attachmentKey ?? null,
         processedBy:    input.requestedBy ?? null,
       })
       .returning({ id: historyDocuments.id });

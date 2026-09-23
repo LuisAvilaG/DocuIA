@@ -17,6 +17,7 @@ export type PipelineJob = {
   storageKey:            string;
   requestedBy?:          string;
   autoProcessThreshold?: number;
+  attachmentKey?:        string;
 };
 
 // ── Singleton boot ────────────────────────────────────────────────────
@@ -97,6 +98,7 @@ export async function startPipelineWorker(): Promise<void> {
         autoProcessThreshold: d.autoProcessThreshold,
         documentId:           d.documentId,
         storageKey:           d.storageKey,
+        attachmentKey:        d.attachmentKey,
       });
     }
   });

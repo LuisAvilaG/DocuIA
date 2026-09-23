@@ -6,7 +6,10 @@ import { historyDocuments } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
 import { HistoryTableClient } from "./client";
 
-export default async function HistoryPage() {
+const STATUS_FILTERS = new Set(["review", "pending_approval", "awaiting_receipt", "completed", "failed"]);
+
+export default async function HistoryPage({ searchParams }: { searchParams: Promise<{ status?: string }> }) {
+  const { status } = await searchParams;
   const session = await getTenantSession({ area: "documents" });
   if (!session) redirect("/login");
   await requireApAutomation(session.orgId);
@@ -42,5 +45,5 @@ export default async function HistoryPage() {
     console.error("[history]", err);
   }
 
-  return <HistoryTableClient docs={docs} />;
+  return <HistoryTableClient docs={docs} initialStatus={status && STATUS_FILTERS.has(status) ? status : ""} />;
 }

@@ -20,11 +20,11 @@ interface DocRow {
   numDoc: string | null; total: number | null; createdAt: string; updatedAt: string;
 }
 
-export function HistoryTableClient({ docs }: { docs: DocRow[] }) {
+export function HistoryTableClient({ docs, initialStatus = "" }: { docs: DocRow[]; initialStatus?: string }) {
   const router = useRouter();
   const dataExport = useFeature("data_export");
   const [search,  setSearch]  = useState("");
-  const [status,  setStatus]  = useState("");
+  const [status,  setStatus]  = useState(initialStatus);
   const [docType, setDocType] = useState("");
 
   const filtered = useMemo(() => {

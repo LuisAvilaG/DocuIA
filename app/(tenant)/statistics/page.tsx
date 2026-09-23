@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getTenantSession } from "@/lib/auth/jwt";
+import { requireApAutomation } from "@/lib/products";
 import { db } from "@/lib/db";
 import { usageDaily, expenseReports, expenseItems, orgUsers } from "@/db/schema";
 import { and, eq, gte, sum, count } from "drizzle-orm";
@@ -21,6 +22,7 @@ export type DayRow = {
 export default async function StatisticsPage() {
   const session = await getTenantSession({ area: "documents" });
   if (!session) redirect("/login");
+  await requireApAutomation(session.orgId);
   if (!await isFeatureEnabled(session.orgId, "advanced_analytics")) redirect("/dashboard");
 
   const thirtyDaysAgoDate = new Date();

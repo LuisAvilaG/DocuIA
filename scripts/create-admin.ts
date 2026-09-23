@@ -5,7 +5,7 @@
  * Uses PLATFORM_ADMIN_EMAIL and PLATFORM_ADMIN_PASSWORD from .env.local
  * or prompts for them via argv.
  */
-import "dotenv/config";
+import "./_load-env"; // must be first: loads .env.local before lib/db reads env
 import { db } from "@/lib/db";
 import { platformAdmins } from "@/db/schema";
 import { hashSync } from "bcryptjs";

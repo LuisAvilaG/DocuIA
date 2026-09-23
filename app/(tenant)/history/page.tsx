@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getTenantSession } from "@/lib/auth/jwt";
+import { requireApAutomation } from "@/lib/products";
 import { db } from "@/lib/db";
 import { historyDocuments } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
@@ -8,6 +9,7 @@ import { HistoryTableClient } from "./client";
 export default async function HistoryPage() {
   const session = await getTenantSession({ area: "documents" });
   if (!session) redirect("/login");
+  await requireApAutomation(session.orgId);
 
   let docs: {
     id: number; documentType: string; status: string; vendor: string | null;

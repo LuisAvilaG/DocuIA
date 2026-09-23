@@ -4,7 +4,7 @@
  * unless the org has its own rules for the same country.
  * Run: npx tsx scripts/seed-expense-rules.ts
  */
-import "dotenv/config";
+import "./_load-env"; // must be first: loads .env.local before lib/db reads env
 import { db } from "@/lib/db";
 import { expenseTaxRules } from "@/db/schema";
 import { DEFAULT_TAX_RULES } from "@/lib/expense/tax-engine";

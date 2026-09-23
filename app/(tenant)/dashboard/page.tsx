@@ -1,6 +1,6 @@
 ﻿import { redirect } from "next/navigation";
 import { getTenantSession } from "@/lib/auth/jwt";
-import { getTenantHomePath, isProductActive } from "@/lib/products";
+import { requireApAutomation } from "@/lib/products";
 import { db } from "@/lib/db";
 import {
   usageDaily, historyDocuments, exceptionQueue, itemMappings, subsidiaries,
@@ -103,10 +103,7 @@ async function getDashboardData(orgId: string) {
 export default async function TenantDashboardPage() {
   const session = await getTenantSession({ area: "documents" });
   if (!session) redirect("/login");
-  if (!await isProductActive(session.orgId, "ap_automation")) {
-    const homePath = await getTenantHomePath(session.orgId);
-    if (homePath !== "/dashboard") redirect(homePath);
-  }
+  await requireApAutomation(session.orgId);
 
   const data = await getDashboardData(session.orgId);
   const hour = new Date().getHours();

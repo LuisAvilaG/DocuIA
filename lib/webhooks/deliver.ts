@@ -27,6 +27,9 @@ function sign(payload: string, secret: string): string {
   return "sha256=" + createHmac("sha256", secret).update(payload).digest("hex");
 }
 
+/** Events a webhook can subscribe to (the "document." prefix is implied). */
+export const WEBHOOK_EVENTS = ["completed", "review", "failed"] as const;
+
 export async function deliverWebhooks(
   organizationId: string,
   event: WebhookEvent,

@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { orgProducts } from "@/db/schema";
 import { and, eq, ne } from "drizzle-orm";
@@ -33,4 +34,15 @@ export async function getTenantHomePath(orgId: string): Promise<TenantHomePath> 
   if (activeProducts.has("contract_intelligence")) return "/contracts/dashboard";
   if (activeProducts.has("expense_management")) return "/accounting/expenses";
   return "/dashboard";
+}
+
+/**
+ * Guard for AP Automation pages: a tenant without the product is sent to its
+ * own product's home (or to /unavailable when it has none), instead of seeing
+ * AP screens by typing the URL.
+ */
+export async function requireApAutomation(orgId: string): Promise<void> {
+  if (await isProductActive(orgId, "ap_automation")) return;
+  const home = await getTenantHomePath(orgId);
+  redirect(home === "/dashboard" ? "/unavailable?reason=product" : home);
 }

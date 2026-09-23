@@ -1,5 +1,6 @@
 import { notFound, redirect } from "next/navigation";
 import { getTenantSession } from "@/lib/auth/jwt";
+import { requireApAutomation } from "@/lib/products";
 import { db } from "@/lib/db";
 import { historyDocuments, nsConnections, organizations } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
@@ -49,6 +50,7 @@ export default async function HistoryDetailPage({
 }) {
   const session = await getTenantSession({ area: "documents" });
   if (!session) redirect("/login");
+  await requireApAutomation(session.orgId);
 
   const { id } = await params;
   const docId = parseInt(id, 10);

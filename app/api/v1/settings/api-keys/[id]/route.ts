@@ -1,14 +1,15 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { apiKeys } from "@/db/schema";
 import { and, eq, isNull } from "drizzle-orm";
 import { getTenantSession } from "@/lib/auth/jwt";
 
-export async function DELETE(
+async function handleDELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await getTenantSession();
+  const session = await getTenantSession({ area: "settings", permission: "write" });
   if (!session || session.role !== "admin") {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -30,3 +31,5 @@ export async function DELETE(
 
   return NextResponse.json({ ok: true });
 }
+
+export const DELETE = withApiSecurity(handleDELETE);

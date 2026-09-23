@@ -1,3 +1,5 @@
+import { clientIp } from "@/lib/security/request-ip";
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { sendEmail, buildDemoRequestEmail } from "@/lib/email/send";
@@ -20,14 +22,10 @@ const contactSchema = z.object({
   website: z.string().max(0).optional(),
 });
 
-function clientIp(req: NextRequest): string {
-  return req.headers.get("x-forwarded-for")?.split(",")[0].trim()
-    ?? req.headers.get("x-real-ip") ?? "unknown";
-}
 
-export async function POST(req: NextRequest) {
+async function handlePOST(req: NextRequest) {
   try {
-    const rl = await rateLimit(`contact:${clientIp(req)}`, { max: 5, windowSec: 900 });
+    const rl = await rateLimit(`contact:${clientIp(req.headers)}`, { max: 5, windowSec: 900 });
     if (!rl.ok) {
       return NextResponse.json({ error: "Demasiados intentos. Inténtalo más tarde." },
         { status: 429, headers: { "Retry-After": String(rl.retryAfterSec ?? 900) } });
@@ -65,3 +63,5 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Error interno" }, { status: 500 });
   }
 }
+
+export const POST = withApiSecurity(handlePOST);

@@ -1,3 +1,4 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { isFeatureEnabled } from "@/lib/features";
@@ -8,11 +9,11 @@ import { sendEmail, buildExpenseSubmittedEmail } from "@/lib/email/send";
 import { syncReportToNetsuite } from "@/lib/expense/sync-to-netsuite";
 import { logAudit } from "@/lib/audit/log";
 
-export async function POST(
+async function handlePOST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await getTenantSession();
+  const session = await getTenantSession({ area: "expenses", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (!await isFeatureEnabled(session.orgId, "expense_management")) {
     return NextResponse.json({ error: "Módulo de gastos no activado" }, { status: 403 });
@@ -103,3 +104,5 @@ export async function POST(
 
   return NextResponse.json({ ok: true });
 }
+
+export const POST = withApiSecurity(handlePOST);

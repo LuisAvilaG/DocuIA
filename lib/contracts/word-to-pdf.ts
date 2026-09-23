@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, parse } from "node:path";
 import { promisify } from "node:util";
+import { validateDocx } from "@/lib/security/docx";
 
 const execFileAsync = promisify(execFile);
 
@@ -13,6 +14,7 @@ const execFileAsync = promisify(execFile);
  * avoids lossy client-side or text-only PDF fallbacks.
  */
 export async function convertWordToPdf(word: Buffer, originalName: string): Promise<Buffer> {
+  await validateDocx(word);
   const workingDir = await mkdtemp(join(tmpdir(), "docuia-word-"));
   const sourceName = basename(originalName).toLowerCase().endsWith(".docx")
     ? basename(originalName)

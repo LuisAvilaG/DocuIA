@@ -1,3 +1,6 @@
+import { withApiSecurity } from "@/lib/security/http";
+import { verifyUploadReceipt } from "@/lib/security/upload-receipt";
+import { ownsExpenseCatalogReferences } from "@/lib/expense/catalog-access";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { isFeatureEnabled } from "@/lib/features";
@@ -16,8 +19,8 @@ function toExpenseDocumentType(value: string): ExpenseDocumentType {
     : "unknown";
 }
 
-export async function POST(req: NextRequest) {
-  const session = await getTenantSession();
+async function handlePOST(req: NextRequest) {
+  const session = await getTenantSession({ area: "expenses", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (!await isFeatureEnabled(session.orgId, "expense_management")) {
     return NextResponse.json({ error: "Módulo de gastos no activado" }, { status: 403 });
@@ -44,6 +47,7 @@ export async function POST(req: NextRequest) {
       documentTypeDetected?:    string;
       needsDocumentoEquivalente?: boolean;
       fileKey?:                 string;
+      uploadReceipt?:           string;
       mimeType?:                string;
       originalName?:            string;
       ocrRaw?:                  Record<string, unknown>;
@@ -51,6 +55,9 @@ export async function POST(req: NextRequest) {
     };
 
     if (!body.reportId) return NextResponse.json({ error: "reportId requerido" }, { status: 400 });
+    if (!await ownsExpenseCatalogReferences(session.orgId, body)) return NextResponse.json({ error: "Categoría, departamento o clase no válidos" }, { status: 400 });
+    const receipt = body.fileKey ? verifyUploadReceipt(body.uploadReceipt, session.orgId, session.sub, body.fileKey) : null;
+    if (body.fileKey && !receipt) return NextResponse.json({ error: "El archivo no corresponde a una carga tuya válida. Vuelve a cargarlo." }, { status: 400 });
 
     // SECURITY: never trust client-computed money. Enforce arithmetic + bounds.
     const amounts = {
@@ -122,8 +129,8 @@ export async function POST(req: NextRequest) {
       await db.insert(expenseDocuments).values({
         itemId:               itemId,
         fileKey:              body.fileKey,
-        mimeType:             body.mimeType || null,
-        originalName:         body.originalName || null,
+        mimeType:             receipt!.mimeType,
+        originalName:         receipt!.originalName,
         ocrRaw:               body.ocrRaw ?? null,
         ocrConfidence:        body.ocrConfidence != null ? String(body.ocrConfidence) : null,
         documentTypeDetected: docType,
@@ -136,3 +143,5 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Error interno" }, { status: 500 });
   }
 }
+
+export const POST = withApiSecurity(handlePOST);

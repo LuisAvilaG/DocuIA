@@ -1,4 +1,6 @@
 import { db } from "@/lib/db";
+import { requireAdminSession } from "@/lib/auth/admin";
+import { redirect } from "next/navigation";
 import {
   organizations, subscriptions, usageDaily,
 } from "@/db/schema";
@@ -155,6 +157,7 @@ async function getDashboardData() {
 }
 
 export default async function AdminDashboardPage() {
+  if ((await requireAdminSession()).error) redirect("/admin/login");
   const { stats, clients } = await getDashboardData();
 
   return (

@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { requireAdminSession } from "@/lib/auth/admin";
+import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import {
   organizations, subscriptions, usageDaily,
@@ -73,6 +75,7 @@ async function getClients(): Promise<ClientRow[]> {
 }
 
 export default async function ClientsPage() {
+  if ((await requireAdminSession()).error) redirect("/admin/login");
   const clients = await getClients();
 
   return (

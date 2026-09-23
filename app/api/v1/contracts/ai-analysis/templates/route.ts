@@ -1,3 +1,4 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { and, desc, eq } from "drizzle-orm";
@@ -14,7 +15,7 @@ function validConfig(input: unknown): input is { kind: "ai_analysis"; prompt: st
 }
 
 async function guard() {
-  const session = await getTenantSession();
+  const session = await getTenantSession({ area: "contracts" });
   if (!session) return { error: NextResponse.json({ error: "No autorizado" }, { status: 401 }) } as const;
   if (!await isProductActive(session.orgId, "contract_intelligence")) {
     return { error: NextResponse.json({ error: "Contract Intelligence no está activo" }, { status: 403 }) } as const;
@@ -22,7 +23,7 @@ async function guard() {
   return { session } as const;
 }
 
-export async function GET() {
+async function handleGET() {
   const access = await guard();
   if ("error" in access) return access.error;
   const templates = await db.query.contractAiAnalysisTemplates.findMany({
@@ -36,7 +37,7 @@ export async function GET() {
   })) });
 }
 
-export async function POST(req: NextRequest) {
+async function handlePOST(req: NextRequest) {
   const access = await guard();
   if ("error" in access) return access.error;
   if (access.session.role !== "admin") return NextResponse.json({ error: "Solo administradores" }, { status: 403 });
@@ -53,3 +54,6 @@ export async function POST(req: NextRequest) {
   await db.insert(contractAiAnalysisTemplates).values(template);
   return NextResponse.json({ ok: true, template: { ...template, config: template.configJson } }, { status: 201 });
 }
+
+export const GET = withApiSecurity(handleGET);
+export const POST = withApiSecurity(handlePOST);

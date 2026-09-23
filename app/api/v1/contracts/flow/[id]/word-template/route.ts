@@ -1,3 +1,6 @@
+import { withApiSecurity } from "@/lib/security/http";
+import { isOrgWordTemplateKey } from "@/lib/security/storage-key";
+import { validateDocx } from "@/lib/security/docx";
 import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
@@ -15,7 +18,7 @@ const WORD_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingm
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
 
 async function guard() {
-  const session = await getTenantSession();
+  const session = await getTenantSession({ area: "contracts" });
   if (!session) return { error: NextResponse.json({ error: "No autorizado" }, { status: 401 }) } as const;
   if (session.role !== "admin") return { error: NextResponse.json({ error: "Solo administradores pueden gestionar plantillas Word." }, { status: 403 }) } as const;
   const [product, flows] = await Promise.all([
@@ -30,7 +33,7 @@ async function flowFor(orgId: string, id: string) {
   return db.query.contractFlows.findFirst({ where: and(eq(contractFlows.id, id), eq(contractFlows.organizationId, orgId)), columns: { graphJson: true } });
 }
 
-export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+async function handlePOST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const access = await guard();
   if ("error" in access) return access.error;
   const { id } = await params;
@@ -47,12 +50,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   // only attached to the node when the user subsequently saves the flow.
 
   const storageKey = `contracts/${access.session.orgId}/flows/${id}/word-templates/${randomUUID()}-${file.name.replace(/[^\w.()-]+/g, "-")}`;
-  await uploadFile(Buffer.from(await file.arrayBuffer()), storageKey, WORD_MIME);
+  const buffer = Buffer.from(await file.arrayBuffer());
+  try { await validateDocx(buffer); } catch { return NextResponse.json({ error: "La plantilla Word es inválida, demasiado compleja o contiene contenido activo/vínculos externos." }, { status: 400 }); }
+  await uploadFile(buffer, storageKey, WORD_MIME);
   const template: WordTemplateConfig = { storageKey, originalName: file.name, mimeType: WORD_MIME, mappings: [] };
   return NextResponse.json({ ok: true, wordTemplate: template }, { status: 201 });
 }
 
-export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+async function handleGET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const access = await guard();
   if ("error" in access) return access.error;
   const { id } = await params;
@@ -63,6 +68,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   const node = graph.success ? graph.data.nodes.find((entry) => entry.id === nodeId && entry.kind === "generate") : null;
   const template = node?.kind === "generate" && isWordTemplate(node.data.wordTemplate) ? node.data.wordTemplate : null;
   if (!template) return NextResponse.json({ error: "No hay una plantilla Word guardada para este nodo." }, { status: 404 });
+  if (!isOrgWordTemplateKey(template.storageKey, access.session.orgId)) return NextResponse.json({ error: "Plantilla no permitida" }, { status: 403 });
   try {
     const nodeStream = await getFileStream(template.storageKey);
     const webStream = Readable.toWeb(nodeStream) as unknown as ReadableStream<Uint8Array>;
@@ -71,3 +77,6 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     return NextResponse.json({ error: "No se pudo leer la plantilla Word guardada." }, { status: 500 });
   }
 }
+
+export const POST = withApiSecurity(handlePOST);
+export const GET = withApiSecurity(handleGET);

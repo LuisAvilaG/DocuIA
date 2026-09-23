@@ -59,6 +59,7 @@ export function ItemCaptureClient({ reportId, reportPurpose, categories, departm
   const [step,    setStep]    = useState<Step>("capture");
   const [error,   setError]   = useState<string | null>(null);
   const [fileKey, setFileKey] = useState<string | null>(null);
+  const [uploadReceipt, setUploadReceipt] = useState<string | null>(null);
   const [ocr,     setOcr]     = useState<ExpenseOcrResult | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
 
@@ -150,6 +151,7 @@ export function ItemCaptureClient({ reportId, reportPurpose, categories, departm
       const data = await res.json();
       if (!res.ok) { setError(data.error ?? "Error al procesar el documento"); setStep("capture"); return; }
       setFileKey(data.fileKey);
+      setUploadReceipt(data.uploadReceipt);
       setOcr(data.ocr);
       setVendorName(data.ocr.vendorName ?? "");
       setVendorNit(data.ocr.vendorNit ?? "");
@@ -171,6 +173,7 @@ export function ItemCaptureClient({ reportId, reportPurpose, categories, departm
   function skipToManual() {
     setOcr(null);
     setFileKey(null);
+    setUploadReceipt(null);
     setPreview(null);
     setStep("review");
   }
@@ -188,6 +191,7 @@ export function ItemCaptureClient({ reportId, reportPurpose, categories, departm
         body: JSON.stringify({
           reportId,
           fileKey:         fileKey ?? undefined,
+          uploadReceipt:   uploadReceipt ?? undefined,
           documentTypeDetected: ocr?.documentType,
           vendorName:      vendorName || undefined,
           vendorNit:       vendorNit || undefined,

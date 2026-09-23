@@ -1,3 +1,4 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { readFile } from "fs/promises";
 import { join } from "path";
@@ -5,7 +6,7 @@ import { requireAdminSession } from "@/lib/auth/admin";
 
 const ALLOWED = new Set(["docuia-catalog-v1.js", "docuia-process-v1.js"]);
 
-export async function GET(
+async function handleGET(
   _req: NextRequest,
   { params }: { params: Promise<{ filename: string }> },
 ) {
@@ -31,3 +32,5 @@ export async function GET(
     return new NextResponse("Not found", { status: 404 });
   }
 }
+
+export const GET = withApiSecurity(handleGET);

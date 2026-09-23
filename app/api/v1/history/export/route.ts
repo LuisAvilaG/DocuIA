@@ -1,3 +1,4 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
@@ -33,8 +34,8 @@ function csvEscape(value: string | null | undefined): string {
   return str;
 }
 
-export async function GET() {
-  const session = await getTenantSession();
+async function handleGET() {
+  const session = await getTenantSession({ area: "documents" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
   const enabled = await isFeatureEnabled(session.orgId, "data_export");
@@ -101,3 +102,5 @@ export async function GET() {
     return NextResponse.json({ error: "Error interno" }, { status: 500 });
   }
 }
+
+export const GET = withApiSecurity(handleGET);

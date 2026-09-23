@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { NewReportForm } from "./new-report-form";
 
 export default async function NewReportPage() {
-  const session = await getTenantSession();
+  const session = await getTenantSession({ area: "expenses" });
   if (!session) redirect("/login");
 
   return (

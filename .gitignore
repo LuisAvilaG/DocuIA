@@ -48,3 +48,7 @@ next-env.d.ts
 # claude
 .agents/
 skills-lock.json
+
+# local artifacts (audit evidence, scratch)
+/output/
+/tmp/

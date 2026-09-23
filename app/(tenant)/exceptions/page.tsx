@@ -6,7 +6,7 @@ import { eq, desc } from "drizzle-orm";
 import { ExceptionsClient } from "./client";
 
 export default async function ExceptionsPage() {
-  const session = await getTenantSession();
+  const session = await getTenantSession({ area: "documents" });
   if (!session) redirect("/login");
 
   let exceptions: {

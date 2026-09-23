@@ -1,3 +1,6 @@
+import { clientIp } from "@/lib/security/request-ip";
+import { passwordSchema } from "@/lib/auth/input";
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { orgUsers, authSessions } from "@/db/schema";
@@ -7,15 +10,11 @@ import { createHash } from "crypto";
 import { rateLimit } from "@/lib/auth/rate-limit";
 import { logAudit } from "@/lib/audit/log";
 
-function clientIp(req: NextRequest): string {
-  return req.headers.get("x-forwarded-for")?.split(",")[0].trim()
-    ?? req.headers.get("x-real-ip") ?? "unknown";
-}
 
-export async function POST(req: NextRequest) {
+async function handlePOST(req: NextRequest) {
   try {
     // Throttle token guessing.
-    const rl = await rateLimit(`reset:${clientIp(req)}`, { max: 10, windowSec: 900 });
+    const rl = await rateLimit(`reset:${clientIp(req.headers)}`, { max: 10, windowSec: 900 });
     if (!rl.ok) {
       return NextResponse.json({ error: "Demasiados intentos. Inténtalo más tarde." },
         { status: 429, headers: { "Retry-After": String(rl.retryAfterSec ?? 900) } });
@@ -23,11 +22,8 @@ export async function POST(req: NextRequest) {
 
     const { token, password } = await req.json() as { token?: string; password?: string };
 
-    if (!token || !password) {
+    if (typeof token !== "string" || !/^[a-f0-9]{64}$/.test(token) || !passwordSchema.safeParse(password).success) {
       return NextResponse.json({ error: "Token y contraseña requeridos" }, { status: 400 });
-    }
-    if (password.length < 8) {
-      return NextResponse.json({ error: "La contraseña debe tener al menos 8 caracteres" }, { status: 400 });
     }
 
     // Look up by the token's hash (raw token is never stored).
@@ -44,9 +40,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Token inválido o expirado" }, { status: 400 });
     }
 
-    const passwordHash = await hash(password, 12);
+    const passwordHash = await hash(password!, 12);
 
-    await db
+    const changed = await db.transaction(async tx => {
+    const updated = await tx
       .update(orgUsers)
       .set({
         passwordHash,
@@ -54,13 +51,18 @@ export async function POST(req: NextRequest) {
         resetTokenExpiresAt: null,
         updatedAt:           new Date(),
       })
-      .where(eq(orgUsers.id, user.id));
+      .where(and(eq(orgUsers.id, user.id), eq(orgUsers.resetToken, tokenHash), gt(orgUsers.resetTokenExpiresAt, new Date())))
+      .returning({ id: orgUsers.id });
+    if (!updated.length) return false;
 
     // Revoke all active sessions for security
-    await db
+    await tx
       .update(authSessions)
       .set({ revokedAt: new Date() })
       .where(and(eq(authSessions.userId, user.id), eq(authSessions.userType, "org_user")));
+    return true;
+    });
+    if (!changed) return NextResponse.json({ error: "Token inválido o expirado" }, { status: 400 });
 
     await logAudit({
       orgId: user.organizationId, userId: user.id, userEmail: user.email,
@@ -73,3 +75,5 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Error interno" }, { status: 500 });
   }
 }
+
+export const POST = withApiSecurity(handlePOST);

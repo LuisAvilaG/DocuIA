@@ -1,3 +1,4 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { syncSubsidiaryCatalog, type CatalogType } from "@/lib/netsuite/sync-catalog";
@@ -5,8 +6,8 @@ import { syncSubsidiaryCatalog, type CatalogType } from "@/lib/netsuite/sync-cat
 // Tenant-facing catalog sync. Available to org admins so they can refresh their
 // own items/vendors/locations without a platform super-admin. The subsidiary is
 // verified to belong to the caller's org inside syncSubsidiaryCatalog.
-export async function POST(req: NextRequest) {
-  const session = await getTenantSession();
+async function handlePOST(req: NextRequest) {
+  const session = await getTenantSession({ area: "documents", permission: "write" });
   if (!session) {
     return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   }
@@ -32,3 +33,5 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Error interno del servidor" }, { status: 500 });
   }
 }
+
+export const POST = withApiSecurity(handlePOST);

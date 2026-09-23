@@ -6,7 +6,7 @@ import { eq, and } from "drizzle-orm";
 import { ReportDetail } from "./report-detail";
 
 export default async function ReportPage({ params }: { params: Promise<{ id: string }> }) {
-  const session = await getTenantSession();
+  const session = await getTenantSession({ area: "expenses" });
   if (!session) redirect("/login");
 
   const { id } = await params;

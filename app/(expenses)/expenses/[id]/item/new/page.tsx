@@ -7,7 +7,7 @@ import { ItemCaptureClient } from "./item-capture-client";
 import { getExpenseManagementConfig } from "@/lib/expense/config";
 
 export default async function NewItemPage({ params }: { params: Promise<{ id: string }> }) {
-  const session = await getTenantSession();
+  const session = await getTenantSession({ area: "expenses" });
   if (!session) redirect("/login");
 
   const { id } = await params;

@@ -8,7 +8,7 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import { ApprovalsClient, type PendingCase } from "./approvals-client";
 
 export default async function ContractApprovalsPage() {
-  const session = await getTenantSession();
+  const session = await getTenantSession({ area: "contracts" });
   if (!session) redirect("/login");
   if (!(await isProductActive(session.orgId, "contract_intelligence"))) redirect("/dashboard");
   const approvalFeature = await getFeature(session.orgId, "contract_approval_workflow");

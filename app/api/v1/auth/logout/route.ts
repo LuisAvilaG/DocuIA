@@ -1,10 +1,11 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { verifyRefreshToken } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
 import { authSessions } from "@/db/schema";
 import { eq } from "drizzle-orm";
 
-export async function POST(req: NextRequest) {
+async function handlePOST(req: NextRequest) {
   const refreshCookie = req.cookies.get("refresh_token")?.value;
 
   if (refreshCookie) {
@@ -22,3 +23,5 @@ export async function POST(req: NextRequest) {
   res.cookies.delete("refresh_token");
   return res;
 }
+
+export const POST = withApiSecurity(handlePOST);

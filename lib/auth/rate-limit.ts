@@ -28,10 +28,10 @@ export async function rateLimit(
     if (row && Number(row.attempts) > max) {
       return { ok: false, retryAfterSec: Math.max(1, Number(row.retry_after)) };
     }
-    return { ok: true };
+    return row ? { ok: true } : { ok: false, retryAfterSec: 60 };
   } catch {
-    // Fail open: never lock users out because the limiter's storage hiccuped.
-    return { ok: true };
+    // Authentication and paid processing must not become unlimited on failure.
+    return { ok: false, retryAfterSec: 60 };
   }
 }
 

@@ -8,6 +8,13 @@ export interface NSCredentials {
   tokenSecret:    string;
 }
 
+function accountHostname(accountId: string): string {
+  if (!/^[a-z0-9]+(?:[_-][a-z0-9]+)*$/i.test(accountId) || accountId.length > 63) {
+    throw new Error("ID de cuenta NetSuite inválido");
+  }
+  return accountId.replace(/_/g, "-").toLowerCase();
+}
+
 function percentEncode(str: string): string {
   return encodeURIComponent(str)
     .replace(/!/g, "%21").replace(/'/g, "%27")
@@ -33,7 +40,8 @@ export function buildOAuthHeader(
 ): string {
   const ts    = timestamp();
   const nc    = nonce();
-  const realm = creds.accountId;
+  accountHostname(creds.accountId);
+  const realm = percentEncode(creds.accountId);
 
   const oauthParams: Record<string, string> = {
     oauth_consumer_key:     creds.consumerKey,
@@ -91,15 +99,15 @@ export function buildRestletUrl(
   scriptId:  string,
   deployId:  string,
 ): string {
-  const normalizedId = accountId.replace(/_/g, "-").toLowerCase();
+  const normalizedId = accountHostname(accountId);
   const host         = `${normalizedId}.restlets.api.netsuite.com`;
-  return `https://${host}/app/site/hosting/restlet.nl?script=${scriptId}&deploy=${deployId}`;
+  return `https://${host}/app/site/hosting/restlet.nl?${new URLSearchParams({ script: scriptId, deploy: deployId })}`;
 }
 
 /**
  * Builds the NetSuite REST API base URL (for credential testing — no scripts needed).
  */
 export function buildRestApiUrl(accountId: string): string {
-  const normalizedId = accountId.replace(/_/g, "-").toLowerCase();
+  const normalizedId = accountHostname(accountId);
   return `https://${normalizedId}.suitetalk.api.netsuite.com/services/rest/record/v1`;
 }

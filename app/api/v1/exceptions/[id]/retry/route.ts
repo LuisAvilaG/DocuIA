@@ -1,3 +1,4 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
@@ -8,8 +9,8 @@ import { runPipeline } from "@/lib/workflow/pipeline";
 
 type Params = { params: Promise<{ id: string }> };
 
-export async function POST(_req: NextRequest, { params }: Params) {
-  const session = await getTenantSession();
+async function handlePOST(_req: NextRequest, { params }: Params) {
+  const session = await getTenantSession({ area: "documents", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
   try {
@@ -100,3 +101,5 @@ export async function POST(_req: NextRequest, { params }: Params) {
     return NextResponse.json({ error: "Error interno del servidor" }, { status: 500 });
   }
 }
+
+export const POST = withApiSecurity(handlePOST);

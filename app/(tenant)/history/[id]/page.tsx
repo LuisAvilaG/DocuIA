@@ -45,7 +45,7 @@ export default async function HistoryDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  const session = await getTenantSession();
+  const session = await getTenantSession({ area: "documents" });
   if (!session) redirect("/login");
 
   const { id } = await params;

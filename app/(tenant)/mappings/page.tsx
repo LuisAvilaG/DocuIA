@@ -7,7 +7,7 @@ import { MappingsClient } from "./client";
 import { isFeatureEnabled } from "@/lib/features";
 
 export default async function MappingsPage() {
-  const session = await getTenantSession();
+  const session = await getTenantSession({ area: "documents" });
   if (!session) redirect("/login");
   if (!await isFeatureEnabled(session.orgId, "auto_mapping")) redirect("/dashboard");
 

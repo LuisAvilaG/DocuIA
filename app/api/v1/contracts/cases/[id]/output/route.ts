@@ -1,3 +1,4 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
@@ -20,8 +21,8 @@ function pdfName(value: string) {
   return `${value.replace(/\.docx$/i, "")}.pdf`;
 }
 
-export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getTenantSession();
+async function handleGET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const session = await getTenantSession({ area: "contracts" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (!await isFeatureEnabled(session.orgId, "contract_document_generation")) {
     return NextResponse.json({ error: "La generación documental no está habilitada para este cliente." }, { status: 403 });
@@ -71,3 +72,5 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     return NextResponse.json({ error: format === "pdf" && sourceIsWord ? "No fue posible preparar la versión PDF." : "Error al leer el documento" }, { status: 500 });
   }
 }
+
+export const GET = withApiSecurity(handleGET);

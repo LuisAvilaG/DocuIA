@@ -1,3 +1,4 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { tenantAuditLog } from "@/db/schema";
@@ -7,8 +8,8 @@ import { isFeatureEnabled } from "@/lib/features";
 
 const PAGE_SIZE = 50;
 
-export async function GET(req: NextRequest) {
-  const session = await getTenantSession();
+async function handleGET(req: NextRequest) {
+  const session = await getTenantSession({ area: "settings" });
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (session.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
@@ -27,3 +28,5 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({ entries, hasMore: entries.length === PAGE_SIZE, offset });
 }
+
+export const GET = withApiSecurity(handleGET);

@@ -6,7 +6,7 @@ import { eq, desc } from "drizzle-orm";
 import { ExpenseReportsList } from "./reports-list";
 
 export default async function ExpensesPage() {
-  const session = await getTenantSession();
+  const session = await getTenantSession({ area: "expenses" });
   if (!session) redirect("/login");
 
   const reports = await db.query.expenseReports.findMany({

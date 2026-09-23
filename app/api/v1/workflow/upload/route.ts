@@ -1,3 +1,5 @@
+import { withApiSecurity } from "@/lib/security/http";
+import { matchesFileType } from "@/lib/security/files";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
@@ -19,8 +21,8 @@ const ALLOWED_MIME_TYPES = new Set([
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
 
-export async function POST(req: NextRequest) {
-  const session = await getTenantSession();
+async function handlePOST(req: NextRequest) {
+  const session = await getTenantSession({ area: "documents", permission: "write" });
   if (!session) {
     return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   }
@@ -42,7 +44,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    if (!file) {
+    if (!(file instanceof File)) {
       return NextResponse.json({ error: "Se requiere un archivo" }, { status: 400 });
     }
     if (!subsidiaryId) {
@@ -79,6 +81,8 @@ export async function POST(req: NextRequest) {
     }
 
     const fileBuffer = Buffer.from(await file.arrayBuffer());
+    if (!matchesFileType(fileBuffer, file.type)) return NextResponse.json({ error: "El contenido no corresponde al tipo de archivo" }, { status: 415 });
+    if (!["invoice", "purchase_order", "xml_cfdi"].includes(documentType)) return NextResponse.json({ error: "Tipo de documento inválido" }, { status: 400 });
 
     const pipelineInput = {
       organizationId: session.orgId,
@@ -152,3 +156,5 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Error interno del servidor" }, { status: 500 });
   }
 }
+
+export const POST = withApiSecurity(handlePOST);

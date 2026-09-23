@@ -18,7 +18,7 @@ function signerTone(status: string): "ok" | "warn" | "bad" {
 }
 
 export default async function ContractDashboardPage() {
-  const session = await getTenantSession();
+  const session = await getTenantSession({ area: "contracts" });
   if (!session) redirect("/login");
   if (!(await isProductActive(session.orgId, "contract_intelligence"))) redirect("/dashboard");
   const orgId = session.orgId;

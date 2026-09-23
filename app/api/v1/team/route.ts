@@ -1,3 +1,4 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
@@ -7,8 +8,8 @@ import { hash } from "bcryptjs";
 import { randomUUID, randomBytes } from "crypto";
 import { sendEmail, buildInviteEmail } from "@/lib/email/send";
 
-export async function POST(req: NextRequest) {
-  const session = await getTenantSession();
+async function handlePOST(req: NextRequest) {
+  const session = await getTenantSession({ area: "settings", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (session.role !== "admin") {
     return NextResponse.json({ error: "Solo administradores pueden invitar usuarios" }, { status: 403 });
@@ -81,3 +82,5 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Error interno" }, { status: 500 });
   }
 }
+
+export const POST = withApiSecurity(handlePOST);

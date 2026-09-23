@@ -1,10 +1,11 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextResponse } from "next/server";
 import { requireAdminSession } from "@/lib/auth/admin";
 import { db } from "@/lib/db";
 import { features } from "@/db/schema";
 import { asc } from "drizzle-orm";
 
-export async function GET() {
+async function handleGET() {
   const { error } = await requireAdminSession();
   if (error) return error;
 
@@ -16,3 +17,5 @@ export async function GET() {
     return NextResponse.json({ error: "Error interno" }, { status: 500 });
   }
 }
+
+export const GET = withApiSecurity(handleGET);

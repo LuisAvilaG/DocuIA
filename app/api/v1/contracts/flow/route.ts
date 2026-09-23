@@ -1,3 +1,5 @@
+import { withApiSecurity } from "@/lib/security/http";
+import { isOrgWordTemplateKey } from "@/lib/security/storage-key";
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { getTenantSession } from "@/lib/auth/jwt";
@@ -21,8 +23,8 @@ async function featureGuard(orgId: string) {
 const EMPTY_GRAPH = { nodes: [], edges: [] };
 
 // List the org's flows + the quota, for the picker.
-export async function GET(req: NextRequest) {
-  const session = await getTenantSession();
+async function handleGET(req: NextRequest) {
+  const session = await getTenantSession({ area: "contracts" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   const activeOnly = req.nextUrl.searchParams.get("activeOnly") === "1";
   if (activeOnly) {
@@ -58,8 +60,8 @@ export async function GET(req: NextRequest) {
 interface PostBody { name?: string; graph?: unknown }
 
 // Create a new flow (respecting the per-client quota).
-export async function POST(req: NextRequest) {
-  const session = await getTenantSession();
+async function handlePOST(req: NextRequest) {
+  const session = await getTenantSession({ area: "contracts", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (session.role !== "admin") return NextResponse.json({ error: "Solo administradores" }, { status: 403 });
   if (!await featureGuard(session.orgId)) return NextResponse.json({ error: "El constructor de flujos no está habilitado" }, { status: 403 });
@@ -73,6 +75,7 @@ export async function POST(req: NextRequest) {
   const name = body?.name?.trim() || "Nuevo flujo";
   const parsed = flowGraphSchema.safeParse(body?.graph ?? EMPTY_GRAPH);
   if (!parsed.success) return NextResponse.json({ error: "Flujo inválido", issues: parsed.error.issues.slice(0, 8) }, { status: 400 });
+  if (parsed.data.nodes.some(n => n.kind === "generate" && n.data.wordTemplate && !isOrgWordTemplateKey(n.data.wordTemplate.storageKey, session.orgId))) return NextResponse.json({ error: "Plantilla no permitida" }, { status: 400 });
   if (hasCycle(parsed.data)) return NextResponse.json({ error: "El flujo tiene un ciclo." }, { status: 400 });
   const refErr = validateFlowReferences(parsed.data);
   if (refErr) return NextResponse.json({ error: refErr }, { status: 400 });
@@ -82,3 +85,6 @@ export async function POST(req: NextRequest) {
   await db.insert(contractFlows).values({ id, organizationId: session.orgId, name, graphJson: parsed.data, isActive: false });
   return NextResponse.json({ ok: true, id, name, version: 1 }, { status: 201 });
 }
+
+export const GET = withApiSecurity(handleGET);
+export const POST = withApiSecurity(handlePOST);

@@ -1,3 +1,5 @@
+import { withApiSecurity } from "@/lib/security/http";
+import { clientIp } from "@/lib/security/request-ip";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession } from "@/lib/auth/admin";
 import { setAdminGrant, getAllFeatures } from "@/lib/features";
@@ -9,7 +11,7 @@ import { eq } from "drizzle-orm";
 import { validateCustomFormsConfig } from "@/lib/netsuite/custom-forms";
 import { validateExpenseManagementConfig } from "@/lib/expense/config";
 
-export async function GET(
+async function handleGET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -20,7 +22,7 @@ export async function GET(
   return NextResponse.json({ features });
 }
 
-export async function PATCH(
+async function handlePATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string; featureId: string }> }
 ) {
@@ -58,9 +60,12 @@ export async function PATCH(
     targetOrgId: orgId,
     targetFeature: featureId,
     afterJson: { adminGranted, config, notes },
-    ipAddress: req.headers.get("x-forwarded-for") ?? null,
+    ipAddress: clientIp(req.headers),
     userAgent: req.headers.get("user-agent") ?? null,
   });
 
   return NextResponse.json({ ok: true });
 }
+
+export const GET = withApiSecurity(handleGET);
+export const PATCH = withApiSecurity(handlePATCH);

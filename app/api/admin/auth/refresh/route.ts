@@ -1,11 +1,12 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { verifyRefreshToken, signAccessToken, signRefreshToken } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
 import { authSessions, platformAdmins } from "@/db/schema";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, gt, isNull } from "drizzle-orm";
 import { randomBytes } from "crypto";
 
-export async function POST(req: NextRequest) {
+async function handlePOST(req: NextRequest) {
   const refreshCookie = req.cookies.get("admin_refresh_token")?.value;
   if (!refreshCookie) {
     return NextResponse.json({ error: "No autorizado" }, { status: 401 });
@@ -20,7 +21,7 @@ export async function POST(req: NextRequest) {
     }
 
     const session = await db.query.authSessions.findFirst({
-      where: and(eq(authSessions.id, sessionId), isNull(authSessions.revokedAt)),
+      where: and(eq(authSessions.id, sessionId), eq(authSessions.userId, sub), eq(authSessions.userType, type), isNull(authSessions.revokedAt)),
     });
 
     if (!session || session.expiresAt < new Date()) {
@@ -46,13 +47,15 @@ export async function POST(req: NextRequest) {
     const newNonce     = randomBytes(32).toString("hex");
     const newExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
-    await db
+    const rotated = await db
       .update(authSessions)
       .set({ refreshToken: newNonce, expiresAt: newExpiresAt })
-      .where(eq(authSessions.id, sessionId));
+      .where(and(eq(authSessions.id, sessionId), eq(authSessions.refreshToken, tokenNonce), isNull(authSessions.revokedAt), gt(authSessions.expiresAt, new Date())))
+      .returning({ id: authSessions.id });
+    if (rotated.length !== 1) return NextResponse.json({ error: "Token ya utilizado" }, { status: 401 });
 
     const [accessToken, newRefreshToken] = await Promise.all([
-      signAccessToken({ sub: admin.id, type: "platform_admin", email: admin.email }),
+      signAccessToken({ sessionId, sub: admin.id, type: "platform_admin", email: admin.email }),
       signRefreshToken({ sub: admin.id, type: "platform_admin", sessionId, tokenNonce: newNonce }),
     ]);
 
@@ -71,3 +74,5 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Token inválido" }, { status: 401 });
   }
 }
+
+export const POST = withApiSecurity(handlePOST);

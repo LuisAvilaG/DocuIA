@@ -1,3 +1,6 @@
+import { clientIp } from "@/lib/security/request-ip";
+import { emailSchema, accountRateKey } from "@/lib/auth/input";
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { orgUsers } from "@/db/schema";
@@ -6,26 +9,25 @@ import { randomBytes, createHash } from "crypto";
 import { sendEmail, buildResetEmail } from "@/lib/email/send";
 import { rateLimit } from "@/lib/auth/rate-limit";
 
-function clientIp(req: NextRequest): string {
-  return req.headers.get("x-forwarded-for")?.split(",")[0].trim()
-    ?? req.headers.get("x-real-ip") ?? "unknown";
-}
 
-export async function POST(req: NextRequest) {
+async function handlePOST(req: NextRequest) {
   try {
     // Throttle to stop reset-email bombing / provider abuse.
-    const rl = await rateLimit(`forgot:${clientIp(req)}`, { max: 5, windowSec: 900 });
+    const rl = await rateLimit(`forgot:${clientIp(req.headers)}`, { max: 5, windowSec: 900 });
     if (!rl.ok) {
       return NextResponse.json({ error: "Demasiados intentos. Inténtalo más tarde." },
         { status: 429, headers: { "Retry-After": String(rl.retryAfterSec ?? 900) } });
     }
 
     const { email } = await req.json() as { email?: string };
-    if (!email) {
+    const parsedEmail = emailSchema.safeParse(email);
+    if (!parsedEmail.success) {
       return NextResponse.json({ error: "Email requerido" }, { status: 400 });
     }
 
-    const normalized = email.toLowerCase().trim();
+    const normalized = parsedEmail.data;
+    const accountLimit = await rateLimit(accountRateKey("forgot", normalized), { max: 3, windowSec: 900 });
+    if (!accountLimit.ok) return NextResponse.json({ ok: true, message: "Si el email existe, recibirás un enlace de recuperación." });
 
     // Always respond with 200 to avoid email enumeration
     const user = await db.query.orgUsers.findFirst({
@@ -62,3 +64,5 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Error interno" }, { status: 500 });
   }
 }
+
+export const POST = withApiSecurity(handlePOST);

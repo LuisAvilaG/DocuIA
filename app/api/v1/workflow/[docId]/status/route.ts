@@ -1,3 +1,4 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
@@ -6,8 +7,8 @@ import { and, eq } from "drizzle-orm";
 
 type Params = { params: Promise<{ docId: string }> };
 
-export async function GET(_req: NextRequest, { params }: Params) {
-  const session = await getTenantSession();
+async function handleGET(_req: NextRequest, { params }: Params) {
+  const session = await getTenantSession({ area: "documents" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
   const { docId } = await params;
@@ -42,3 +43,5 @@ export async function GET(_req: NextRequest, { params }: Params) {
     return NextResponse.json({ error: "Error interno" }, { status: 500 });
   }
 }
+
+export const GET = withApiSecurity(handleGET);

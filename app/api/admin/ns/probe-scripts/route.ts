@@ -1,9 +1,10 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession } from "@/lib/auth/admin";
 import { probeCatalogScript } from "@/lib/netsuite/client";
 import type { NSCredentials } from "@/lib/netsuite/oauth";
 
-export async function POST(req: NextRequest) {
+async function handlePOST(req: NextRequest) {
   const { error } = await requireAdminSession();
   if (error) return error;
 
@@ -27,3 +28,5 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Internal error" }, { status: 500 });
   }
 }
+
+export const POST = withApiSecurity(handlePOST);

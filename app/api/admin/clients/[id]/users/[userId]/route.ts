@@ -1,13 +1,15 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession } from "@/lib/auth/admin";
 import { db } from "@/lib/db";
-import { orgUsers } from "@/db/schema";
+import { orgUsers, authSessions } from "@/db/schema";
+import { passwordSchema } from "@/lib/auth/input";
 import { and, eq } from "drizzle-orm";
 import { hashSync } from "bcryptjs";
 
 type Params = { params: Promise<{ id: string; userId: string }> };
 
-export async function PATCH(req: NextRequest, { params }: Params) {
+async function handlePATCH(req: NextRequest, { params }: Params) {
   const { error } = await requireAdminSession();
   if (error) return error;
 
@@ -34,11 +36,17 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     if (typeof body.fullName === "string") {
       updates.fullName = body.fullName || null;
     }
-    if (typeof body.password === "string" && body.password.length >= 8) {
+    if (body.password !== undefined && !passwordSchema.safeParse(body.password).success) return NextResponse.json({ error: "Contraseña inválida: usa 8 a 72 bytes." }, { status: 400 });
+    if (typeof body.password === "string") {
       updates.passwordHash = hashSync(body.password, 12);
+      updates.resetToken = null;
+      updates.resetTokenExpiresAt = null;
     }
 
-    await db.update(orgUsers).set(updates).where(eq(orgUsers.id, userId));
+    await db.transaction(async tx => {
+      await tx.update(orgUsers).set(updates).where(eq(orgUsers.id, userId));
+      if (updates.passwordHash || body.isActive === false) await tx.update(authSessions).set({ revokedAt: new Date() }).where(and(eq(authSessions.userId, userId), eq(authSessions.userType, "org_user")));
+    });
 
     return NextResponse.json({ ok: true });
   } catch (err) {
@@ -46,3 +54,5 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     return NextResponse.json({ error: "Internal error" }, { status: 500 });
   }
 }
+
+export const PATCH = withApiSecurity(handlePATCH);

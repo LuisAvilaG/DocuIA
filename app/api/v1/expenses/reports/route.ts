@@ -1,3 +1,4 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { isFeatureEnabled } from "@/lib/features";
@@ -6,8 +7,8 @@ import { expenseReports } from "@/db/schema";
 import { eq, desc, and, notInArray } from "drizzle-orm";
 import { randomUUID } from "crypto";
 
-export async function GET(req: NextRequest) {
-  const session = await getTenantSession();
+async function handleGET(req: NextRequest) {
+  const session = await getTenantSession({ area: "expenses" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (!await isFeatureEnabled(session.orgId, "expense_management")) {
     return NextResponse.json({ error: "Módulo de gastos no activado" }, { status: 403 });
@@ -33,7 +34,7 @@ export async function GET(req: NextRequest) {
 
   // Default: own reports for expense_submitter
   const reports = await db.query.expenseReports.findMany({
-    where: eq(expenseReports.submitterId, session.sub),
+    where: and(eq(expenseReports.submitterId, session.sub), eq(expenseReports.organizationId, session.orgId)),
     with: { items: { columns: { id: true, total: true } } },
     orderBy: desc(expenseReports.createdAt),
   });
@@ -41,8 +42,8 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({ reports });
 }
 
-export async function POST(req: NextRequest) {
-  const session = await getTenantSession();
+async function handlePOST(req: NextRequest) {
+  const session = await getTenantSession({ area: "expenses", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (!await isFeatureEnabled(session.orgId, "expense_management")) {
     return NextResponse.json({ error: "Módulo de gastos no activado" }, { status: 403 });
@@ -71,3 +72,6 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({ ok: true, reportId: id }, { status: 201 });
 }
+
+export const GET = withApiSecurity(handleGET);
+export const POST = withApiSecurity(handlePOST);

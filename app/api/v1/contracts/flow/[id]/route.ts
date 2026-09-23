@@ -1,3 +1,5 @@
+import { withApiSecurity } from "@/lib/security/http";
+import { isOrgWordTemplateKey } from "@/lib/security/storage-key";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { isProductActive } from "@/lib/products";
@@ -17,8 +19,8 @@ async function featureGuard(orgId: string) {
 }
 
 // One flow's full graph.
-export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getTenantSession();
+async function handleGET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const session = await getTenantSession({ area: "contracts" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (!await featureGuard(session.orgId)) return NextResponse.json({ error: "El constructor de flujos no está habilitado" }, { status: 403 });
   const { id } = await params;
@@ -36,8 +38,8 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
 interface PutBody { name?: string; graph?: unknown }
 
-export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getTenantSession();
+async function handlePUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const session = await getTenantSession({ area: "contracts", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (session.role !== "admin") return NextResponse.json({ error: "Solo administradores" }, { status: 403 });
   if (!await featureGuard(session.orgId)) return NextResponse.json({ error: "El constructor de flujos no está habilitado" }, { status: 403 });
@@ -52,6 +54,9 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   const body = await req.json().catch(() => null) as PutBody | null;
   const parsed = flowGraphSchema.safeParse(body?.graph);
   if (!parsed.success) return NextResponse.json({ error: "El flujo no es válido.", issues: parsed.error.issues.slice(0, 8) }, { status: 400 });
+  if (parsed.data.nodes.some(n => n.kind === "generate" && n.data.wordTemplate && !isOrgWordTemplateKey(n.data.wordTemplate.storageKey, session.orgId))) {
+    return NextResponse.json({ error: "La plantilla no pertenece a tu organización." }, { status: 400 });
+  }
   if (hasCycle(parsed.data)) return NextResponse.json({ error: "El flujo tiene un ciclo; las conexiones deben ir en una sola dirección." }, { status: 400 });
   const refErr = validateFlowReferences(parsed.data);
   if (refErr) return NextResponse.json({ error: refErr }, { status: 400 });
@@ -68,8 +73,8 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   }
 }
 
-export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getTenantSession();
+async function handleDELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const session = await getTenantSession({ area: "contracts", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (session.role !== "admin") return NextResponse.json({ error: "Solo administradores" }, { status: 403 });
   if (!await featureGuard(session.orgId)) return NextResponse.json({ error: "El constructor de flujos no está habilitado" }, { status: 403 });
@@ -84,8 +89,8 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
 
 // Activation is deliberately separate from graph saving: it makes the moment a
 // draft can be selected for new cases explicit and easy to audit in the UI.
-export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getTenantSession();
+async function handlePATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const session = await getTenantSession({ area: "contracts", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (session.role !== "admin") return NextResponse.json({ error: "Solo administradores" }, { status: 403 });
   if (!await featureGuard(session.orgId)) return NextResponse.json({ error: "El constructor de flujos no está habilitado" }, { status: 403 });
@@ -100,3 +105,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (updated.length === 0) return NextResponse.json({ error: "Flujo no encontrado" }, { status: 404 });
   return NextResponse.json({ ok: true, flow: updated[0] });
 }
+
+export const GET = withApiSecurity(handleGET);
+export const PUT = withApiSecurity(handlePUT);
+export const DELETE = withApiSecurity(handleDELETE);
+export const PATCH = withApiSecurity(handlePATCH);

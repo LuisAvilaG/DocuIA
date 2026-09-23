@@ -19,7 +19,7 @@ export type DayRow = {
 };
 
 export default async function StatisticsPage() {
-  const session = await getTenantSession();
+  const session = await getTenantSession({ area: "documents" });
   if (!session) redirect("/login");
   if (!await isFeatureEnabled(session.orgId, "advanced_analytics")) redirect("/dashboard");
 

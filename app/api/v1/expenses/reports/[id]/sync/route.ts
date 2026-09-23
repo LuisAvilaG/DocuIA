@@ -1,4 +1,5 @@
 import { withApiSecurity } from "@/lib/security/http";
+import { canSyncExpenses } from "@/lib/auth/permissions";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { isFeatureEnabled } from "@/lib/features";
@@ -10,7 +11,7 @@ type Params = { params: Promise<{ id: string }> };
 async function handlePOST(req: NextRequest, { params }: Params) {
   const session = await getTenantSession({ area: "expenses", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
-  if (session.role !== "admin") return NextResponse.json({ error: "Solo administradores pueden sincronizar informes" }, { status: 403 });
+  if (!canSyncExpenses(session.role)) return NextResponse.json({ error: "No tienes permiso para sincronizar informes" }, { status: 403 });
   if (!await isFeatureEnabled(session.orgId, "expense_management")) {
     return NextResponse.json({ error: "Módulo de gastos no activado" }, { status: 403 });
   }

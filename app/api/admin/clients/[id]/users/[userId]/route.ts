@@ -1,4 +1,5 @@
 import { withApiSecurity } from "@/lib/security/http";
+import { isTenantRole } from "@/lib/auth/permissions";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession } from "@/lib/auth/admin";
 import { db } from "@/lib/db";
@@ -27,7 +28,7 @@ async function handlePATCH(req: NextRequest, { params }: Params) {
 
     const updates: Record<string, unknown> = { updatedAt: new Date() };
 
-    if (typeof body.role === "string" && ["admin", "operator", "viewer", "expense_submitter"].includes(body.role)) {
+    if (typeof body.role === "string" && isTenantRole(body.role)) {
       updates.role = body.role;
     }
     if (typeof body.isActive === "boolean") {

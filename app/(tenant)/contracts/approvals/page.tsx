@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { canApprove } from "@/lib/auth/permissions";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { isProductActive } from "@/lib/products";
 import { getFeature, isFeatureEnabled } from "@/lib/features";
@@ -13,7 +14,7 @@ export default async function ContractApprovalsPage() {
   if (!(await isProductActive(session.orgId, "contract_intelligence"))) redirect("/dashboard");
   const approvalFeature = await getFeature(session.orgId, "contract_approval_workflow");
   if (!approvalFeature.isEnabled) redirect("/contracts/dashboard");
-  if (session.role !== "admin") redirect("/cases");
+  if (!canApprove(session.role, "contracts")) redirect("/cases");
 
   // Approval is intentionally a post-validation queue. Generated and review
   // cases cannot be decided here, even if a stale client tries to reach it.

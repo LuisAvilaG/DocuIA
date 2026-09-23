@@ -1,4 +1,5 @@
 import { withApiSecurity } from "@/lib/security/http";
+import { canReviewExpenses } from "@/lib/auth/permissions";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { isFeatureEnabled } from "@/lib/features";
@@ -39,8 +40,8 @@ async function handleGET(
 
   if (!report) return NextResponse.json({ error: "Informe no encontrado" }, { status: 404 });
 
-  // Non-admins can only see their own reports
-  if (session.role !== "admin" && report.submitterId !== session.sub) {
+  // Submitters only see their own reports; reviewers see the organization's
+  if (!canReviewExpenses(session.role) && report.submitterId !== session.sub) {
     return NextResponse.json({ error: "No autorizado" }, { status: 403 });
   }
 

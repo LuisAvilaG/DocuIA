@@ -30,7 +30,7 @@ export const organizations = pgTable("organizations", {
 
 // -- Users ---------------------------------------------------------
 
-export const userRoleEnum = pgEnum("user_role", ["admin", "operator", "viewer", "expense_submitter"]);
+export const userRoleEnum = pgEnum("user_role", ["admin", "approver", "accountant", "operator", "viewer", "expense_submitter"]);
 
 export const orgUsers = pgTable("org_users", {
   id:             varchar("id", { length: 36 }).primaryKey(),

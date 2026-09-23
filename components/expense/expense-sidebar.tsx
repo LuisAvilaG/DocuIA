@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
+import { canReviewExpenses, isTenantRole, TENANT_ROLE_LABELS } from "@/lib/auth/permissions";
 import {
   Receipt, PlusCircle, ClipboardList, LogOut, User, KeyRound, X,
   Loader2, CheckCircle2, Eye, EyeOff, Menu,
@@ -75,7 +76,7 @@ export function ExpenseSidebar({ orgName, userEmail, userRole }: Props) {
     router.push("/login");
   }
 
-  const isAdmin = userRole === "admin";
+  const isReviewer = canReviewExpenses(userRole);
 
   return (
     <>
@@ -145,7 +146,7 @@ export function ExpenseSidebar({ orgName, userEmail, userRole }: Props) {
             );
           })}
 
-          {isAdmin && (
+          {isReviewer && (
             <>
               <p className="text-[0.6875rem] font-medium text-muted-foreground uppercase tracking-[0.06em] px-2 py-1.5 mt-3">
                 Contabilidad
@@ -181,8 +182,8 @@ export function ExpenseSidebar({ orgName, userEmail, userRole }: Props) {
             </div>
             <div className="min-w-0">
               <p className="text-[0.75rem] text-foreground truncate">{userEmail}</p>
-              <p className="text-[0.6875rem] text-muted-foreground capitalize">
-                {userRole === "expense_submitter" ? "Empleado" : userRole}
+              <p className="text-[0.6875rem] text-muted-foreground">
+                {isTenantRole(userRole) ? TENANT_ROLE_LABELS[userRole] : userRole}
               </p>
             </div>
           </div>

@@ -1,5 +1,6 @@
 "use client";
 
+import { TENANT_ROLES, TENANT_ROLE_LABELS, type TenantRole } from "@/lib/auth/permissions";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -175,7 +176,7 @@ export function ClientDetailContent({ org, features, subsidiaries }: Props) {
   const [showNewUser,  setShowNewUser]    = useState(false);
   const [newUserEmail, setNewUserEmail]   = useState("");
   const [newUserName,  setNewUserName]    = useState("");
-  const [newUserRole,  setNewUserRole]    = useState<"admin" | "operator" | "viewer" | "expense_submitter">("operator");
+  const [newUserRole,  setNewUserRole]    = useState<TenantRole>("operator");
   const [newUserPass,  setNewUserPass]    = useState("");
   const [newUserErr,   setNewUserErr]     = useState<string | null>(null);
   const [newUserOk,    setNewUserOk]      = useState(false);
@@ -994,13 +995,10 @@ export function ClientDetailContent({ org, features, subsidiaries }: Props) {
                     <Label className="text-xs">Rol</Label>
                     <NativeSelect
                       value={newUserRole}
-                      onChange={e => setNewUserRole(e.target.value as "admin" | "operator" | "viewer" | "expense_submitter")}
+                      onChange={e => setNewUserRole(e.target.value as TenantRole)}
                       disabled={newUserLoading}
                     >
-                      <option value="admin">Admin</option>
-                      <option value="operator">Operador</option>
-                      <option value="viewer">Visor (solo lectura)</option>
-                      <option value="expense_submitter">Empleado (gastos)</option>
+                      {TENANT_ROLES.map((r) => <option key={r} value={r}>{TENANT_ROLE_LABELS[r]}</option>)}
                     </NativeSelect>
                   </div>
                 </div>
@@ -1058,10 +1056,7 @@ export function ClientDetailContent({ org, features, subsidiaries }: Props) {
                               onChange={e => setEditUserForm(f => ({ ...f, role: e.target.value }))}
                               disabled={userSaving}
                             >
-                              <option value="admin">Admin</option>
-                              <option value="operator">Operador</option>
-                              <option value="viewer">Visor (solo lectura)</option>
-                              <option value="expense_submitter">Empleado (gastos)</option>
+                              {TENANT_ROLES.map((r) => <option key={r} value={r}>{TENANT_ROLE_LABELS[r]}</option>)}
                             </NativeSelect>
                           </div>
                           <div className="space-y-1.5">

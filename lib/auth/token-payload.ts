@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TENANT_ROLES } from "./permissions";
 
 const identity = z.object({
   sub: z.string().uuid(),
@@ -10,7 +11,7 @@ export const accessPayloadSchema = identity.extend({
   tokenUse: z.literal("access"),
   email: z.string().email(),
   orgId: z.string().uuid().optional(),
-  role: z.enum(["admin", "operator", "viewer", "expense_submitter"]).optional(),
+  role: z.enum(TENANT_ROLES).optional(),
   homePath: z.enum(["/dashboard", "/contracts/dashboard", "/accounting/expenses"]).optional(),
 }).refine(p => p.type !== "org_user" || Boolean(p.orgId && p.role));
 

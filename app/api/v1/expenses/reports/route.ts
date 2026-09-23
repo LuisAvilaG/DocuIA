@@ -1,4 +1,5 @@
 import { withApiSecurity } from "@/lib/security/http";
+import { canReviewExpenses } from "@/lib/auth/permissions";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { isFeatureEnabled } from "@/lib/features";
@@ -16,8 +17,8 @@ async function handleGET(req: NextRequest) {
 
   const view = new URL(req.url).searchParams.get("view");
 
-  // Admin accounting view: all org reports except drafts
-  if (view === "accounting" && session.role === "admin") {
+  // Accounting view: all org reports except drafts
+  if (view === "accounting" && canReviewExpenses(session.role)) {
     const reports = await db.query.expenseReports.findMany({
       where: and(
         eq(expenseReports.organizationId, session.orgId),
@@ -32,7 +33,7 @@ async function handleGET(req: NextRequest) {
     return NextResponse.json({ reports });
   }
 
-  // Default: own reports for expense_submitter
+  // Default: the person's own reports
   const reports = await db.query.expenseReports.findMany({
     where: and(eq(expenseReports.submitterId, session.sub), eq(expenseReports.organizationId, session.orgId)),
     with: { items: { columns: { id: true, total: true } } },

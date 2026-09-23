@@ -4,11 +4,13 @@ import { db } from "@/lib/db";
 import { expenseReports } from "@/db/schema";
 import { eq, and, desc, notInArray } from "drizzle-orm";
 import { AccountingExpenseList } from "./accounting-list";
+import { canReviewExpenses } from "@/lib/auth/permissions";
+import { isFeatureEnabled } from "@/lib/features";
 
 export default async function AccountingExpensesPage() {
   const session = await getTenantSession({ area: "expenses" });
   if (!session) redirect("/login");
-  if (session.role !== "admin") redirect("/dashboard");
+  if (!canReviewExpenses(session.role) || !await isFeatureEnabled(session.orgId, "expense_management")) redirect("/dashboard");
 
   let reports: {
     id: string;

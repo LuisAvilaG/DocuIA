@@ -1,4 +1,5 @@
 import { redirect, notFound } from "next/navigation";
+import { canApprove } from "@/lib/auth/permissions";
 import Link from "next/link";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
@@ -197,7 +198,7 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
           )}
         </div>
 
-        <CaseActions caseId={kase.id} caseTitle={kase.title || `Caso ${kase.id.slice(0, 8)}`} status={kase.status} verdict={validationsEnabled ? verdict : null} decision={result.decision} hasOutput={Boolean(result.outputKey)} generationEnabled={generationEnabled} approvalEnabled={approvalFeature.isEnabled} allowOverride={approvalFeature.config.allow_override !== false} canManage={session.role === "admin"} />
+        <CaseActions caseId={kase.id} caseTitle={kase.title || `Caso ${kase.id.slice(0, 8)}`} status={kase.status} verdict={validationsEnabled ? verdict : null} decision={result.decision} hasOutput={Boolean(result.outputKey)} generationEnabled={generationEnabled} approvalEnabled={approvalFeature.isEnabled} allowOverride={approvalFeature.config.allow_override !== false} canManage={canApprove(session.role, "contracts")} />
         {isProcessing && <p className="text-xs text-warning">El caso está en proceso. La clasificación, extracción y validación aparecerán aquí al terminar.</p>}
         {kase.errorMessage && <div className="rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-xs px-3 py-2">{kase.errorMessage}</div>}
 

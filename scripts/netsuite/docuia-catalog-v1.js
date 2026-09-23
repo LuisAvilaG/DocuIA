@@ -9,6 +9,8 @@
  *   type: "vendors"       — Paginated vendors for a subsidiary.
  *   type: "locations"     — Paginated locations (optionally filtered by subsidiary).
  *   type: "open_purchase_orders" — POs con saldo abierto para un proveedor y subsidiaria.
+ *   type: "purchase_order_lines" — Líneas de hasta 20 POs (po_ids="1,2"): ítem, cantidad,
+ *                                  recibido, facturado y precio, para cotejar facturas (2/3 vías).
  *
  * Common params for items/vendors/locations:
  *   page_index:       0..N (required)
@@ -19,7 +21,7 @@
  * @NApiVersion 2.1
  * @NScriptType Restlet
  */
-define(["N/search", "N/log"], (search, log) => {
+define(["N/search", "N/record", "N/log"], (search, record, log) => {
   const VERSION        = "docuia-catalog-v1";
   const DEFAULT_SIZE   = 500;
   const MAX_SIZE       = 1000;
@@ -59,6 +61,7 @@ define(["N/search", "N/log"], (search, log) => {
         search.createColumn({ name: "country" }),
         search.createColumn({ name: "currency" }),
         search.createColumn({ name: "iselimination" }),
+        search.createColumn({ name: "federalidnumber" }),
       ],
     });
 
@@ -72,6 +75,7 @@ define(["N/search", "N/log"], (search, log) => {
           name,
           country:  str(row.getValue("country")),
           currency: str(row.getText("currency")),
+          tax_id:   str(row.getValue("federalidnumber")),
         });
       }
       return true;
@@ -124,6 +128,7 @@ define(["N/search", "N/log"], (search, log) => {
         search.createColumn({ name: "email" }),
         search.createColumn({ name: "phone" }),
         search.createColumn({ name: "custentity_mx_rfc" }),
+        search.createColumn({ name: "category" }),
         search.createColumn({ name: "isinactive" }),
       ],
     });
@@ -193,6 +198,8 @@ define(["N/search", "N/log"], (search, log) => {
       email:       str(row.getValue({ name: "email" })),
       phone:       str(row.getValue({ name: "phone" })),
       rfc:         str(row.getValue({ name: "custentity_mx_rfc" })),
+      category_id:   str(row.getValue({ name: "category" })),
+      category_name: str(row.getText({ name: "category" })),
       inactive:    str(row.getValue({ name: "isinactive" })) === "T",
     };
   }
@@ -216,6 +223,45 @@ define(["N/search", "N/log"], (search, log) => {
       currency:    str(row.getText({ name: "currency" })),
       status:      str(row.getText({ name: "statusref" })),
     };
+  }
+
+  // Line detail of specific POs, read from the record so received and billed
+  // quantities are exact. Capped to keep governance predictable.
+  function fetchPurchaseOrderLines(poIds) {
+    const results = [];
+    poIds.slice(0, 20).forEach((id) => {
+      const po = record.load({ type: record.Type.PURCHASE_ORDER, id, isDynamic: false });
+      const count = po.getLineCount({ sublistId: "item" });
+      const lines = [];
+      for (let i = 0; i < count; i++) {
+        const get = (fieldId) => po.getSublistValue({ sublistId: "item", fieldId, line: i });
+        const getText = (fieldId) => {
+          try { return str(po.getSublistText({ sublistId: "item", fieldId, line: i })); } catch (e) { return ""; }
+        };
+        lines.push({
+          line:              str(get("line")),
+          item_internal_id:  str(get("item")),
+          item_name:         getText("item"),
+          description:       str(get("description")),
+          quantity:          Number(get("quantity")) || 0,
+          quantity_received: Number(get("quantityreceived")) || 0,
+          quantity_billed:   Number(get("quantitybilled")) || 0,
+          rate:              Number(get("rate")) || 0,
+          amount:            Number(get("amount")) || 0,
+          units:             getText("units"),
+          closed:            get("isclosed") === true || str(get("isclosed")) === "T",
+        });
+      }
+      results.push({
+        internal_id: str(id),
+        tranid:      str(po.getValue({ fieldId: "tranid" })),
+        date:        str(po.getText({ fieldId: "trandate" })),
+        total:       Number(po.getValue({ fieldId: "total" })) || 0,
+        currency:    str(po.getText({ fieldId: "currency" })),
+        lines,
+      });
+    });
+    return { ok: true, version: VERSION, type: "purchase_order_lines", total_count: results.length, results };
   }
 
   function runPaged(srch, mapper, pageIndex, pageSize) {
@@ -260,9 +306,16 @@ define(["N/search", "N/log"], (search, log) => {
         return fetchSubsidiaries();
       }
 
+      /* purchase_order_lines — line detail for PO matching */
+      if (type === "purchase_order_lines") {
+        const poIds = str(params.po_ids).split(",").map(str).filter((id) => /^\d+$/.test(id));
+        if (!poIds.length) return { ok: false, error: "VALIDATION_ERROR", message: '"po_ids" is required (comma-separated internal ids)' };
+        return fetchPurchaseOrderLines(poIds);
+      }
+
       /* catalog types */
       if (!["items", "vendors", "locations", "open_purchase_orders"].includes(type)) {
-        return { ok: false, error: "VALIDATION_ERROR", message: 'type must be: ping | subsidiaries | items | vendors | locations | open_purchase_orders' };
+        return { ok: false, error: "VALIDATION_ERROR", message: 'type must be: ping | subsidiaries | items | vendors | locations | open_purchase_orders | purchase_order_lines' };
       }
 
       const pageIndex     = int(params.page_index);

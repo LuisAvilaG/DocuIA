@@ -10,6 +10,8 @@ export const documentTypeEnum = pgEnum("document_type", [
 export const documentStatusEnum = pgEnum("document_status", [
   "uploaded", "extracting", "review", "pending_approval",
   "approved", "processing", "completed", "failed",
+  // PO matched, but the ERP has not received all goods yet (3-way match).
+  "awaiting_receipt",
 ]);
 
 export const historyDocuments = pgTable("history_documents", {
@@ -30,10 +32,21 @@ export const historyDocuments = pgTable("history_documents", {
   processedBy:      varchar("processed_by", { length: 36 }),
   approvedBy:       varchar("approved_by", { length: 36 }),
   errorMessage:     text("error_message"),
+  // PO the invoice is matched to (ERP internal id).
+  poInternalId:     varchar("po_internal_id", { length: 64 }),
+  // CFDI UUID, for duplicate detection (XML method only).
+  cfdiUuid:         varchar("cfdi_uuid", { length: 40 }),
+  // PDF uploaded together with a CFDI XML; attached to the ERP bill.
+  attachmentKey:    text("attachment_key"),
+  // 3-way match wait: when it started and when to check the receipts again.
+  awaitingSince:    timestamp("awaiting_since"),
+  nextReceiptCheckAt: timestamp("next_receipt_check_at"),
   createdAt:        timestamp("created_at").notNull().defaultNow(),
   updatedAt:        timestamp("updated_at").notNull().defaultNow(),
 }, (t) => [
   index("history_docs_org_idx").on(t.organizationId, t.createdAt),
+  index("history_docs_cfdi_uuid_idx").on(t.organizationId, t.cfdiUuid),
+  index("history_docs_receipt_check_idx").on(t.status, t.nextReceiptCheckAt),
   index("history_docs_sub_idx").on(t.subsidiaryId),
   index("history_docs_vendor_idx").on(t.organizationId, t.vendor),
   index("history_docs_status_idx").on(t.organizationId, t.status),

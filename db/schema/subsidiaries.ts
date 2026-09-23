@@ -15,6 +15,8 @@ export const subsidiaries = pgTable("subsidiaries", {
   nsSubsidiaryId: varchar("ns_subsidiary_id", { length: 50 }).notNull(),
   currency:       varchar("currency", { length: 10 }).notNull().default("USD"),
   locale:         varchar("locale", { length: 10 }).notNull().default("en-US"),
+  // Tax id (RFC in Mexico); CFDI receiver must match it.
+  taxId:          varchar("tax_id", { length: 20 }),
   isActive:       boolean("is_active").notNull().default(true),
   createdAt:      timestamp("created_at").notNull().defaultNow(),
   updatedAt:      timestamp("updated_at").notNull().defaultNow(),
@@ -73,6 +75,9 @@ export const catalogVendors = pgTable("catalog_vendors", {
   email:        varchar("email", { length: 255 }),
   phone:        varchar("phone", { length: 100 }),
   rfc:          varchar("rfc", { length: 50 }),
+  // Vendor category in the ERP; vendor rules can target it.
+  categoryId:   varchar("category_id", { length: 64 }),
+  categoryName: varchar("category_name", { length: 191 }),
   isInactive:   boolean("is_inactive").notNull().default(false),
   updatedAt:    timestamp("updated_at").notNull().defaultNow(),
 }, (t) => [

@@ -1,4 +1,5 @@
 import { withApiSecurity } from "@/lib/security/http";
+import { logAdminAction } from "@/lib/audit/admin";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession } from "@/lib/auth/admin";
 import { db } from "@/lib/db";
@@ -36,7 +37,7 @@ async function handleGET(_req: NextRequest, { params }: Params) {
 }
 
 async function handlePOST(req: NextRequest, { params }: Params) {
-  const { error } = await requireAdminSession();
+  const { error, session } = await requireAdminSession();
   if (error) return error;
 
   const { id: organizationId } = await params;
@@ -55,6 +56,7 @@ async function handlePOST(req: NextRequest, { params }: Params) {
     await db.update(organizations)
       .set({ aiApiKeyEncrypted: null, updatedAt: new Date() })
       .where(eq(organizations.id, organizationId));
+    await logAdminAction(req, session!, { action: "ai_key.cleared", targetOrgId: organizationId });
     return NextResponse.json({ ok: true, configured: false });
   }
 
@@ -67,11 +69,12 @@ async function handlePOST(req: NextRequest, { params }: Params) {
     .set({ aiApiKeyEncrypted: encrypted, updatedAt: new Date() })
     .where(eq(organizations.id, organizationId));
 
+  await logAdminAction(req, session!, { action: "ai_key.set", targetOrgId: organizationId, after: { configured: true } });
   return NextResponse.json({ ok: true, configured: true });
 }
 
-async function handleDELETE(_req: NextRequest, { params }: Params) {
-  const { error } = await requireAdminSession();
+async function handleDELETE(req: NextRequest, { params }: Params) {
+  const { error, session } = await requireAdminSession();
   if (error) return error;
 
   const { id: organizationId } = await params;
@@ -80,6 +83,7 @@ async function handleDELETE(_req: NextRequest, { params }: Params) {
     .set({ aiApiKeyEncrypted: null, updatedAt: new Date() })
     .where(eq(organizations.id, organizationId));
 
+  await logAdminAction(req, session!, { action: "ai_key.cleared", targetOrgId: organizationId });
   return NextResponse.json({ ok: true, configured: false });
 }
 

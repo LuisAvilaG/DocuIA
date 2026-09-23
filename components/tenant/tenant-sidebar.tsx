@@ -6,8 +6,10 @@ import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, FileUp, Clock, AlertTriangle,
   GitMerge, Database, BarChart3, Settings, Workflow, ClipboardCheck,
-  LogOut, User, Zap, Crown, Receipt, ScrollText, FolderOpen, BrainCircuit,
+  LogOut, User, Zap, Crown, Receipt, ScrollText, FolderOpen, BrainCircuit, KeyRound,
 } from "lucide-react";
+import { useState } from "react";
+import { ChangePasswordDialog } from "@/components/shared/change-password-dialog";
 import Image from "next/image";
 import { useFeatures } from "@/components/providers/feature-provider";
 import { PRODUCTS, PRODUCT_AREA, PRODUCT_MODULES, PLATFORM_MODULES, type ProductKey, type NavModule } from "@/lib/products/registry";
@@ -43,6 +45,7 @@ export function TenantSidebar({ orgName, plan, userEmail, userRole, activeProduc
   const pathname = usePathname();
   const router   = useRouter();
   const features = useFeatures();
+  const [changingPassword, setChangingPassword] = useState(false);
 
   const active = new Set(activeProducts);
   const isVisible = (m: NavModule) =>
@@ -155,6 +158,13 @@ export function TenantSidebar({ orgName, plan, userEmail, userRole, activeProduc
           </div>
         </div>
         <button
+          onClick={() => setChangingPassword(true)}
+          className="w-full flex items-center gap-2.5 px-[10px] py-2 rounded-md text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-secondary transition-all duration-[120ms]"
+        >
+          <KeyRound className="w-3.5 h-3.5 shrink-0" />
+          Cambiar contraseña
+        </button>
+        <button
           onClick={logout}
           className="w-full flex items-center gap-2.5 px-[10px] py-2 rounded-md text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-secondary transition-all duration-[120ms]"
         >
@@ -162,6 +172,7 @@ export function TenantSidebar({ orgName, plan, userEmail, userRole, activeProduc
           Cerrar sesión
         </button>
       </div>
+      <ChangePasswordDialog open={changingPassword} onClose={() => setChangingPassword(false)} userEmail={userEmail} />
     </aside>
   );
 }

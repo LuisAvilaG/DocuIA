@@ -1,4 +1,5 @@
 import { withApiSecurity } from "@/lib/security/http";
+import { logAdminAction } from "@/lib/audit/admin";
 import { isTenantRole } from "@/lib/auth/permissions";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession } from "@/lib/auth/admin";
@@ -11,7 +12,7 @@ import { hashSync } from "bcryptjs";
 type Params = { params: Promise<{ id: string; userId: string }> };
 
 async function handlePATCH(req: NextRequest, { params }: Params) {
-  const { error } = await requireAdminSession();
+  const { error, session } = await requireAdminSession();
   if (error) return error;
 
   try {
@@ -49,6 +50,11 @@ async function handlePATCH(req: NextRequest, { params }: Params) {
       if (updates.passwordHash || body.isActive === false) await tx.update(authSessions).set({ revokedAt: new Date() }).where(and(eq(authSessions.userId, userId), eq(authSessions.userType, "org_user")));
     });
 
+    await logAdminAction(req, session!, {
+      action: "tenant_user.updated", targetOrgId: organizationId, targetUserId: userId,
+      before: { role: user.role, isActive: user.isActive },
+      after: { role: updates.role ?? user.role, isActive: updates.isActive ?? user.isActive, passwordReset: Boolean(updates.passwordHash) },
+    });
     return NextResponse.json({ ok: true });
   } catch (err) {
     console.error("[clients/users PATCH]", err);

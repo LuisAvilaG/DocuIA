@@ -6,7 +6,10 @@ import { uploadFile } from "@/lib/storage/minio";
 import { extractFromFile } from "./extract";
 import { buildUiPayload } from "./match";
 import { processInNetSuite } from "./process-ns";
-import { buildNsPayload, draftFromUiPayload } from "./ns-payload";
+import { buildNsPayload, draftWithPo } from "./ns-payload";
+import { runApChecks } from "./ap-checks";
+import { erpExtras } from "./erp-extras";
+import type { CfdiData } from "./cfdi-parser";
 import { logWorkflow } from "./log";
 import { parseCfdi } from "./cfdi-parser";
 import { deliverWebhooks } from "@/lib/webhooks/deliver";
@@ -29,6 +32,8 @@ export type PipelineInput = {
   // When present, runPipeline processes that document instead of creating a new one.
   documentId?:    number;
   storageKey?:    string;
+  // PDF uploaded together with a CFDI XML (stored already; attached to the bill).
+  attachmentKey?: string;
   // Set when retrying from the exception queue: a new failure updates that
   // exception instead of piling up a duplicate.
   exceptionId?:   number;
@@ -37,6 +42,7 @@ export type PipelineInput = {
 export type PipelineResult =
   | { status: "review";            documentId: number; payload: Record<string, unknown> }
   | { status: "pending_approval";  documentId: number }
+  | { status: "awaiting_receipt";  documentId: number }
   | { status: "completed";         documentId: number; netsuiteId: string | null; recordUrl: string | null }
   | { status: "failed";            documentId: number; error: string };
 
@@ -191,10 +197,12 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
       input.mimeType === "text/xml" || input.mimeType === "application/xml";
 
     let extraction: Awaited<ReturnType<typeof extractFromFile>>;
+    let cfdi: CfdiData | null = null;
 
     if (isCfdiXml) {
       const xmlText  = input.fileBuffer.toString("utf8");
       const cfdiData = parseCfdi(xmlText);
+      cfdi = cfdiData;
       extraction = {
         invoice: {
           format:        "general",
@@ -327,6 +335,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
       total:            extraction.invoice.total?.toString() ?? null,
       extractionEngine: extraction.model,
       fallbackUsed:     extraction.fallbackUsed,
+      cfdiUuid:         cfdi?.uuid ? cfdi.uuid.toUpperCase() : null,
       updatedAt:        new Date(),
     }).where(eq(historyDocuments.id, docId));
 
@@ -353,6 +362,36 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
       lineCount:      payload.document.lines.length,
     });
 
+    // ── 6b. AP checks: vendor rule, fiscal validation, invoice ↔ PO ─────────
+    const { checks, decision } = await runApChecks({
+      organizationId: input.organizationId,
+      subsidiaryId:   input.subsidiaryId,
+      documentId:     docId,
+      documentType:   input.documentType,
+      payload,
+      cfdi,
+      flags:          feat,
+    });
+    payload.ap_checks = checks;
+    const poId = checks.po?.selectedPoId ?? null;
+    if (checks.vendorRule || checks.fiscal || checks.po) {
+      await logWorkflow({
+        organizationId: input.organizationId,
+        requestId,
+        stage:     "validation",
+        step:      "ap_checks",
+        status:    decision.next === "continue" ? "SUCCESS" : "INFO",
+        metaJson:  { decision, rule: checks.vendorRule?.ruleLabel ?? null, poId },
+      });
+    }
+    if (decision.next === "blocked") {
+      // Keep the analysis visible on the failed document and its exception.
+      await db.update(historyDocuments)
+        .set({ products: payload as unknown, poInternalId: poId, updatedAt: new Date() })
+        .where(eq(historyDocuments.id, docId));
+      throw new Error(`Validación bloqueante: ${decision.reason}`);
+    }
+
     // ── 7. Decide: auto-process or send to review ─────────────────────────
     const envThreshold    = process.env.WORKFLOW_AUTO_PROCESS_THRESHOLD?.trim();
     const rawEnvThreshold = envThreshold ? Number(envThreshold) : NaN;
@@ -363,14 +402,48 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
         ? Math.min(1, rawEnvThreshold)
         : 0.85;
 
+    // A vendor rule can raise or lower the bar, or keep its invoices for a person.
+    const rule = checks.vendorRule;
+    const threshold = rule?.autoProcessPct != null ? rule.autoProcessPct / 100 : autoProcessThreshold;
     const autoProcess =
-      payload.confidence.overall >= autoProcessThreshold &&
+      !rule?.neverAutoProcess &&
+      payload.confidence.overall >= threshold &&
       payload.document.lines.every((l) => l.selected_item_id !== null) &&
       Boolean(payload.document.vendor.selected_internal_id);
 
-    if (!autoProcess) {
+    // ── 7b. Matched, but the goods are not in the warehouse yet ─────────────
+    if (autoProcess && decision.next === "awaiting_receipt") {
+      const recheckHours = Math.min(48, Math.max(1, Number(feat.getConfig("three_way_match").recheck_hours) || 2));
+      const now = new Date();
+      await db.update(historyDocuments).set({
+        status:             "awaiting_receipt",
+        products:           { ...payload, approval_draft: draftWithPo(payload) } as unknown,
+        poInternalId:       poId,
+        awaitingSince:      now,
+        nextReceiptCheckAt: new Date(now.getTime() + recheckHours * 3_600_000),
+        errorMessage:       decision.reason,
+        updatedAt:          now,
+      }).where(eq(historyDocuments.id, docId));
+      await logWorkflow({
+        organizationId: input.organizationId,
+        requestId,
+        stage:     "pipeline",
+        step:      "decision",
+        status:    "INFO",
+        metaJson:  { reason: "awaiting_receipt", detail: decision.reason, poId },
+        durationMs: Date.now() - t0,
+      });
+      return { status: "awaiting_receipt", documentId: docId };
+    }
+
+    if (!autoProcess || decision.next === "review") {
       await db.update(historyDocuments)
-        .set({ products: payload as unknown, updatedAt: new Date() })
+        .set({
+          products: payload as unknown,
+          poInternalId: poId,
+          errorMessage: decision.next === "review" ? decision.reason : null,
+          updatedAt: new Date(),
+        })
         .where(eq(historyDocuments.id, docId));
 
       await logWorkflow({
@@ -379,7 +452,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
         stage:     "pipeline",
         step:      "decision",
         status:    "INFO",
-        metaJson:  { reason: "needs_review", confidence: payload.confidence },
+        metaJson:  { reason: "needs_review", confidence: payload.confidence, detail: decision.next === "continue" ? null : decision.reason },
         durationMs: Date.now() - t0,
       });
 
@@ -394,10 +467,16 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
       return { status: "review", documentId: docId, payload: payload as unknown as Record<string, unknown> };
     }
 
-    // ── 8. Pending approval (confidence OK but admin must approve) ────────
-    if (approvalRequired) {
+    // ── 8. Pending approval: the workflow requires it, or the PO does not cuadrar ─
+    if (approvalRequired || decision.next === "pending_approval") {
       await db.update(historyDocuments)
-        .set({ status: "pending_approval", products: payload as unknown, updatedAt: new Date() })
+        .set({
+          status: "pending_approval",
+          products: { ...payload, approval_draft: draftWithPo(payload) } as unknown,
+          poInternalId: poId,
+          errorMessage: decision.next === "pending_approval" ? decision.reason : null,
+          updatedAt: new Date(),
+        })
         .where(eq(historyDocuments.id, docId));
 
       await logWorkflow({
@@ -432,15 +511,24 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
     const t3 = Date.now();
     const nsResult = await processInNetSuite(
       input.organizationId,
-      buildNsPayload(draftFromUiPayload(payload), {
-        organizationId: input.organizationId,
-        documentId:     docId,
-        documentType:   input.documentType,
-        nsSubsidiaryId: sub.nsSubsidiaryId,
-        dryRun,
-        customFormId:   customFormId || undefined,
-        poConfig,
-      })
+      {
+        ...buildNsPayload(draftWithPo(payload), {
+          organizationId: input.organizationId,
+          documentId:     docId,
+          documentType:   input.documentType,
+          nsSubsidiaryId: sub.nsSubsidiaryId,
+          dryRun,
+          customFormId:   customFormId || undefined,
+          poConfig,
+        }),
+        ...(await erpExtras({
+          organizationId: input.organizationId,
+          documentType:   input.documentType,
+          storageKey:     storageEnabled ? storageKey : null,
+          attachmentKey:  input.attachmentKey ?? null,
+          numDoc:         extraction.invoice.invoiceNumber || null,
+        })),
+      }
     );
 
     await db.update(historyDocuments).set({

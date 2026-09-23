@@ -21,6 +21,9 @@
  *   apply_to_po_lines:             true/false (default true)
  *   set_unselected_po_lines_to_zero: true/false (default false) — zero qty/amount on PO lines not matched by DocuIA
  *   allow_additional_lines:        true/false (default true)
+ *   custom_fields:                 optional { custbody_x: "value" } — body fields to set (CFDI UUID, uso, etc.)
+ *   attachments:                   optional [{ name, kind: "xml"|"pdf", content_base64 }] — attached to the bill
+ *   attachment_folder_id:          File Cabinet folder for the attachments (required to attach)
  *
  * Line object:
  *   item_internal_id: required
@@ -41,7 +44,7 @@
  * @NApiVersion 2.1
  * @NScriptType Restlet
  */
-define(["N/record", "N/search", "N/format", "N/log"], (record, search, format, log) => {
+define(["N/record", "N/search", "N/format", "N/log", "N/file", "N/encode"], (record, search, format, log, file, encode) => {
 
   // Safe JSON for logs (NetSuite log details cap ~4000 chars).
   function j(v, max) {
@@ -341,6 +344,7 @@ define(["N/record", "N/search", "N/format", "N/log"], (record, search, format, l
     applyHeader(rec, body, invNumber, invDate, warnings);
     const billDueDate = parseDate(body.due_date);
     if (billDueDate) trySet(rec, "duedate", billDueDate);
+    applyCustomFields(rec, body, warnings);
 
     if (lines.length) {
       if (mode === "standalone") {
@@ -361,7 +365,47 @@ define(["N/record", "N/search", "N/format", "N/log"], (record, search, format, l
 
     log.audit({ title: "docuia-process:saving", details: "vendor_bill mode=" + mode + " lines=" + lines.length + " expense=" + expenseLines.length + " warnings=" + j(warnings, 1000) });
     const id = rec.save({ enableSourcing: true, ignoreMandatoryFields: false });
-    return { ok: true, dry_run: false, mode, vendor_bill_internal_id: String(id), warnings };
+    const attachments = attachFiles(id, body, warnings);
+    return { ok: true, dry_run: false, mode, vendor_bill_internal_id: String(id), attachments, warnings };
+  }
+
+  // Body fields sent by DocuIA (CFDI UUID, uso CFDI, método de pago...). Only
+  // custom body fields are accepted; a field that does not exist is a warning.
+  function applyCustomFields(rec, body, warnings) {
+    const fields = body.custom_fields && typeof body.custom_fields === "object" ? body.custom_fields : {};
+    Object.keys(fields).forEach((fieldId) => {
+      if (!/^custbody[a-z0-9_]+$/i.test(fieldId)) return;
+      if (!trySet(rec, fieldId, s(fields[fieldId]))) warnings.push({ code: "CUSTOM_FIELD_NOT_SET", field: fieldId });
+    });
+  }
+
+  // XML / PDF of the invoice, saved in the File Cabinet and attached to the bill.
+  function attachFiles(billId, body, warnings) {
+    const list = Array.isArray(body.attachments) ? body.attachments : [];
+    if (!list.length) return [];
+    const folder = n(body.attachment_folder_id);
+    if (folder === null) { warnings.push({ code: "ATTACHMENT_FOLDER_MISSING" }); return []; }
+    const attached = [];
+    list.slice(0, 4).forEach((a) => {
+      try {
+        const isXml = s(a.kind) === "xml";
+        const contents = isXml
+          ? encode.convert({ string: s(a.content_base64), inputEncoding: encode.Encoding.BASE_64, outputEncoding: encode.Encoding.UTF_8 })
+          : s(a.content_base64);
+        const f = file.create({
+          name: s(a.name) || (isXml ? "cfdi.xml" : "factura.pdf"),
+          fileType: isXml ? file.Type.XMLDOC : file.Type.PDF,
+          contents,
+          folder,
+        });
+        const fileId = f.save();
+        record.attach({ record: { type: "file", id: fileId }, to: { type: record.Type.VENDOR_BILL, id: billId } });
+        attached.push(String(fileId));
+      } catch (err) {
+        warnings.push({ code: "ATTACHMENT_FAILED", name: s(a.name), message: String(err.message || err) });
+      }
+    });
+    return attached;
   }
 
   function validatePurchaseOrderForTransform(poId, vendorId, subId) {

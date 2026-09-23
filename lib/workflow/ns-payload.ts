@@ -2,7 +2,7 @@ import type { UiPayload } from "./types";
 
 // What a person (or the auto-process decision) approved for posting. The three
 // posting paths — auto-process, review and pending approval — all build their
-// NetSuite request from this shape so they cannot drift apart again.
+// ERP request from this shape so they cannot drift apart again.
 export interface NsDraft {
   vendorId:      string | null;
   vendorName:    string | null;
@@ -19,6 +19,8 @@ export interface NsDraft {
     rate:               number | null;
     amount:             number | null;
     unit:               string | null;
+    /** PO line the invoice line bills (from the PO comparison). */
+    po_line?:           string | null;
   }>;
 }
 
@@ -99,12 +101,27 @@ export function draftFromUiPayload(payload: Pick<UiPayload, "document">): NsDraf
   };
 }
 
+/** Auto-process draft plus the PO chosen by the AP checks, with each line tied to its PO line. */
+export function draftWithPo(payload: Pick<UiPayload, "document" | "ap_checks">): NsDraft {
+  const draft = draftFromUiPayload(payload);
+  const po = payload.ap_checks?.po;
+  if (!po?.selectedPoId) return draft;
+  const poLineByIndex = new Map((po.comparison?.lines ?? []).map((l) => [l.index, l.poLine]));
+  // draftFromUiPayload keeps only mapped lines; walk the source lines to keep indexes aligned.
+  const mappedIndexes = payload.document.lines.map((l, i) => (l.selected_item_id ? i : -1)).filter((i) => i >= 0);
+  return {
+    ...draft,
+    poId: po.selectedPoId,
+    lines: draft.lines.map((line, k) => ({ ...line, po_line: poLineByIndex.get(mappedIndexes[k]) ?? null })),
+  };
+}
+
 /** Draft from the review form body; returns an error message when invalid. */
 export function draftFromReviewBody(body: unknown): NsDraft | string {
   if (typeof body !== "object" || body === null) return "Solicitud inválida";
   const b = body as Record<string, unknown>;
   const vendorId = str(b.vendor_internal_id);
-  if (!vendorId) return "Selecciona un proveedor de NetSuite";
+  if (!vendorId) return "Selecciona un proveedor del ERP";
   const rawLines = Array.isArray(b.line_items) ? b.line_items : [];
   const lines = rawLines
     .filter((l): l is Record<string, unknown> => typeof l === "object" && l !== null)
@@ -115,9 +132,10 @@ export function draftFromReviewBody(body: unknown): NsDraft | string {
       rate:               num(l.rate),
       amount:             num(l.amount),
       unit:               str(l.unit),
+      po_line:            str(l.po_line),
     }))
     .filter((l) => l.internal_id);
-  if (!lines.length) return "Se requiere al menos una línea con ítem de NetSuite";
+  if (!lines.length) return "Se requiere al menos una línea con ítem del ERP";
   return {
     vendorId,
     vendorName:    str(b.vendor_name),
@@ -142,7 +160,7 @@ export function storedDraft(products: unknown): NsDraft | null {
   }
   // Documents parked by the auto-process decision carry only the UI payload.
   if (p.document && typeof p.document === "object" && Array.isArray((p.document as { lines?: unknown }).lines)) {
-    const draft = draftFromUiPayload(p as Pick<UiPayload, "document">);
+    const draft = draftWithPo(p as Pick<UiPayload, "document" | "ap_checks">);
     return draft.lines.length ? draft : null;
   }
   return null;

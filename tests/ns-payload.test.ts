@@ -31,8 +31,8 @@ test("every posting path sends the NetSuite subsidiary id and a deterministic ex
 });
 
 test("review body is validated and normalized", () => {
-  assert.equal(draftFromReviewBody({ line_items: [] }), "Selecciona un proveedor de NetSuite");
-  assert.equal(draftFromReviewBody({ vendor_internal_id: "7", line_items: [{ internal_id: "" }] }), "Se requiere al menos una línea con ítem de NetSuite");
+  assert.equal(draftFromReviewBody({ line_items: [] }), "Selecciona un proveedor del ERP");
+  assert.equal(draftFromReviewBody({ vendor_internal_id: "7", line_items: [{ internal_id: "" }] }), "Se requiere al menos una línea con ítem del ERP");
   const draft = draftFromReviewBody({
     vendor_internal_id: "7", invoice_number: "A1", invoice_date: "2026-09-01", due_date: null, currency: "USD",
     location_internal_id: "9", po_internal_id: "",
@@ -40,7 +40,7 @@ test("review body is validated and normalized", () => {
   }) as NsDraft;
   assert.equal(draft.poId, null);
   assert.equal(draft.locationId, "9");
-  assert.deepEqual(draft.lines[0], { internal_id: "10", item_document_name: "X", quantity: 3, rate: 1.5, amount: 4.5, unit: null });
+  assert.deepEqual(draft.lines[0], { internal_id: "10", item_document_name: "X", quantity: 3, rate: 1.5, amount: 4.5, unit: null, po_line: null });
 });
 
 test("pending approval replays the reviewer's draft, falling back to the matched payload", () => {

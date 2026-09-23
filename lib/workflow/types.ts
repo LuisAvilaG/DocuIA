@@ -116,4 +116,6 @@ export type UiPayload = {
     locations: LocationOption[];
   };
   meta: Record<string, unknown>;
+  /** Vendor rule, fiscal validation and PO comparison (lib/workflow/ap-checks.ts). */
+  ap_checks?: import("./ap-checks").ApChecks;
 };

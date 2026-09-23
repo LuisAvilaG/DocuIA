@@ -2,6 +2,7 @@
 
 import { useRouter, useSearchParams } from "next/navigation";
 import { cn } from "@/lib/utils";
+import { SubsidiaryPicker } from "@/components/tenant/subsidiary-picker";
 
 const PERIODS = [
   { id: "7d", label: "7 días" },
@@ -27,13 +28,7 @@ export function StatsFilters({ subsidiaries, vendors, groupToggle }: {
   return (
     <div className="flex flex-wrap items-center gap-2.5">
       {subsidiaries.length > 1 && (
-        <>
-          <label className="text-xs text-muted-foreground" htmlFor="st-sub">Subsidiaria</label>
-          <select id="st-sub" value={params.get("sub") ?? ""} onChange={(e) => set("sub", e.target.value || null)}>
-            <option value="">Todas</option>
-            {subsidiaries.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-        </>
+        <SubsidiaryPicker subsidiaries={subsidiaries} value={params.get("sub") ?? "all"} onChange={(id) => set("sub", id === "all" ? null : id)} allLabel="Todas las subsidiarias" />
       )}
       {vendors.length > 0 && (
         <>

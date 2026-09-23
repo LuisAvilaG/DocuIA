@@ -113,9 +113,10 @@ export async function loadApStats(f: StatsFilters, opts: { byCategory: boolean }
       name:     orgUsers.fullName,
       email:    orgUsers.email,
       role:     orgUsers.role,
-      uploaded: sql<number>`(select count(*) from history_documents h where h.organization_id = ${f.organizationId} and h.processed_by = ${orgUsers.id} and h.created_at >= ${range.from})::int`,
-      reviewed: sql<number>`(select count(*) from history_documents h where h.organization_id = ${f.organizationId} and h.products->>'approval_requested_by' = ${orgUsers.id} and h.created_at >= ${range.from})::int`,
-      approved: sql<number>`(select count(*) from history_documents h where h.organization_id = ${f.organizationId} and h.approved_by = ${orgUsers.id} and h.created_at >= ${range.from})::int`,
+      // Correlated subqueries: the outer column must be qualified or it binds to h.id.
+      uploaded: sql<number>`(select count(*) from history_documents h where h.organization_id = ${f.organizationId} and h.processed_by = "org_users"."id" and h.created_at >= ${range.from})::int`,
+      reviewed: sql<number>`(select count(*) from history_documents h where h.organization_id = ${f.organizationId} and h.products->>'approval_requested_by' = "org_users"."id" and h.created_at >= ${range.from})::int`,
+      approved: sql<number>`(select count(*) from history_documents h where h.organization_id = ${f.organizationId} and h.approved_by = "org_users"."id" and h.created_at >= ${range.from})::int`,
     }).from(orgUsers).where(and(eq(orgUsers.organizationId, f.organizationId), isNotNull(orgUsers.email))),
   ]);
 

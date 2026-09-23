@@ -1,4 +1,5 @@
 import { withApiSecurity } from "@/lib/security/http";
+import { logAdminAction } from "@/lib/audit/admin";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession } from "@/lib/auth/admin";
 import { db } from "@/lib/db";
@@ -44,7 +45,7 @@ async function handleGET(_req: NextRequest, { params }: Params) {
 }
 
 async function handlePOST(req: NextRequest, { params }: Params) {
-  const { error } = await requireAdminSession();
+  const { error, session } = await requireAdminSession();
   if (error) return error;
 
   try {
@@ -68,6 +69,9 @@ async function handlePOST(req: NextRequest, { params }: Params) {
 
     if (!environment || !accountId || !consumerKey || !consumerSecret || !tokenId || !tokenSecret) {
       return NextResponse.json({ error: "environment and TBA credentials are required" }, { status: 400 });
+    }
+    if (environment !== "sandbox" && environment !== "production") {
+      return NextResponse.json({ error: "environment must be sandbox or production" }, { status: 400 });
     }
 
     const encConsumerKey    = encryptField(consumerKey);
@@ -106,6 +110,7 @@ async function handlePOST(req: NextRequest, { params }: Params) {
         })
         .where(eq(nsConnections.id, existing.id));
 
+      await logAdminAction(req, session!, { action: "netsuite_connection.updated", targetOrgId: organizationId, after: { environment, accountId } });
       return NextResponse.json({ ok: true, connectionId: existing.id });
     }
 
@@ -133,6 +138,7 @@ async function handlePOST(req: NextRequest, { params }: Params) {
       updatedAt: now,
     });
 
+    await logAdminAction(req, session!, { action: "netsuite_connection.created", targetOrgId: organizationId, after: { environment, accountId } });
     return NextResponse.json({ ok: true, connectionId }, { status: 201 });
   } catch (err) {
     console.error("[clients/connection POST]", err);
@@ -142,7 +148,7 @@ async function handlePOST(req: NextRequest, { params }: Params) {
 
 /** PATCH — update only script IDs for an existing connection (no credentials needed) */
 async function handlePATCH(req: NextRequest, { params }: Params) {
-  const { error } = await requireAdminSession();
+  const { error, session } = await requireAdminSession();
   if (error) return error;
 
   try {
@@ -175,6 +181,7 @@ async function handlePATCH(req: NextRequest, { params }: Params) {
       })
       .where(eq(nsConnections.id, existing.id));
 
+    await logAdminAction(req, session!, { action: "netsuite_scripts.updated", targetOrgId: organizationId, after: { environment, catalogScriptId, processScriptId } });
     return NextResponse.json({ ok: true });
   } catch (err) {
     console.error("[clients/connection PATCH]", err);

@@ -1,4 +1,5 @@
 import { withApiSecurity } from "@/lib/security/http";
+import { logAdminAction } from "@/lib/audit/admin";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession } from "@/lib/auth/admin";
 import { db } from "@/lib/db";
@@ -78,6 +79,7 @@ async function handlePOST(req: NextRequest, { params }: Params) {
       updatedAt: new Date(),
     });
 
+    await logAdminAction(req, session!, { action: "tenant_user.created", targetOrgId: organizationId, targetUserId: userId, after: { email, role } });
     return NextResponse.json({ ok: true, userId }, { status: 201 });
   } catch (err) {
     console.error("[clients/users POST]", err);

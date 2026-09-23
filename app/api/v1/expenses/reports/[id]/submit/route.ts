@@ -65,7 +65,7 @@ async function handlePOST(
       return NextResponse.json({ ok: true, autoSynced: true, syncResult });
     } catch (err) {
       console.error("[expenses/submit] auto-sync failed", err);
-      return NextResponse.json({ ok: true, autoSynced: false, syncError: "El informe fue aprobado, pero no se pudo sincronizar con NetSuite. Contabilidad lo revisará." });
+      return NextResponse.json({ ok: true, autoSynced: false, syncError: "El informe fue aprobado, pero no se pudo sincronizar con el ERP. Contabilidad lo revisará." });
     }
   }
 

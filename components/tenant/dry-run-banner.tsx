@@ -29,7 +29,7 @@ export function DryRunBanner({ isAdmin }: { isAdmin: boolean }) {
         <FlaskConical className="w-3.5 h-3.5 shrink-0" style={{ color: "oklch(0.58 0.16 80)" }} />
         <span className="font-semibold" style={{ color: "oklch(0.50 0.14 80)" }}>Modo prueba activo</span>
         <span className="hidden sm:inline" style={{ color: "oklch(0.58 0.14 80 / 0.75)" }}>
-          — Los documentos se validan contra NetSuite pero no se crean transacciones reales.
+          — Los documentos se validan contra el ERP pero no se crean transacciones reales.
         </span>
       </div>
       {isAdmin && (

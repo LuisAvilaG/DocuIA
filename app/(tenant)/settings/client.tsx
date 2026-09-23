@@ -789,7 +789,7 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
                   <div>
                     <p className="text-[0.6875rem] font-medium text-muted-foreground uppercase tracking-[0.06em] mb-1">Umbral de confianza</p>
                     <p className="text-xs text-muted-foreground mb-3">
-                      Los documentos con confianza igual o mayor se envían automáticamente a NetSuite.
+                      Los documentos con confianza igual o mayor se envían automáticamente al ERP.
                       Por debajo, pasan a revisión manual.
                     </p>
                     <div className="flex items-center gap-4">
@@ -841,7 +841,7 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
                       )}
                     </div>
                     <p className="text-xs text-muted-foreground leading-relaxed">
-                      Cuando está activo, los documentos se validan contra NetSuite pero no se crean transacciones reales.
+                      Cuando está activo, los documentos se validan contra el ERP pero no se crean transacciones reales.
                       Útil para probar integraciones sin afectar datos de producción.
                     </p>
                     {dryRunError && <p className="text-xs text-destructive mt-1">{dryRunError}</p>}
@@ -901,7 +901,7 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
                   <div className="flex items-start justify-between mb-4">
                     <div>
                       <p className="text-sm font-semibold text-foreground">{s.name}</p>
-                      <p className="text-xs text-muted-foreground mt-0.5 font-mono">ID NS: {s.nsSubsidiaryId}</p>
+                      <p className="text-xs text-muted-foreground mt-0.5 font-mono">ID ERP: {s.nsSubsidiaryId}</p>
                     </div>
                     <span className={cn("text-[0.6875rem] font-medium px-2 py-0.5 rounded-sm", s.isActive ? "bg-success/10 text-success" : "bg-secondary text-muted-foreground")}>
                       {s.isActive ? "Activa" : "Inactiva"}
@@ -917,7 +917,7 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
                   </div>
                   <div className="mt-3 pt-3 border-t border-border">
                     <p className="text-[0.6875rem] text-muted-foreground mb-2">
-                      Credenciales TBA de NetSuite — gestionadas por el administrador de DocuIA.
+                      Credenciales de conexión al ERP — gestionadas por el administrador de DocuIA.
                       Para actualizarlas, contacta a soporte.
                     </p>
                     <div className="grid grid-cols-3 gap-3">
@@ -1166,7 +1166,7 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
                         Eventos
                       </label>
                       <p className="text-[0.6875rem] text-muted-foreground mb-2 leading-relaxed">
-                        <span className="text-success font-medium">Completado</span> — documento enviado a NetSuite.{" "}
+                        <span className="text-success font-medium">Completado</span> — documento enviado al ERP.{" "}
                         <span className="text-warning font-medium">Revisión</span> — confianza baja, requiere atención.{" "}
                         <span className="text-destructive font-medium">Error</span> — falló el procesamiento.
                       </p>
@@ -1446,9 +1446,9 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
             {isAdmin && (
               <div className="bg-card border border-border rounded-xl p-5 space-y-4">
                 <div>
-                  <h3 className="text-sm font-semibold text-foreground">Sincronizar desde NetSuite</h3>
+                  <h3 className="text-sm font-semibold text-foreground">Sincronizar desde el ERP</h3>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Actualiza catálogos de categorías, departamentos, clases y empleados desde NetSuite. Cada sync es upsert — no elimina registros.
+                    Actualiza catálogos de categorías, departamentos, clases y empleados desde el ERP. Cada sync es upsert — no elimina registros.
                   </p>
                 </div>
                 {syncError && (
@@ -1538,7 +1538,7 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
                 ) : submitters.length === 0 ? (
                   <div className="py-10 flex flex-col items-center justify-center text-center">
                     <p className="text-sm font-medium text-foreground">Sin empleados sincronizados</p>
-                    <p className="text-xs text-muted-foreground mt-1">Usa el botón &quot;Empleados&quot; del sync para importarlos desde NetSuite.</p>
+                    <p className="text-xs text-muted-foreground mt-1">Usa el botón &quot;Empleados&quot; del sync para importarlos desde el ERP.</p>
                   </div>
                 ) : (
                   <div className="overflow-auto max-h-72">
@@ -1589,7 +1589,7 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
                 <div>
                   <h2 className="text-sm font-semibold tracking-[-0.01em] text-foreground">Categorías de gasto</h2>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    {cats.length} categorías sincronizadas desde NetSuite
+                    {cats.length} categorías sincronizadas desde el ERP
                   </p>
                 </div>
                 {cats.length > 0 && (
@@ -1608,7 +1608,7 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
                   <Receipt className="w-8 h-8 text-muted-foreground mb-3" />
                   <p className="text-sm font-medium text-foreground">Sin categorías sincronizadas</p>
                   <p className="text-xs text-muted-foreground mt-1 max-w-xs">
-                    El administrador de DocuIA debe sincronizar los catálogos desde NetSuite.
+                    El administrador de DocuIA debe sincronizar los catálogos desde el ERP.
                   </p>
                 </div>
               ) : filteredCats.length === 0 ? (

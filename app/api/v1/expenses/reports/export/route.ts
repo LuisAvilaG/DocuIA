@@ -55,8 +55,8 @@ async function handleGET(req: NextRequest) {
     orderBy: desc(expenseReports.createdAt),
   });
 
-  const headerReport = ["ID Informe", "Propósito", "Empleado", "Email", "Período inicio", "Período fin", "Estado", "Enviado el", "Aprobado el", "NS ID", "# Líneas", "Total Informe"].join(",");
-  const headerItem = ["ID Informe", "# Línea", "Categoría", "Departamento", "Proveedor", "NIT/RFC", "# Factura", "Fecha factura", "Subtotal", "Impuesto", "Retención", "Total", "Moneda", "Forma pago", "Tipo documento", "NS Record ID", "Error sync"].join(",");
+  const headerReport = ["ID Informe", "Propósito", "Empleado", "Email", "Período inicio", "Período fin", "Estado", "Enviado el", "Aprobado el", "ID ERP", "# Líneas", "Total Informe"].join(",");
+  const headerItem = ["ID Informe", "# Línea", "Categoría", "Departamento", "Proveedor", "NIT/RFC", "# Factura", "Fecha factura", "Subtotal", "Impuesto", "Retención", "Total", "Moneda", "Forma pago", "Tipo documento", "ID registro ERP", "Error sync"].join(",");
 
   const reportRows = reports.map(r => {
     const total = r.items.reduce((sum, i) => sum + Number(i.total ?? 0), 0);

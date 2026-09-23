@@ -59,7 +59,7 @@ async function handlePOST(req: NextRequest) {
 
   try {
     const input = parseInput(await req.json() as MappingInput);
-    if (!input) return NextResponse.json({ error: "Completa subsidiaria, proveedor, ítem del documento e ítem de NetSuite" }, { status: 400 });
+    if (!input) return NextResponse.json({ error: "Completa subsidiaria, proveedor, ítem del documento e ítem del ERP" }, { status: 400 });
 
     const subsidiary = await db.query.subsidiaries.findFirst({
       where: and(eq(subsidiaries.id, input.subsidiaryId), eq(subsidiaries.organizationId, session.orgId)),

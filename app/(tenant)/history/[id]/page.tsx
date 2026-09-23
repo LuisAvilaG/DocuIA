@@ -212,7 +212,7 @@ export default async function HistoryDetailPage({
         <CheckCircle2 className="w-5 h-5 shrink-0" style={{ color: "oklch(0.52 0.16 162)" }} />
         <div>
           <p className="text-sm font-semibold" style={{ color: "oklch(0.40 0.14 162)" }}>
-            {doc.netsuiteDocId ? "Documento procesado en NetSuite" : "Procesado en modo prueba (Dry Run)"}
+            {doc.netsuiteDocId ? "Documento creado en el ERP" : "Procesado en modo prueba (Dry Run)"}
           </p>
           {doc.netsuiteDocId && (
             <p className="text-xs mt-0.5" style={{ color: "oklch(0.55 0.10 162)" }}>
@@ -239,7 +239,7 @@ export default async function HistoryDetailPage({
           }}
         >
           <ExternalLink className="w-3.5 h-3.5" />
-          Ver en NetSuite
+          Ver en el ERP
         </a>
       )}
     </div>
@@ -249,7 +249,7 @@ export default async function HistoryDetailPage({
     <div className="shrink-0 mx-6 mt-5 rounded-xl border border-destructive/20 bg-destructive/5 px-5 py-4 flex items-start gap-3">
       <XCircle className="w-5 h-5 text-destructive shrink-0 mt-0.5" />
       <div>
-        <p className="text-sm font-semibold text-destructive">Error al procesar en NetSuite</p>
+        <p className="text-sm font-semibold text-destructive">Error al procesar en el ERP</p>
         <p className="text-xs text-muted-foreground font-mono leading-relaxed mt-1">{doc.errorMessage}</p>
       </div>
     </div>
@@ -312,7 +312,7 @@ export default async function HistoryDetailPage({
           </div>
           {doc.netsuiteDocId && (
             <div className="flex justify-between">
-              <span className="text-muted-foreground">NS Doc ID</span>
+              <span className="text-muted-foreground">ID en el ERP</span>
               <span className="text-primary font-mono">{doc.netsuiteDocId}</span>
             </div>
           )}
@@ -359,7 +359,7 @@ export default async function HistoryDetailPage({
             <table className="w-full text-xs">
               <thead>
                 <tr className="border-b border-border bg-secondary/30">
-                  {["Descripción", "Cant.", "Unidad", "P. Unitario", "Total", "Item NS"].map(h => (
+                  {["Descripción", "Cant.", "Unidad", "P. Unitario", "Total", "Ítem ERP"].map(h => (
                     <th key={h} className="px-3 py-2.5 text-left font-medium text-muted-foreground whitespace-nowrap">
                       {h}
                     </th>

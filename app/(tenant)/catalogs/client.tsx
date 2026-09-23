@@ -105,7 +105,7 @@ export function CatalogsClient({ subsidiaries, items, vendors, locations, isAdmi
       {/* Topbar */}
       <div className="h-14 border-b border-border px-6 flex items-center justify-between shrink-0">
         <div>
-          <h1 className="text-sm font-semibold tracking-[-0.01em] text-foreground">Catálogos NetSuite</h1>
+          <h1 className="text-sm font-semibold tracking-[-0.01em] text-foreground">Catálogos del ERP</h1>
           <p className="text-xs text-muted-foreground">Ítems, proveedores y ubicaciones sincronizados</p>
         </div>
         {isAdmin && (
@@ -326,7 +326,7 @@ function EmptyState({ noun }: { noun: string }) {
     <div className="py-20 flex flex-col items-center justify-center text-center">
       <p className="text-sm font-medium text-foreground">Sin {noun}</p>
       <p className="text-xs text-muted-foreground mt-1">
-        El catálogo se sincroniza automáticamente desde NetSuite
+        El catálogo se sincroniza automáticamente desde el ERP
       </p>
     </div>
   );

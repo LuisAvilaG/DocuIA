@@ -508,7 +508,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
       where: and(eq(subsidiaries.id, input.subsidiaryId), eq(subsidiaries.organizationId, input.organizationId)),
       columns: { nsSubsidiaryId: true },
     });
-    if (!sub) throw new Error(`Subsidiaria ${input.subsidiaryId} no encontrada para enviar a NetSuite`);
+    if (!sub) throw new Error(`Subsidiaria ${input.subsidiaryId} no encontrada para enviar al ERP`);
 
     const t3 = Date.now();
     const nsResult = await processInNetSuite(

@@ -14,7 +14,7 @@ async function handleGET(req: NextRequest) {
   const session = await getTenantSession({ area: "documents" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (!await isFeatureEnabled(session.orgId, "po_processing")) {
-    return NextResponse.json({ error: "El procesamiento con PO no está habilitado" }, { status: 403 });
+    return NextResponse.json({ error: "El procesamiento con OC no está habilitado" }, { status: 403 });
   }
 
   const subsidiaryId = req.nextUrl.searchParams.get("subsidiaryId")?.trim() ?? "";
@@ -31,7 +31,7 @@ async function handleGET(req: NextRequest) {
   ]);
   if (!sub) return NextResponse.json({ error: "Subsidiaria no encontrada" }, { status: 404 });
   if (!conn?.catalogScriptId || !conn.catalogDeployId) {
-    return NextResponse.json({ error: "El script de catálogo de NetSuite no está configurado" }, { status: 422 });
+    return NextResponse.json({ error: "El script de catálogo del ERP no está configurado" }, { status: 422 });
   }
 
   const creds: NSCredentials = {
@@ -40,7 +40,7 @@ async function handleGET(req: NextRequest) {
     tokenId: decryptField(conn.tokenId), tokenSecret: decryptField(conn.tokenSecret),
   };
   const result = await fetchOpenPurchaseOrders(creds, conn.catalogScriptId, conn.catalogDeployId, sub.nsSubsidiaryId, vendorId);
-  if (!result.ok) return NextResponse.json({ error: result.error ?? "No se pudieron consultar las POs abiertas" }, { status: 502 });
+  if (!result.ok) return NextResponse.json({ error: result.error ?? "No se pudieron consultar las OC abiertas" }, { status: 502 });
   return NextResponse.json({ purchaseOrders: result.data ?? [] });
 }
 

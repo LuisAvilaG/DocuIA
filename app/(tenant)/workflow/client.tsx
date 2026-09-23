@@ -13,10 +13,25 @@ import { useFeature } from "@/components/providers/feature-provider";
 import { DOC_STATUS } from "@/lib/status-config";
 
 const DOC_TYPES = [
-  { id: "invoice",        label: "Factura",    desc: "PDF de factura de proveedor" },
-  { id: "purchase_order", label: "Orden de compra", desc: "PDF de purchase order" },
-  { id: "xml_cfdi",       label: "CFDI XML",   desc: "XML de comprobante fiscal" },
+  { id: "invoice",        label: "Factura",         hint: "PDF o imagen",  desc: "Se extrae con IA. En el ERP solo se adjunta el PDF." },
+  { id: "purchase_order", label: "Orden de compra", hint: "PDF o imagen",  desc: "Crea la orden de compra en el ERP." },
+  { id: "xml_cfdi",       label: "CFDI",            hint: "XML + PDF",     desc: "Datos exactos del XML y validación fiscal. Se adjuntan el XML y su PDF." },
 ];
+
+const baseName = (name: string) => name.replace(/\.[^.]+$/, "").trim().toLowerCase();
+const isXml = (f: File) => /\.xml$/i.test(f.name) || f.type === "text/xml" || f.type === "application/xml";
+const isPdf = (f: File) => /\.pdf$/i.test(f.name) || f.type === "application/pdf";
+
+// UUID of the fiscal stamp, used to pair a CFDI XML with its PDF when the PDF is named after it.
+async function cfdiUuid(file: File): Promise<string | null> {
+  try {
+    const text = await file.slice(0, 200_000).text();
+    const m = text.match(/TimbreFiscalDigital[^>]*?UUID="([0-9A-Fa-f-]{36})"/) ?? text.match(/UUID="([0-9A-Fa-f-]{36})"/);
+    return m ? m[1].toLowerCase() : null;
+  } catch {
+    return null;
+  }
+}
 
 
 const DOC_LABELS: Record<string, string> = {
@@ -45,7 +60,9 @@ interface DocRow {
 
 type BatchItem = {
   file: File;
-  status: "pending" | "uploading" | "completed" | "review" | "pending_approval" | "failed" | "queued";
+  /** CFDI method: the PDF paired with this XML (same file name or named after the UUID). */
+  pdf?: File;
+  status: "pending" | "uploading" | "completed" | "review" | "pending_approval" | "awaiting_receipt" | "failed" | "queued";
   docId?: number;
   error?: string;
 };
@@ -129,7 +146,9 @@ function SingleUpload({
   onDocumentCreated: (document: DocRow) => void;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
+  const pdfRef  = useRef<HTMLInputElement>(null);
   const [file,      setFile]      = useState<File | null>(null);
+  const [pdf,       setPdf]       = useState<File | null>(null);
   const [dragging,  setDragging]  = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error,     setError]     = useState("");
@@ -140,8 +159,16 @@ function SingleUpload({
 
   function handleDrop(e: React.DragEvent) {
     e.preventDefault(); setDragging(false);
-    const dropped = e.dataTransfer.files[0];
-    if (dropped) setFile(dropped);
+    const dropped = Array.from(e.dataTransfer.files);
+    if (docType === "xml_cfdi") {
+      // Both files can be dropped at once.
+      const xml = dropped.find(isXml);
+      const paired = dropped.find(isPdf);
+      if (xml) setFile(xml);
+      if (paired) setPdf(paired);
+      return;
+    }
+    if (dropped[0]) setFile(dropped[0]);
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -153,6 +180,7 @@ function SingleUpload({
       fd.append("file", file);
       fd.append("subsidiaryId", subsidiary);
       fd.append("documentType", docType);
+      if (docType === "xml_cfdi" && pdf) fd.append("pdf", pdf);
       const res  = await fetch("/api/v1/workflow/upload", { method: "POST", body: fd });
       const data = await res.json();
 
@@ -175,7 +203,9 @@ function SingleUpload({
 
       if (!res.ok) { setError(data.error ?? "Error al procesar"); return; }
       setFile(null);
+      setPdf(null);
       if (fileRef.current) fileRef.current.value = "";
+      if (pdfRef.current) pdfRef.current.value = "";
     } catch {
       setError("No se pudo conectar al servidor");
     } finally {
@@ -189,7 +219,7 @@ function SingleUpload({
       <SubsidiarySelector subsidiary={subsidiary} setSubsidiary={setSubsidiary} subsidiaries={subsidiaries} />
 
       <div className="space-y-1.5">
-        <label className="text-xs font-medium text-muted-foreground">Archivo</label>
+        <label className="text-xs font-medium text-muted-foreground">{docType === "xml_cfdi" ? "XML del CFDI" : "Archivo"}</label>
         <div
           className={cn(
             "relative border-2 border-dashed rounded-xl p-6 text-center transition-all cursor-pointer",
@@ -220,12 +250,38 @@ function SingleUpload({
                 Arrastra tu archivo aquí o <span className="text-primary">selecciónalo</span>
               </p>
               <p className="text-[11px] text-muted-foreground/60 mt-1">
-                {docType === "xml_cfdi" ? "XML — máx. 20 MB" : "PDF, JPG, PNG, WEBP — máx. 20 MB"}
+                {docType === "xml_cfdi" ? "XML — máx. 20 MB. Puedes soltar el XML y el PDF juntos" : "PDF, JPG, PNG, WEBP — máx. 20 MB"}
               </p>
             </>
           )}
         </div>
       </div>
+
+      {docType === "xml_cfdi" && (
+        <div className="space-y-1.5">
+          <label className="text-xs font-medium text-muted-foreground">PDF de la factura <span className="font-normal text-muted-foreground/60">(opcional, se adjunta en el ERP)</span></label>
+          <div
+            className={cn(
+              "flex items-center gap-2 rounded-lg border border-dashed px-3 py-2.5 text-xs cursor-pointer transition-colors",
+              pdf ? "border-success/40 bg-success/5" : "border-border/60 hover:border-border",
+            )}
+            onClick={() => pdfRef.current?.click()}
+            onDragOver={e => e.preventDefault()}
+            onDrop={e => { e.preventDefault(); const f = Array.from(e.dataTransfer.files).find(isPdf); if (f) setPdf(f); }}
+          >
+            <input ref={pdfRef} type="file" accept=".pdf,application/pdf" className="hidden" onChange={e => setPdf(e.target.files?.[0] ?? null)} />
+            <FileText className={cn("w-4 h-4 shrink-0", pdf ? "text-success" : "text-muted-foreground")} />
+            {pdf ? (
+              <>
+                <span className="flex-1 truncate text-foreground">{pdf.name}</span>
+                <button type="button" aria-label="Quitar PDF" onClick={e => { e.stopPropagation(); setPdf(null); }} className="text-muted-foreground hover:text-foreground"><X className="w-3.5 h-3.5" /></button>
+              </>
+            ) : (
+              <span className="text-muted-foreground">Arrastra el PDF o <span className="text-primary">selecciónalo</span></span>
+            )}
+          </div>
+        </div>
+      )}
 
       {error && (
         <div className="bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2 text-xs text-destructive flex items-center gap-2">
@@ -258,22 +314,57 @@ function BulkUpload({
   const [dragging, setDragging] = useState(false);
 
   const acceptAttr = docType === "xml_cfdi"
-    ? ".xml,text/xml,application/xml"
+    ? ".xml,text/xml,application/xml,.pdf,application/pdf"
     : ".pdf,.jpg,.jpeg,.png,.webp,.tiff,.tif";
+  const [unpairedPdfs, setUnpairedPdfs] = useState<File[]>([]);
 
-  function addFiles(files: FileList | null) {
+  async function addFiles(files: FileList | null) {
     if (!files) return;
     const incoming = Array.from(files);
-    setItems(prev => {
-      const available = BULK_MAX - prev.length;
-      if (available <= 0) return prev;
-      const next: BatchItem[] = incoming.slice(0, available).map(f => ({ file: f, status: "pending" }));
-      return [...prev, ...next];
-    });
+    if (docType !== "xml_cfdi") {
+      setItems(prev => {
+        const available = BULK_MAX - prev.length;
+        if (available <= 0) return prev;
+        const next: BatchItem[] = incoming.slice(0, available).map(f => ({ file: f, status: "pending" }));
+        return [...prev, ...next];
+      });
+      return;
+    }
+    // CFDI: pair each XML with the PDF of the same name, or named after its UUID.
+    const xmls = incoming.filter(isXml);
+    const pdfs = [...unpairedPdfs, ...incoming.filter(isPdf)];
+    const uuids = await Promise.all(xmls.map(cfdiUuid));
+    const used = new Set<File>();
+    const takePdf = (keys: string[]) => {
+      const found = pdfs.find(p => !used.has(p) && keys.includes(baseName(p.name)));
+      if (found) used.add(found);
+      return found;
+    };
+    // Computed outside a state updater: takePdf has side effects.
+    {
+      // PDFs dropped after their XML attach to the waiting item.
+      const updated = items.map(it => it.pdf || it.status !== "pending" ? it : { ...it, pdf: takePdf([baseName(it.file.name)]) });
+      const available = BULK_MAX - updated.length;
+      const next: BatchItem[] = xmls.slice(0, Math.max(0, available)).map((f, i) => ({
+        file: f,
+        pdf: takePdf([baseName(f.name), ...(uuids[i] ? [uuids[i] as string] : [])]),
+        status: "pending",
+      }));
+      setItems([...updated, ...next]);
+    }
+    setUnpairedPdfs(pdfs.filter(p => !used.has(p)));
   }
 
   function removeItem(idx: number) {
     setItems(prev => prev.filter((_, i) => i !== idx));
+  }
+
+  // Switching document type invalidates the queued files.
+  const [prevDocType, setPrevDocType] = useState(docType);
+  if (prevDocType !== docType) {
+    setPrevDocType(docType);
+    setItems([]);
+    setUnpairedPdfs([]);
   }
 
   async function runBatch() {
@@ -291,6 +382,8 @@ function BulkUpload({
         fd.append("subsidiaryId", subsidiary);
         fd.append("documentType", docType);
         fd.append("bulk", "true");
+        const pairedPdf = items[i].pdf;
+        if (docType === "xml_cfdi" && pairedPdf) fd.append("pdf", pairedPdf);
         const res  = await fetch("/api/v1/workflow/upload", { method: "POST", body: fd });
         const data = await res.json();
 
@@ -301,6 +394,7 @@ function BulkUpload({
           const finalStatus = (data.status === "review" ? "review"
             : data.status === "completed" ? "completed"
             : data.status === "pending_approval" ? "pending_approval"
+            : data.status === "awaiting_receipt" ? "awaiting_receipt"
             : data.status === "queued" ? "queued"
             : "failed") as BatchItem["status"];
           setItems(prev => prev.map((it, idx) =>
@@ -353,6 +447,8 @@ function BulkUpload({
           <p className="text-xs text-muted-foreground">
             {items.length >= BULK_MAX
               ? `Límite de ${BULK_MAX} archivos alcanzado`
+              : docType === "xml_cfdi"
+              ? <>Selecciona los <span className="text-primary">XML y sus PDF</span> juntos</>
               : <>Selecciona <span className="text-primary">múltiples archivos</span></>
             }
           </p>
@@ -368,6 +464,7 @@ function BulkUpload({
               : it.status === "completed" ? DOC_STATUS.completed
               : it.status === "review" ? DOC_STATUS.review
               : it.status === "pending_approval" ? DOC_STATUS.pending_approval
+              : it.status === "awaiting_receipt" ? DOC_STATUS.awaiting_receipt
               : it.status === "failed" ? DOC_STATUS.failed
               : DOC_STATUS.uploaded;
             const Icon = meta.icon;
@@ -376,7 +473,14 @@ function BulkUpload({
                 <div className={cn("w-6 h-6 rounded flex items-center justify-center shrink-0", meta.bg)}>
                   <Icon className={cn("w-3 h-3", meta.color, it.status === "uploading" ? "animate-spin" : "")} />
                 </div>
-                <span className="flex-1 text-xs text-foreground truncate">{it.file.name}</span>
+                <span className="flex-1 min-w-0 text-xs text-foreground truncate">
+                  {it.file.name}
+                  {docType === "xml_cfdi" && (
+                    <span className={cn("ml-1.5 text-[10px]", it.pdf ? "text-success" : "text-muted-foreground")}>
+                      {it.pdf ? `+ ${it.pdf.name}` : "· sin PDF"}
+                    </span>
+                  )}
+                </span>
                 {it.docId && (
                   <Link href={`/history/${it.docId}`}
                     className="text-[10px] text-primary hover:underline shrink-0">
@@ -395,6 +499,12 @@ function BulkUpload({
         </div>
       )}
 
+      {docType === "xml_cfdi" && unpairedPdfs.length > 0 && (
+        <p className="text-[11px] text-warning">
+          {unpairedPdfs.length} PDF sin XML ({unpairedPdfs.slice(0, 3).map(p => p.name).join(", ")}{unpairedPdfs.length > 3 ? "…" : ""}): se emparejan por nombre de archivo o por UUID; agrega su XML o se omitirán.
+        </p>
+      )}
+
       {/* Summary after done */}
       {allDone && (
         <div className="flex gap-3 text-xs">
@@ -406,6 +516,9 @@ function BulkUpload({
           )}
           {countBy("pending_approval") > 0 && (
             <span className="text-warning">{countBy("pending_approval")} por aprobar</span>
+          )}
+          {countBy("awaiting_receipt") > 0 && (
+            <span className="text-primary">{countBy("awaiting_receipt")} esperando recepción</span>
           )}
           {countBy("failed") > 0 && (
             <span className="text-destructive">{countBy("failed")} con error</span>
@@ -453,9 +566,11 @@ function DocTypeSelector({ docType, setDocType }: { docType: string; setDocType:
             )}>
             <FileText className="w-4 h-4" />
             {t.label}
+            <span className={cn("text-[10px] font-normal", docType === t.id ? "text-primary/80" : "text-muted-foreground/70")}>{t.hint}</span>
           </button>
         ))}
       </div>
+      <p className="text-[11px] text-muted-foreground">{DOC_TYPES.find(t => t.id === docType)?.desc}</p>
     </div>
   );
 }

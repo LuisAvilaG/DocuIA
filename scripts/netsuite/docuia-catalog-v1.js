@@ -51,6 +51,18 @@ define(["N/search", "N/record", "N/log"], (search, record, log) => {
 
   /* ── subsidiaries ─────────────────────────────────────────── */
 
+  // The tax id (RFC) is not a searchable column in every account, so it is read
+  // from the record; a missing field or permission just leaves it empty.
+  function subsidiaryTaxId(id) {
+    try {
+      const rec = record.load({ type: record.Type.SUBSIDIARY, id: id });
+      return str(rec.getValue({ fieldId: "federalidnumber" }));
+    } catch (e) {
+      log.debug({ title: "subsidiary tax id", details: str(e && e.message) });
+      return "";
+    }
+  }
+
   function fetchSubsidiaries() {
     const srch = search.create({
       type: "subsidiary",
@@ -61,7 +73,6 @@ define(["N/search", "N/record", "N/log"], (search, record, log) => {
         search.createColumn({ name: "country" }),
         search.createColumn({ name: "currency" }),
         search.createColumn({ name: "iselimination" }),
-        search.createColumn({ name: "federalidnumber" }),
       ],
     });
 
@@ -75,7 +86,7 @@ define(["N/search", "N/record", "N/log"], (search, record, log) => {
           name,
           country:  str(row.getValue("country")),
           currency: str(row.getText("currency")),
-          tax_id:   str(row.getValue("federalidnumber")),
+          tax_id:   subsidiaryTaxId(id),
         });
       }
       return true;

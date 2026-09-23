@@ -49,6 +49,7 @@ next-env.d.ts
 .agents/
 skills-lock.json
 
-# local artifacts (audit evidence, scratch)
+# local artifacts (audit evidence, scratch, generated screenshots)
 /output/
 /tmp/
+/screenshots/

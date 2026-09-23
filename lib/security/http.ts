@@ -89,7 +89,7 @@ export function withApiSecurity<T extends unknown[]>(handler: (req: NextRequest,
       // Public auth/contact have tighter dedicated limits inside their handlers.
       if (!publicAuth && path !== "/api/v1/contact" && !path.startsWith("/api/internal/")) {
         const expensive = /\/(upload|ocr|generate|improve|sync|word-template)$/.test(path) || (mutation && path === "/api/v1/contracts/cases") || (path.endsWith("/output") && req.nextUrl.searchParams.get("format") === "pdf");
-        const rl = await rateLimit(`api:${expensive ? "cost" : mutation ? "write" : "read"}:${principal}`, { max: expensive ? 20 : mutation ? 120 : 600, windowSec: 60 });
+        const rl = await rateLimit(`api:${expensive ? "cost" : mutation ? "write" : "read"}:${principal}`, { max: expensive ? 40 : mutation ? 120 : 600, windowSec: 60 });
         if (!rl.ok) return NextResponse.json({ error: "Demasiadas solicitudes" }, { status: 429, headers: { "Retry-After": String(rl.retryAfterSec ?? 60) } });
       }
       let bounded = req;

@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
-import { expenseReports, expenseItems, nsConnections, subsidiaries } from "@/db/schema";
+import { getActiveNsConnection } from "@/lib/netsuite/connection";
+import { expenseReports, expenseItems, subsidiaries } from "@/db/schema";
 import { eq, and, inArray, lt, or } from "drizzle-orm";
 import { decryptField } from "@/lib/crypto/encrypt";
 import { buildOAuthHeader, buildRestApiUrl, NSCredentials } from "@/lib/netsuite/oauth";
@@ -234,9 +235,7 @@ export async function syncReportToNetsuite(reportId: string, orgId: string): Pro
   }
 
   // ── 2. Load NS connection ──────────────────────────────────────────
-  const conn = await db.query.nsConnections.findFirst({
-    where: and(eq(nsConnections.organizationId, orgId), eq(nsConnections.isActive, true)),
-  });
+  const conn = await getActiveNsConnection(orgId);
   if (!conn) throw new Error("No hay conexión NetSuite activa para esta organización");
   if (!conn.processScriptId || !conn.processDeployId) {
     throw new Error("El Process Script de NetSuite no está configurado");

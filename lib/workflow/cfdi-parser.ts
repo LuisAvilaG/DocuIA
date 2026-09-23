@@ -6,6 +6,7 @@ export type CfdiLine = {
   descripcion: string;
   valorUnitario: number;
   importe: number;
+  descuento: number;
 };
 
 export type CfdiData = {
@@ -70,6 +71,7 @@ export function parseCfdi(xmlText: string): CfdiData {
       descripcion:      attr(c, "Descripcion"),
       valorUnitario:    num(attr(c, "ValorUnitario")),
       importe:          num(attr(c, "Importe")),
+      descuento:        num(attr(c, "Descuento")),
     }))
     // Defensive: drop any empty phantom line (no description, no amount, no qty)
     .filter(l => l.descripcion || l.importe || l.cantidad);

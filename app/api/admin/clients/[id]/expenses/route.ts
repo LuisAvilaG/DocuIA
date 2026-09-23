@@ -1,9 +1,10 @@
 import { withApiSecurity } from "@/lib/security/http";
+import { getActiveNsConnection } from "@/lib/netsuite/connection";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession } from "@/lib/auth/admin";
 import { db } from "@/lib/db";
 import {
-  nsConnections, expenseCategories, catalogDepartments,
+  expenseCategories, catalogDepartments,
   catalogClasses, orgUsers,
 } from "@/db/schema";
 import { and, eq, count } from "drizzle-orm";
@@ -19,12 +20,7 @@ import {
 type Params = { params: Promise<{ id: string }> };
 
 async function resolveNsCreds(organizationId: string): Promise<NSCredentials | null> {
-  const conn = await db.query.nsConnections.findFirst({
-    where: and(
-      eq(nsConnections.organizationId, organizationId),
-      eq(nsConnections.isActive, true),
-    ),
-  });
+  const conn = await getActiveNsConnection(organizationId);
   if (!conn) return null;
   return {
     accountId:      conn.accountId,

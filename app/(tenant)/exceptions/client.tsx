@@ -47,7 +47,7 @@ export function ExceptionsClient({ exceptions: initial }: { exceptions: ExRow[] 
       if (!res.ok) { setActionError((p) => ({ ...p, [id]: data.error ?? "Error al reintentar" })); return; }
       const retryStatus = data.result?.status;
       setExceptions((prev) => prev.map((e) =>
-        e.id === id ? { ...e, status: retryStatus === "completed" ? "resolved" : "pending" } : e
+        e.id === id ? { ...e, status: retryStatus && retryStatus !== "failed" ? "resolved" : "pending" } : e
       ));
       setExpanded(null);
     } catch { setActionError((p) => ({ ...p, [id]: "No se pudo conectar al servidor" })); }

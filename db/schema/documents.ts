@@ -1,6 +1,6 @@
 import {
   pgTable, varchar, text, boolean, integer, json,
-  timestamp, bigserial, decimal, pgEnum, index,
+  timestamp, bigserial, bigint, decimal, pgEnum, index,
 } from "drizzle-orm/pg-core";
 
 export const documentTypeEnum = pgEnum("document_type", [
@@ -53,6 +53,9 @@ export const failureStageEnum = pgEnum("failure_stage", [
 export const exceptionQueue = pgTable("exception_queue", {
   id:                bigserial("id", { mode: "number" }).primaryKey(),
   organizationId:    varchar("organization_id", { length: 36 }).notNull(),
+  // The history document that failed; retries reprocess it in place so the
+  // NetSuite external_id (and therefore idempotency) stays the same.
+  documentId:        bigint("document_id", { mode: "number" }),
   subsidiaryId:      varchar("subsidiary_id", { length: 36 }),
   documentType:      varchar("document_type", { length: 60 }),
   originalFilename:  varchar("original_filename", { length: 500 }),
@@ -73,6 +76,7 @@ export const exceptionQueue = pgTable("exception_queue", {
 }, (t) => [
   index("exceptions_org_status_idx").on(t.organizationId, t.status, t.createdAt),
   index("exceptions_assigned_idx").on(t.assignedTo, t.status),
+  index("exceptions_document_idx").on(t.documentId),
 ]);
 
 // -- Workflow runtime logs ----------------------------------------

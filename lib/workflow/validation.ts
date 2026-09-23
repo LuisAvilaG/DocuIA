@@ -36,9 +36,10 @@ export function validateExtraction(
   }, 0);
   if (!Number.isFinite(lineTotal)) return { level: "skipped" };
 
-  // Invoice lines usually sum to the subtotal. When tax was extracted, compare
-  // the header total to subtotal + tax instead of flagging every taxable bill.
-  const expectedTotal = lineTotal + (invoice.tax ?? 0);
+  // Invoice lines usually sum to the (net) subtotal. When tax was extracted,
+  // compare the header total to subtotal + tax − withholdings, the SAT formula
+  // for a CFDI with retenciones (professional fees, freight, leases).
+  const expectedTotal = lineTotal + (invoice.tax ?? 0) - (invoice.retention ?? 0);
   const difference = Math.abs(invoice.total - expectedTotal);
   const percentage = difference / Math.max(Math.abs(invoice.total), Math.abs(expectedTotal), 1);
   const toleranceAbs = positiveNumber(config.tolerance_abs, 0.5);

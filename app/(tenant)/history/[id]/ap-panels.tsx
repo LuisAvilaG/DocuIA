@@ -268,8 +268,8 @@ export function PoComparisonCard({
         </table>
       </div>
       <div className="flex flex-wrap justify-end gap-x-7 gap-y-1 px-4 py-3 text-[0.8125rem] border-t border-border">
-        <span>Factura <strong className="tabular-nums">${money(comparison.invoiceTotal)}</strong></span>
-        <span>OC <strong className="tabular-nums">${money(comparison.poTotal)}</strong></span>
+        <span title="Importe de las líneas de la factura que están en la OC, sin impuestos">Líneas facturadas <strong className="tabular-nums">${money(comparison.invoiceTotal)}</strong></span>
+        <span title="Lo que esas mismas cantidades cuestan en la OC">Valor en la OC <strong className="tabular-nums">${money(comparison.poTotal)}</strong></span>
         <span>Diferencia <strong className={cn("tabular-nums", comparison.totalWithinTolerance ? "text-success" : "text-destructive")}>{signed(comparison.totalDifference)} ({signedPct(comparison.totalDifferencePct)})</strong></span>
       </div>
     </Card>

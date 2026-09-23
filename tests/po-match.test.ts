@@ -64,7 +64,16 @@ test("line comparison flags price, receipt and lines outside the PO", () => {
 test("without the 3-way match, missing receipts do not stop the invoice", () => {
   const cmp = comparePoLines(lines.slice(0, 3), po, DEFAULT_PO_MATCH_CONFIG, { requireReceipt: false, invoiceTotal: 9130 });
   assert.equal(cmp.counts.not_received, 0);
-  assert.equal(poOutcome(cmp, DEFAULT_PO_MATCH_CONFIG).kind, "needs_approval", "total 9,130 vs 12,500 is out of tolerance");
+  assert.equal(poOutcome(cmp, DEFAULT_PO_MATCH_CONFIG).kind, "ok");
+});
+
+test("a partial invoice is compared with the PO value of the lines it covers", () => {
+  // One delivery of a larger PO: 20 of Cheddar at the PO price, invoice total with VAT.
+  const cmp = comparePoLines([lines[0]], po, DEFAULT_PO_MATCH_CONFIG, { requireReceipt: true, invoiceTotal: 4292 });
+  assert.equal(cmp.poTotal, 3700);
+  assert.equal(cmp.invoiceTotal, 3700);
+  assert.equal(cmp.totalWithinTolerance, true);
+  assert.equal(poOutcome(cmp, DEFAULT_PO_MATCH_CONFIG).kind, "ok");
 });
 
 test("price out of tolerance follows the configured action", () => {

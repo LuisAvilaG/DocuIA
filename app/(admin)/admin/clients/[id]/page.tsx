@@ -59,6 +59,7 @@ async function getClientData(id: string): Promise<{ org: OrgSummary; allFeatures
       name:           s.name,
       nsSubsidiaryId: s.nsSubsidiaryId,
       currency:       s.currency,
+      taxId:          s.taxId,
       isActive:       s.isActive,
       updatedAt:      s.updatedAt,
       itemCount:      itemMap.get(s.id) ?? 0,

@@ -42,6 +42,7 @@ interface NSSubsidiary {
   name: string;
   country: string;
   currency: string;
+  tax_id?: string;
 }
 
 // ── Step configuration ───────────────────────────────────────────────
@@ -348,7 +349,7 @@ export function ClientWizard() {
     if (!selectedSubs.size) throw new Error("Selecciona al menos una subsidiaria");
     const toSave = nsSubsidiaries
       .filter((s) => selectedSubs.has(s.internal_id))
-      .map((s) => ({ nsSubsidiaryId: s.internal_id, name: s.name, currency: s.currency }));
+      .map((s) => ({ nsSubsidiaryId: s.internal_id, name: s.name, currency: s.currency, taxId: s.tax_id }));
     const data = await apiFetch(`/api/admin/clients/${orgId}/subsidiaries`, { subsidiaries: toSave });
     if (!data.ok) throw new Error(data.error ?? "Error al guardar subsidiarias");
 

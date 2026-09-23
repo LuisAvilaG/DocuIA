@@ -3,17 +3,17 @@ import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { canApprove } from "@/lib/auth/permissions";
 import { db } from "@/lib/db";
-import { historyDocuments, nsConnections, organizations, subsidiaries } from "@/db/schema";
+import { historyDocuments, subsidiaries } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import { processInNetSuite } from "@/lib/workflow/process-ns";
 import { isFeatureEnabled, getFeature } from "@/lib/features";
 import { upsertItemMappings } from "@/lib/workflow/mappings";
 import { resolveCustomFormId } from "@/lib/netsuite/custom-forms";
 import { fetchOpenPurchaseOrders } from "@/lib/netsuite/client";
-import type { NSCredentials } from "@/lib/netsuite/oauth";
-import { decryptField } from "@/lib/crypto/encrypt";
+import { getActiveNsConnection, nsCredentials } from "@/lib/netsuite/connection";
 import { buildNsPayload, draftFromReviewBody, storedDraft, type NsDraft, type PoConfig } from "@/lib/workflow/ns-payload";
 import { deliverWebhooks } from "@/lib/webhooks/deliver";
+import { recordPostedAmount } from "@/lib/workflow/pipeline";
 
 type Params = { params: Promise<{ docId: string }> };
 type WaitingStatus = "review" | "pending_approval";
@@ -23,32 +23,11 @@ const CONFLICT = "Otro usuario ya está procesando o procesó este documento. Re
 // The RESTlet re-validates too, but a stale or foreign PO should fail here with
 // a clear message instead of as a NetSuite error.
 async function validatePurchaseOrder(orgId: string, nsSubsidiaryId: string, draft: NsDraft): Promise<string | null> {
-  const org = await db.query.organizations.findFirst({
-    where: eq(organizations.id, orgId),
-    columns: { activeNsEnvironment: true },
-  });
-  const environment = org?.activeNsEnvironment as "sandbox" | "production" | undefined;
-  const connection = environment
-    ? await db.query.nsConnections.findFirst({
-        where: and(
-          eq(nsConnections.organizationId, orgId),
-          eq(nsConnections.environment, environment),
-          eq(nsConnections.isActive, true),
-        ),
-      })
-    : undefined;
+  const connection = await getActiveNsConnection(orgId);
   if (!connection?.catalogScriptId || !connection.catalogDeployId) {
     return "No hay un catálogo de NetSuite configurado para validar la PO seleccionada";
   }
-
-  const credentials: NSCredentials = {
-    accountId: connection.accountId,
-    consumerKey: decryptField(connection.consumerKey),
-    consumerSecret: decryptField(connection.consumerSecret),
-    tokenId: decryptField(connection.tokenId),
-    tokenSecret: decryptField(connection.tokenSecret),
-  };
-  const open = await fetchOpenPurchaseOrders(credentials, connection.catalogScriptId, connection.catalogDeployId, nsSubsidiaryId, draft.vendorId ?? "");
+  const open = await fetchOpenPurchaseOrders(nsCredentials(connection), connection.catalogScriptId, connection.catalogDeployId, nsSubsidiaryId, draft.vendorId ?? "");
   if (!open.ok) return `No se pudo validar la PO en NetSuite: ${open.error ?? "error desconocido"}`;
   if (!open.data?.some((po) => po.internal_id === draft.poId)) {
     return "La PO elegida no está abierta o no corresponde al proveedor y subsidiaria seleccionados";
@@ -167,6 +146,8 @@ async function handlePOST(req: NextRequest, { params }: Params) {
       approvedBy:    session.sub,
       updatedAt:     new Date(),
     }).where(and(eq(historyDocuments.id, docIdNum), eq(historyDocuments.status, "processing")));
+
+    void recordPostedAmount(session.orgId, Number(doc.total ?? 0)).catch(() => {});
 
     void deliverWebhooks(session.orgId, "document.completed", {
       document: {

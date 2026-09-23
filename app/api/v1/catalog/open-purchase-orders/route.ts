@@ -1,9 +1,10 @@
 import { withApiSecurity } from "@/lib/security/http";
+import { getActiveNsConnection } from "@/lib/netsuite/connection";
 import { NextRequest, NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
-import { nsConnections, subsidiaries } from "@/db/schema";
+import { subsidiaries } from "@/db/schema";
 import { isFeatureEnabled } from "@/lib/features";
 import { decryptField } from "@/lib/crypto/encrypt";
 import { fetchOpenPurchaseOrders } from "@/lib/netsuite/client";
@@ -26,9 +27,7 @@ async function handleGET(req: NextRequest) {
     db.query.subsidiaries.findFirst({
       where: and(eq(subsidiaries.id, subsidiaryId), eq(subsidiaries.organizationId, session.orgId)),
     }),
-    db.query.nsConnections.findFirst({
-      where: and(eq(nsConnections.organizationId, session.orgId), eq(nsConnections.isActive, true)),
-    }),
+    getActiveNsConnection(session.orgId),
   ]);
   if (!sub) return NextResponse.json({ error: "Subsidiaria no encontrada" }, { status: 404 });
   if (!conn?.catalogScriptId || !conn.catalogDeployId) {

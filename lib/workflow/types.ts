@@ -24,6 +24,8 @@ export type ExtractedInvoice = {
   currency: string;
   subtotal: number | null;
   tax: number | null;
+  /** Withheld taxes (e.g. CFDI retenciones ISR/IVA) that reduce the total. */
+  retention?: number | null;
   total: number | null;
   lines: ExtractedLine[];
 };

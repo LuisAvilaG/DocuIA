@@ -45,7 +45,7 @@ interface DocRow {
 
 type BatchItem = {
   file: File;
-  status: "pending" | "uploading" | "completed" | "review" | "failed" | "queued";
+  status: "pending" | "uploading" | "completed" | "review" | "pending_approval" | "failed" | "queued";
   docId?: number;
   error?: string;
 };
@@ -300,6 +300,7 @@ function BulkUpload({
         } else {
           const finalStatus = (data.status === "review" ? "review"
             : data.status === "completed" ? "completed"
+            : data.status === "pending_approval" ? "pending_approval"
             : data.status === "queued" ? "queued"
             : "failed") as BatchItem["status"];
           setItems(prev => prev.map((it, idx) =>
@@ -366,6 +367,7 @@ function BulkUpload({
               ? DOC_STATUS.processing
               : it.status === "completed" ? DOC_STATUS.completed
               : it.status === "review" ? DOC_STATUS.review
+              : it.status === "pending_approval" ? DOC_STATUS.pending_approval
               : it.status === "failed" ? DOC_STATUS.failed
               : DOC_STATUS.uploaded;
             const Icon = meta.icon;
@@ -401,6 +403,9 @@ function BulkUpload({
           )}
           {countBy("review") > 0 && (
             <span className="text-warning">{countBy("review")} en revisión</span>
+          )}
+          {countBy("pending_approval") > 0 && (
+            <span className="text-warning">{countBy("pending_approval")} por aprobar</span>
           )}
           {countBy("failed") > 0 && (
             <span className="text-destructive">{countBy("failed")} con error</span>

@@ -1,8 +1,9 @@
 // Shared catalog sync (items / vendors / locations) for one subsidiary.
+import { getActiveNsConnection } from "@/lib/netsuite/connection";
 // Used by both the platform-admin endpoint and the tenant-admin endpoint so the
 // logic — including the subsidiary-scoped location cleanup — lives in one place.
 import { db } from "@/lib/db";
-import { nsConnections, subsidiaries, catalogItems, catalogVendors, catalogLocations } from "@/db/schema";
+import { subsidiaries, catalogItems, catalogVendors, catalogLocations } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
 import { fetchCatalogPage } from "@/lib/netsuite/client";
 import type { NSCredentials } from "@/lib/netsuite/oauth";
@@ -25,9 +26,7 @@ export async function syncSubsidiaryCatalog(
   subsidiaryId: string,
   types?: CatalogType[],
 ): Promise<SyncCatalogResult> {
-  const conn = await db.query.nsConnections.findFirst({
-    where: and(eq(nsConnections.organizationId, organizationId), eq(nsConnections.isActive, true)),
-  });
+  const conn = await getActiveNsConnection(organizationId);
   if (!conn) return { ok: false, error: "No active NS connection found", status: 422 };
   if (!conn.catalogScriptId || !conn.catalogDeployId) {
     return { ok: false, error: "Catalog script not configured on this connection", status: 422 };

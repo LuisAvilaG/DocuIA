@@ -1,10 +1,8 @@
 import { withApiSecurity } from "@/lib/security/http";
+import { getActiveNsConnection } from "@/lib/netsuite/connection";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { isFeatureEnabled } from "@/lib/features";
-import { db } from "@/lib/db";
-import { nsConnections } from "@/db/schema";
-import { and, eq } from "drizzle-orm";
 import { decryptField } from "@/lib/crypto/encrypt";
 import type { NSCredentials } from "@/lib/netsuite/oauth";
 import {
@@ -15,9 +13,7 @@ import {
 } from "@/lib/expense/sync-catalogs";
 
 async function resolveNsCreds(orgId: string): Promise<NSCredentials | null> {
-  const conn = await db.query.nsConnections.findFirst({
-    where: and(eq(nsConnections.organizationId, orgId), eq(nsConnections.isActive, true)),
-  });
+  const conn = await getActiveNsConnection(orgId);
   if (!conn) return null;
   return {
     accountId:      conn.accountId,

@@ -29,6 +29,9 @@ export type PipelineInput = {
   // When present, runPipeline processes that document instead of creating a new one.
   documentId?:    number;
   storageKey?:    string;
+  // Set when retrying from the exception queue: a new failure updates that
+  // exception instead of piling up a duplicate.
+  exceptionId?:   number;
 };
 
 export type PipelineResult =
@@ -206,15 +209,21 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
           // conflated descuento and retenciones. Total stays authoritative from
           // the CFDI (already nets descuento/retenciones per the SAT formula).
           tax:           cfdiData.totalTraslados,
+          retention:     cfdiData.totalRetenciones,
           total:         cfdiData.total,
-          lines:         cfdiData.lineas.map(l => ({
-            description: l.descripcion,
-            quantity:    l.cantidad,
-            rate:        l.valorUnitario,
-            amount:      l.importe,
-            uom:         l.claveUnidad || null,
-            itemCode:    l.noIdentificacion || null,
-          })),
+          // Lines are posted net of their own Descuento, so the bill matches
+          // SubTotal − Descuento instead of overstating the expense.
+          lines:         cfdiData.lineas.map(l => {
+            const amount = Math.round((l.importe - l.descuento) * 100) / 100;
+            return {
+              description: l.descripcion,
+              quantity:    l.cantidad,
+              rate:        l.descuento && l.cantidad ? Math.round((amount / l.cantidad) * 1e6) / 1e6 : l.valorUnitario,
+              amount,
+              uom:         l.claveUnidad || null,
+              itemCode:    l.noIdentificacion || null,
+            };
+          }),
         },
         model:            "cfdi-parser",
         fallbackUsed:     false,
@@ -498,9 +507,18 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
       updatedAt:    new Date(),
     }).where(eq(historyDocuments.id, docId));
 
-    if (exceptionQueueEnabled) {
+    if (input.exceptionId) {
+      await db.update(exceptionQueue).set({
+        documentId:    docId,
+        failureStage:  determineFailureStage(errorMessage),
+        failureReason: errorMessage,
+        status:        "pending",
+        updatedAt:     new Date(),
+      }).where(eq(exceptionQueue.id, input.exceptionId));
+    } else if (exceptionQueueEnabled) {
       await db.insert(exceptionQueue).values({
         organizationId:   input.organizationId,
+        documentId:       docId,
         subsidiaryId:     input.subsidiaryId,
         documentType:     input.documentType,
         originalFilename: input.fileName,
@@ -532,6 +550,16 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   } finally {
     void upsertUsageDaily(input.organizationId, usageDelta).catch(() => {});
   }
+}
+
+/** Amount posted through manual review/approval (auto-process records its own). */
+export async function recordPostedAmount(organizationId: string, amount: number): Promise<void> {
+  if (!Number.isFinite(amount) || amount === 0) return;
+  await upsertUsageDaily(organizationId, {
+    docsProcessed: 0, docsInvoice: 0, docsPo: 0, docsXml: 0,
+    aiPrimaryCalls: 0, aiFallbackCalls: 0, aiTokensInput: 0, aiTokensOutput: 0,
+    errors: 0, totalAmount: amount.toString(),
+  });
 }
 
 async function upsertUsageDaily(organizationId: string, delta: {

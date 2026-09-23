@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
 import { orgUsers, authSessions } from "@/db/schema";
-import { and, eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { compare, hash } from "bcryptjs";
 import { rateLimit } from "@/lib/auth/rate-limit";
 import { logAudit } from "@/lib/audit/log";
@@ -49,7 +49,7 @@ async function handlePOST(req: NextRequest) {
   // Revoke all other sessions so a stolen session can't survive the change.
   await tx.update(authSessions)
     .set({ revokedAt: new Date() })
-    .where(and(eq(authSessions.userId, session.sub), eq(authSessions.userType, "org_user")));
+    .where(and(eq(authSessions.userId, session.sub), eq(authSessions.userType, "org_user"), ne(authSessions.id, session.sessionId)));
   return true;
   });
   if (!changed) return NextResponse.json({ error: "La contraseña cambió. Inicia sesión nuevamente." }, { status: 409 });

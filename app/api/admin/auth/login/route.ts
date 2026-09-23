@@ -7,9 +7,9 @@ import { platformAdmins, authSessions } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { compare } from "bcryptjs";
 import { randomUUID, randomBytes } from "crypto";
-import { addDays } from "date-fns";
 import { signAccessToken, signRefreshToken } from "@/lib/auth/jwt";
 import { rateLimit, clearRateLimit } from "@/lib/auth/rate-limit";
+import { SESSION_TTL_MS, setAuthCookies } from "@/lib/auth/cookies";
 
 async function handlePOST(req: NextRequest) {
   const ip = clientIp(req.headers);
@@ -57,7 +57,7 @@ async function handlePOST(req: NextRequest) {
       refreshToken: tokenNonce,
       ipAddress:    ip,
       userAgent:    req.headers.get("user-agent") ?? null,
-      expiresAt:    addDays(new Date(), 7),
+      expiresAt:    new Date(Date.now() + SESSION_TTL_MS),
     });
 
     await db.update(platformAdmins)
@@ -77,16 +77,8 @@ async function handlePOST(req: NextRequest) {
       tokenNonce,
     });
 
-    const res    = NextResponse.json({ ok: true });
-    const secure = process.env.NODE_ENV === "production";
-
-    res.cookies.set("admin_access_token", accessToken, {
-      httpOnly: true, secure, sameSite: "lax", maxAge: 60 * 60 * 8, path: "/",
-    });
-    res.cookies.set("admin_refresh_token", refreshTokenSigned, {
-      httpOnly: true, secure, sameSite: "lax", maxAge: 60 * 60 * 24 * 7, path: "/",
-    });
-
+    const res = NextResponse.json({ ok: true });
+    setAuthCookies(res, "admin", accessToken, refreshTokenSigned);
     return res;
   } catch (err) {
     console.error("[admin/login]", err);

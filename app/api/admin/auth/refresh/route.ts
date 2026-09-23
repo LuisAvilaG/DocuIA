@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { authSessions, platformAdmins } from "@/db/schema";
 import { and, eq, gt, isNull } from "drizzle-orm";
 import { randomBytes } from "crypto";
+import { SESSION_TTL_MS, setAuthCookies } from "@/lib/auth/cookies";
 
 async function handlePOST(req: NextRequest) {
   const refreshCookie = req.cookies.get("admin_refresh_token")?.value;
@@ -45,7 +46,7 @@ async function handlePOST(req: NextRequest) {
     }
 
     const newNonce     = randomBytes(32).toString("hex");
-    const newExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const newExpiresAt = new Date(Date.now() + SESSION_TTL_MS);
 
     const rotated = await db
       .update(authSessions)
@@ -59,16 +60,8 @@ async function handlePOST(req: NextRequest) {
       signRefreshToken({ sub: admin.id, type: "platform_admin", sessionId, tokenNonce: newNonce }),
     ]);
 
-    const res    = NextResponse.json({ ok: true });
-    const secure = process.env.NODE_ENV === "production";
-
-    res.cookies.set("admin_access_token", accessToken, {
-      httpOnly: true, secure, sameSite: "lax", maxAge: 60 * 60 * 8, path: "/",
-    });
-    res.cookies.set("admin_refresh_token", newRefreshToken, {
-      httpOnly: true, secure, sameSite: "lax", maxAge: 60 * 60 * 24 * 7, path: "/",
-    });
-
+    const res = NextResponse.json({ ok: true });
+    setAuthCookies(res, "admin", accessToken, newRefreshToken);
     return res;
   } catch {
     return NextResponse.json({ error: "Token inválido" }, { status: 401 });

@@ -1,12 +1,27 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { safeAdminReturnPath } from "@/lib/security/return-path";
 import { Eye, EyeOff, Loader2, ShieldCheck } from "lucide-react";
 import Image from "next/image";
 
-export default function AdminLoginPage() {
+function AdminLoginForm() {
   const router = useRouter();
+  const returnTo = safeAdminReturnPath(useSearchParams().get("returnTo"));
+  const [restoring, setRestoring] = useState(() => Boolean(returnTo));
+
+  // The proxy sends here with ?returnTo when only the short-lived access token
+  // expired; the refresh cookie usually still renews the session silently.
+  useEffect(() => {
+    if (!returnTo) return;
+    let active = true;
+    fetch("/api/admin/auth/refresh", { method: "POST" })
+      .then((res) => { if (active && res.ok) router.replace(returnTo); })
+      .catch(() => undefined)
+      .finally(() => { if (active) setRestoring(false); });
+    return () => { active = false; };
+  }, [returnTo, router]);
   const [email,    setEmail]    = useState("");
   const [password, setPassword] = useState("");
   const [showPass, setShowPass] = useState(false);
@@ -25,7 +40,7 @@ export default function AdminLoginPage() {
       });
       const data = await res.json();
       if (!res.ok) { setError(data.error ?? "Credenciales inválidas"); return; }
-      router.push("/admin");
+      router.push(returnTo ?? "/admin");
     } catch {
       setError("Error de conexión. Intenta de nuevo.");
     } finally {
@@ -169,9 +184,11 @@ export default function AdminLoginPage() {
               </div>
             )}
 
+            {restoring && <p className="text-xs text-muted-foreground">Restaurando tu sesión…</p>}
+
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || restoring}
               className="w-full bg-primary hover:bg-[oklch(0.42_0.15_182)] disabled:opacity-60 text-primary-foreground font-medium text-sm py-[10px] rounded-lg flex items-center justify-center gap-2 transition-all duration-[120ms] hover:-translate-y-px active:translate-y-0"
               style={{ boxShadow: "0 1px 3px oklch(0.48 0.15 182 / 0.30)" }}
             >
@@ -187,4 +204,8 @@ export default function AdminLoginPage() {
       </div>
     </div>
   );
+}
+
+export default function AdminLoginPage() {
+  return <Suspense fallback={null}><AdminLoginForm /></Suspense>;
 }

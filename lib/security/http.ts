@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { clientIp } from "./request-ip";
 import { rateLimit } from "@/lib/auth/rate-limit";
-import { getTenantSession } from "@/lib/auth/jwt";
+import { getSessionFromCookies, getTenantSession } from "@/lib/auth/jwt";
 import { requireAdminSession } from "@/lib/auth/admin";
 import type { TenantArea } from "@/lib/auth/permissions";
 
@@ -72,7 +72,14 @@ export function withApiSecurity<T extends unknown[]>(handler: (req: NextRequest,
       }
       if (path.startsWith("/api/v1/") && !publicAuth && path !== "/api/v1/contact") {
         const session = await getTenantSession({ area: tenantAreaForPath(path), permission: mutation ? "write" : "read" });
-        if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+        if (!session) {
+          // 403 for a live session that lacks the permission: a 401 makes the
+          // browser's SessionRefresh rotate the refresh token for nothing.
+          const signedIn = await getSessionFromCookies();
+          return signedIn
+            ? NextResponse.json({ error: "No tienes permiso para esta acción" }, { status: 403 })
+            : NextResponse.json({ error: "No autorizado" }, { status: 401 });
+        }
         principal = `${session.orgId}:${session.sub}`;
       } else if ((path.startsWith("/api/admin/") || path.startsWith("/api/scripts/")) && !publicAuth) {
         const { error, session } = await requireAdminSession();

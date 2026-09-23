@@ -7,6 +7,7 @@ import { and, eq, gt, isNull } from "drizzle-orm";
 import { randomBytes } from "crypto";
 import { isTenantIpAllowed } from "@/lib/security/ip-allowlist";
 import { getTenantHomePath } from "@/lib/products";
+import { SESSION_TTL_MS, setAuthCookies } from "@/lib/auth/cookies";
 
 async function handlePOST(req: NextRequest) {
   const refreshCookie = req.cookies.get("refresh_token")?.value;
@@ -54,7 +55,7 @@ async function handlePOST(req: NextRequest) {
     }
 
     const newNonce     = randomBytes(32).toString("hex");
-    const newExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const newExpiresAt = new Date(Date.now() + SESSION_TTL_MS);
     const homePath     = await getTenantHomePath(user.organizationId);
 
     const rotated = await db
@@ -76,16 +77,8 @@ async function handlePOST(req: NextRequest) {
       signRefreshToken({ sub: user.id, type: "org_user", sessionId, tokenNonce: newNonce }),
     ]);
 
-    const res    = NextResponse.json({ ok: true });
-    const secure = process.env.NODE_ENV === "production";
-
-    res.cookies.set("access_token", accessToken, {
-      httpOnly: true, secure, sameSite: "lax", maxAge: 60 * 15, path: "/",
-    });
-    res.cookies.set("refresh_token", newRefreshToken, {
-      httpOnly: true, secure, sameSite: "lax", maxAge: 60 * 60 * 24 * 7, path: "/",
-    });
-
+    const res = NextResponse.json({ ok: true });
+    setAuthCookies(res, "tenant", accessToken, newRefreshToken);
     return res;
   } catch {
     return NextResponse.json({ error: "Token inválido" }, { status: 401 });

@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test": "tsx --test tests/*.test.ts",
     "test:security": "tsx --test tests/security.test.ts",
     "test:security:integration": "node scripts/security-integration.mjs",
     "test:security:storage": "tsx scripts/security-storage-test.ts",

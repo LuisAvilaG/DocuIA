@@ -2,23 +2,37 @@
 
 import { useEffect } from "react";
 
-// Keeps the tenant session alive. The access_token cookie lives 15 min; when it
-// expires, same-origin /api calls start returning 401. This installs a one-time
-// window.fetch interceptor that, on a 401 from an authenticated /api call,
-// refreshes the token via /api/v1/auth/refresh (single-flight) and retries the
-// original request once. If the refresh fails, the session is truly dead and we
-// send the user to /login. Only touches /api/* responses with status 401 — RSC
+// Keeps a tenant or platform-admin session alive. The access JWT lives 15 min;
+// when it expires, same-origin /api calls start returning 401. This installs a
+// one-time window.fetch interceptor that, on a 401 from an authenticated /api
+// call, refreshes the token (single-flight) and retries the original request
+// once. If the refresh fails, the session is truly dead and we send the user to
+// the realm's login. Only touches /api/* responses with status 401 — RSC
 // navigation, prefetch and non-401 responses pass straight through.
 
-let installed = false;
+type Realm = "tenant" | "admin";
 
-// Endpoints that must never trigger a refresh+retry (avoids recursion / loops).
-const SKIP = ["/api/v1/auth/refresh", "/api/v1/auth/login", "/api/v1/auth/logout"];
+const REALMS: Record<Realm, { refresh: string; login: string; skip: string[] }> = {
+  tenant: {
+    refresh: "/api/v1/auth/refresh",
+    login: "/login",
+    // Endpoints that must never trigger a refresh+retry (avoids recursion / loops).
+    skip: ["/api/v1/auth/refresh", "/api/v1/auth/login", "/api/v1/auth/logout"],
+  },
+  admin: {
+    refresh: "/api/admin/auth/refresh",
+    login: "/admin/login",
+    skip: ["/api/admin/auth/refresh", "/api/admin/auth/login", "/api/admin/auth/logout"],
+  },
+};
+
+let installed = false;
 const REFRESH_INTERVAL_MS = 8 * 60 * 1000;
 
-function installInterceptor() {
+function installInterceptor(realm: Realm) {
   if (installed || typeof window === "undefined") return;
   installed = true;
+  const { refresh, login, skip } = REALMS[realm];
 
   const realFetch = window.fetch.bind(window);
   let refreshing: Promise<boolean> | null = null;
@@ -26,7 +40,7 @@ function installInterceptor() {
 
   async function doRefresh(): Promise<boolean> {
     if (!refreshing) {
-      refreshing = realFetch("/api/v1/auth/refresh", { method: "POST" })
+      refreshing = realFetch(refresh, { method: "POST" })
         .then((r) => {
           if (r.ok) lastRefreshAt = Date.now();
           return r.ok;
@@ -72,14 +86,14 @@ function installInterceptor() {
       return res;
     }
 
-    if (!path.startsWith("/api/") || SKIP.some((s) => path.startsWith(s))) {
+    if (!path.startsWith("/api/") || skip.some((s) => path.startsWith(s))) {
       return res;
     }
 
     const ok = await doRefresh();
     if (!ok) {
       // Session is unrecoverable — bounce to login.
-      window.location.href = "/login";
+      window.location.href = login;
       return res;
     }
 
@@ -88,9 +102,9 @@ function installInterceptor() {
   };
 }
 
-/** Mount inside the tenant layout to keep API calls authenticated across the
- *  15-minute access-token window. Renders nothing. */
-export function SessionRefresh() {
-  useEffect(() => { installInterceptor(); }, []);
+/** Mount inside an authenticated layout to keep API calls authenticated
+ *  across the 15-minute access-token window. Renders nothing. */
+export function SessionRefresh({ realm = "tenant" }: { realm?: Realm }) {
+  useEffect(() => { installInterceptor(realm); }, [realm]);
   return null;
 }

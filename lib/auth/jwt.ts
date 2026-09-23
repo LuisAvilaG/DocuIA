@@ -55,7 +55,9 @@ export async function verifyRefreshToken(token: string): Promise<RefreshTokenPay
   return refreshPayloadSchema.parse(payload);
 }
 
-async function validateSession(token: string, type: AccessTokenPayload["type"]): Promise<AccessTokenPayload | null> {
+// `ignoreIp` lets a layout tell "blocked network" apart from "no session" to
+// show an explanation; every data access keeps the allowlist enforced.
+async function validateSession(token: string, type: AccessTokenPayload["type"], { ignoreIp = false } = {}): Promise<AccessTokenPayload | null> {
   const payload = await verifyAccessToken(token);
   if (payload.type !== type) return null;
   const session = await db.query.authSessions.findFirst({
@@ -76,7 +78,7 @@ async function validateSession(token: string, type: AccessTokenPayload["type"]):
     columns: { role: true, email: true },
   });
   if (!user || !await isOrganizationActive(payload.orgId)) return null;
-  if (!await isTenantIpAllowed(payload.orgId, await headers())) return null;
+  if (!ignoreIp && !await isTenantIpAllowed(payload.orgId, await headers())) return null;
   return { ...payload, role: user.role, email: user.email };
 }
 
@@ -87,12 +89,12 @@ export async function isOrganizationActive(orgId: string): Promise<boolean> {
   }));
 }
 
-export async function getSessionFromCookies(): Promise<AccessTokenPayload | null> {
+export async function getSessionFromCookies(options: { ignoreIp?: boolean } = {}): Promise<AccessTokenPayload | null> {
   try {
     const cookieStore = await cookies();
     const token = cookieStore.get("access_token")?.value;
     if (!token) return null;
-    return await validateSession(token, "org_user");
+    return await validateSession(token, "org_user", options);
   } catch {
     return null;
   }

@@ -12,4 +12,5 @@ export * from "./expenses";
 export * from "./products";
 export * from "./contracts";
 export * from "./rate-limits";
+export * from "./vendor-rules";
 export * from "./relations";

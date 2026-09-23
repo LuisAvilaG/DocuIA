@@ -16,6 +16,8 @@ interface ConfigParam {
   min?: number;
   max?: number;
   options?: string[];
+  /** Display text per option value (values stay stable codes). */
+  optionLabels?: Record<string, string>;
   description?: string;
 }
 
@@ -285,7 +287,7 @@ export function FeatureToggle({ feature, orgId, subsidiaries = [], onEnabledChan
                     className="w-full bg-secondary/50 border border-border/60 rounded-md px-2 py-1 text-xs text-foreground focus:outline-none focus:border-primary/60"
                   >
                     {param.options.map((opt) => (
-                      <option key={opt} value={opt}>{opt}</option>
+                      <option key={opt} value={opt}>{param.optionLabels?.[opt] ?? opt}</option>
                     ))}
                   </select>
                 )}

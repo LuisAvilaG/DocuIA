@@ -67,6 +67,29 @@ export interface NSOpenPurchaseOrder {
   status: string;
 }
 
+export interface NSPurchaseOrderLine {
+  line: string;
+  item_internal_id: string;
+  item_name: string;
+  description: string;
+  quantity: number;
+  quantity_received: number;
+  quantity_billed: number;
+  rate: number;
+  amount: number;
+  units: string;
+  closed: boolean;
+}
+
+export interface NSPurchaseOrderDetail {
+  internal_id: string;
+  tranid: string;
+  date: string;
+  total: number;
+  currency: string;
+  lines: NSPurchaseOrderLine[];
+}
+
 async function nsGet(url: string, creds: NSCredentials): Promise<Response> {
   const authHeader = buildOAuthHeader(url, "GET", creds);
   return fetch(url, {
@@ -204,6 +227,30 @@ export async function fetchOpenPurchaseOrders(
       page_index: 0,
       page_size: 100,
     }, creds);
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 200)}`, status: res.status };
+    }
+    const json = await res.json();
+    if (!json.ok) return { ok: false, error: json.message || json.error || "Catalog script error" };
+    return { ok: true, data: json.results ?? [] };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** Line detail (received / billed quantities) of up to 20 POs, for 2- and 3-way matching. */
+export async function fetchPurchaseOrderLines(
+  creds: NSCredentials,
+  scriptId: string,
+  deployId: string,
+  poIds: string[],
+): Promise<NSRestletResult<NSPurchaseOrderDetail[]>> {
+  const ids = poIds.filter((id) => /^\d+$/.test(id)).slice(0, 20);
+  if (!ids.length) return { ok: true, data: [] };
+  const url = buildRestletUrl(creds.accountId, scriptId, deployId);
+  try {
+    const res = await nsPost(url, { type: "purchase_order_lines", po_ids: ids.join(",") }, creds);
     if (!res.ok) {
       const text = await res.text().catch(() => "");
       return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 200)}`, status: res.status };

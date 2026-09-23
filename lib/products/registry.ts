@@ -58,6 +58,12 @@ export const FEATURE_PRODUCT: Record<string, ProductKey> = {
   custom_netsuite_forms:  "ap_automation",
   auto_sync:              "ap_automation",
   sync_advanced:          "ap_automation",
+  po_matching:            "ap_automation",
+  three_way_match:        "ap_automation",
+  sat_cfdi_validation:    "ap_automation",
+  vendor_rules:           "ap_automation",
+  erp_attachments:        "ap_automation",
+  ap_advanced_stats:      "ap_automation",
   // Expense Management
   expense_management:      "expense_management",
   expense_approval:        "expense_management",

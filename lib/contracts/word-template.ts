@@ -1,4 +1,5 @@
 import PizZip from "pizzip";
+import { parseLocaleNumber } from "@/lib/numbers";
 
 export interface WordTemplateMapping {
   id: string;
@@ -102,20 +103,8 @@ function printableCell(value: unknown): string {
 }
 
 function numericValue(value: unknown): number | null {
-  if (typeof value === "number") return Number.isFinite(value) ? value : null;
-  if (typeof value !== "string") return null;
-  const raw = value.trim();
-  if (!/^\$?\s*[\d.,]+$/.test(raw)) return null;
-  const stripped = raw.replace(/[^\d.,]/g, "");
-  const separator = Math.max(stripped.lastIndexOf(","), stripped.lastIndexOf("."));
-  const decimals = separator >= 0 ? stripped.length - separator - 1 : 0;
-  const normalized = decimals === 3 || (stripped.match(/[.,]/g)?.length ?? 0) > 1
-    ? stripped.replace(/[.,]/g, "")
-    : separator >= 0
-      ? stripped.replace(/[.,]/g, (part, index) => index === separator ? "." : "")
-      : stripped;
-  const parsed = Number(normalized);
-  return Number.isFinite(parsed) ? parsed : null;
+  if (typeof value === "string" && !/^\$?\s*-?[\d.,]+$/.test(value.trim())) return null;
+  return parseLocaleNumber(value);
 }
 
 function printableMapping(value: unknown, format: WordTemplateMapping["format"]): string {

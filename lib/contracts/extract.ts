@@ -32,14 +32,14 @@ type Part = Record<string, unknown>;
 
 async function geminiJson(parts: Part[], apiKeyOverride?: string): Promise<Record<string, unknown>> {
   const apiKey = getApiKey(apiKeyOverride);
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${FLASH_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${FLASH_MODEL}:generateContent`;
   let response: Response | null = null;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     if (attempt > 0) await sleep(Math.min(8000, 500 * 2 ** (attempt - 1)) + Math.floor(Math.random() * 300));
     try {
       response = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
         body: JSON.stringify({ contents: [{ role: "user", parts }], generationConfig: { temperature: 0, responseMimeType: "application/json" } }),
         cache: "no-store",
         signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),

@@ -37,9 +37,11 @@ interface Report {
   items: Item[];
 }
 
-export function ReportDetail({ report, isAdmin }: { report: Report; isAdmin: boolean }) {
+export function ReportDetail({ report, isAdmin, isOwner }: { report: Report; isAdmin: boolean; isOwner: boolean }) {
   const router  = useRouter();
   const [submitting, setSubmitting] = useState(false);
+  const [reopening,  setReopening]  = useState(false);
+  const [notice,     setNotice]     = useState<string | null>(null);
   const [deleting,   setDeleting]   = useState<string | null>(null);
   const [error,      setError]      = useState<string | null>(null);
 
@@ -55,6 +57,16 @@ export function ReportDetail({ report, isAdmin }: { report: Report; isAdmin: boo
     const data = await res.json();
     setSubmitting(false);
     if (!res.ok) { setError(data.error ?? "Error al enviar"); return; }
+    if (data.syncError) setNotice(data.syncError);
+    router.refresh();
+  }
+
+  async function handleReopen() {
+    setReopening(true); setError(null);
+    const res  = await fetch(`/api/v1/expenses/reports/${report.id}/reopen`, { method: "POST" });
+    const data = await res.json().catch(() => ({}));
+    setReopening(false);
+    if (!res.ok) { setError(data.error ?? "No se pudo reabrir el informe"); return; }
     router.refresh();
   }
 
@@ -79,7 +91,7 @@ export function ReportDetail({ report, isAdmin }: { report: Report; isAdmin: boo
     <div className="flex-1 overflow-y-auto">
       {/* Header */}
       <div className="p-5 border-b border-border">
-        <a href="/expenses" className="text-xs text-muted-foreground hover:text-foreground transition-colors">← Mis gastos</a>
+        <Link href="/expenses" className="text-xs text-muted-foreground hover:text-foreground transition-colors">← Mis gastos</Link>
         <div className="flex items-start justify-between mt-2 gap-3">
           <div className="min-w-0">
             <h1 className="text-base font-semibold text-foreground truncate">{report.purpose}</h1>
@@ -100,8 +112,19 @@ export function ReportDetail({ report, isAdmin }: { report: Report; isAdmin: boo
           <div className="mt-3 p-3 rounded-lg bg-destructive/10 border border-destructive/20">
             <p className="text-xs text-destructive font-medium">Motivo del rechazo</p>
             <p className="text-xs text-destructive/80 mt-0.5">{report.rejectedReason}</p>
+            {report.status === "rejected" && (isOwner || isAdmin) && (
+              <button
+                onClick={handleReopen}
+                disabled={reopening}
+                className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium text-destructive hover:underline disabled:opacity-50"
+              >
+                {reopening && <Loader2 className="w-3 h-3 animate-spin" />}
+                Corregir y volver a enviar
+              </button>
+            )}
           </div>
         )}
+        {notice && <p className="mt-3 text-xs text-warning">{notice}</p>}
       </div>
 
       {/* Items */}

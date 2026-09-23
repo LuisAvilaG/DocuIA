@@ -97,33 +97,38 @@ function getInstruction(): string {
 }
 
 function getApiKey(override?: string): string {
-  const key = (override ?? process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY ?? "").trim();
+  // || not ??: an empty GOOGLE_API_KEY= (as in .env.example) must fall through.
+  const key = (override || process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || "").trim();
   if (!key) throw new Error("Missing GOOGLE_API_KEY — configura la clave de IA en el panel de administración");
   return key;
 }
 
+const GEMINI_TIMEOUT_MS = Number(process.env.GEMINI_TIMEOUT_MS) || 90_000;
+
 async function callGemini(parts: Record<string, unknown>[], apiKey?: string): Promise<string> {
   const model = "gemini-2.5-flash";
-  const url    = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(getApiKey(apiKey))}`;
+  const url    = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
 
   const res = await fetch(url, {
     method:  "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "x-goog-api-key": getApiKey(apiKey) },
     body: JSON.stringify({
       contents:         [{ role: "user", parts }],
       generationConfig: { temperature: 0, responseMimeType: "application/json" },
     }),
     cache: "no-store",
+    signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
   });
 
   if (!res.ok) throw new Error(`Gemini error (${res.status}): ${await res.text()}`);
 
-  const json = await res.json() as Record<string, unknown>;
-  const candidates = Array.isArray((json as any).candidates) ? (json as any).candidates : [];
+  type GeminiReply = { candidates?: Array<{ content?: { parts?: Array<{ text?: unknown }> } }> };
+  const json = await res.json() as GeminiReply;
+  const candidates = Array.isArray(json.candidates) ? json.candidates : [];
   let text = "";
   for (const c of candidates) {
-    for (const p of (Array.isArray((c as any)?.content?.parts) ? (c as any).content.parts : [])) {
-      const t = String((p as any)?.text ?? "").trim();
+    for (const p of (Array.isArray(c?.content?.parts) ? c.content.parts : [])) {
+      const t = String(p?.text ?? "").trim();
       if (t) { text = t; break; }
     }
     if (text) break;

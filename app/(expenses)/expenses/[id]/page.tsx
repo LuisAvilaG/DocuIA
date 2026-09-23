@@ -33,5 +33,11 @@ export default async function ReportPage({ params }: { params: Promise<{ id: str
   if (!report) notFound();
   if (!canReviewExpenses(session.role) && report.submitterId !== session.sub) notFound();
 
-  return <ReportDetail report={report as any} isAdmin={session.role === "admin"} />;
+  const serialized = {
+    ...report,
+    periodStart: report.periodStart?.toISOString() ?? null,
+    periodEnd:   report.periodEnd?.toISOString() ?? null,
+    submittedAt: report.submittedAt?.toISOString() ?? null,
+  };
+  return <ReportDetail report={serialized} isAdmin={session.role === "admin"} isOwner={report.submitterId === session.sub} />;
 }

@@ -1,3 +1,4 @@
+import { parseLocaleNumber } from "@/lib/numbers";
 export type ComparisonNormalizer = "auto" | "date" | "number" | "identifier" | "name" | "text";
 
 const DATE_FIELD_RE = /(date|fecha|vigenc|vencim|expir|expiry|start|end|inicio|termin)/i;
@@ -55,29 +56,7 @@ export function normalizeContractDate(value: unknown): string | null {
 
 /** Parses document amounts independently from decimal/thousands separator style. */
 export function normalizeContractNumber(value: unknown): number | null {
-  const raw = cleanText(value);
-  if (!raw) return null;
-  // Hyphens inside IDs and account numbers are separators; only a leading
-  // hyphen denotes a negative amount.
-  const minus = /^\s*-/.test(raw) ? -1 : 1;
-  const numeric = raw.replace(/[^\d.,]/g, "");
-  if (!/\d/.test(numeric)) return null;
-  const groupsAsThousands = /^\d{1,3}([.,]\d{3})+$/.test(numeric);
-  if (groupsAsThousands) return minus * Number(numeric.replace(/[.,]/g, ""));
-
-  const lastDot = numeric.lastIndexOf(".");
-  const lastComma = numeric.lastIndexOf(",");
-  const decimalAt = Math.max(lastDot, lastComma);
-  if (decimalAt === -1) return minus * Number(numeric);
-
-  const fraction = numeric.slice(decimalAt + 1).replace(/[.,]/g, "");
-  // One or two digits at the end conventionally denotes cents. Three digits
-  // are treated as a grouping separator so "$21.008" stays twenty-one thousand.
-  if (fraction.length > 0 && fraction.length <= 2) {
-    const whole = numeric.slice(0, decimalAt).replace(/[.,]/g, "");
-    return minus * Number(`${whole}.${fraction}`);
-  }
-  return minus * Number(numeric.replace(/[.,]/g, ""));
+  return parseLocaleNumber(typeof value === "number" ? value : cleanText(value));
 }
 
 export function normalizeContractText(value: unknown): string {

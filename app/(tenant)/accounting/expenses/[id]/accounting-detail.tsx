@@ -354,6 +354,17 @@ export function AccountingExpenseDetail({ report, canDecide, canSync }: { report
                       <BadgeCheck className="w-3 h-3" /> Sincronizado
                     </span>
                   )}
+                  {item.documents.filter((d) => d.fileKey).map((d) => (
+                    <a
+                      key={d.id}
+                      href={`/api/v1/expenses/documents/${d.id}/file`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-2 mr-3 inline-flex items-center gap-1 text-[0.6875rem] font-medium text-primary hover:underline"
+                    >
+                      Ver comprobante{d.originalName ? ` · ${d.originalName}` : ""}
+                    </a>
+                  ))}
                 </div>
 
                 {/* Item sync error */}

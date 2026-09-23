@@ -6,10 +6,27 @@ import { requireAdminSession } from "@/lib/auth/admin";
 import { isProductActive } from "@/lib/products";
 import type { TenantArea } from "@/lib/auth/permissions";
 
-export function isSameOriginMutation(req: Request, expectedOrigin: string): boolean {
+/**
+ * Origins this app answers on: the configured public URL and the one the
+ * browser actually reached through the reverse proxy (TLS terminates there, so
+ * the server alone would see http:// and reject every https:// form).
+ */
+export function allowedOrigins(req: Request, configured: string | undefined): string[] {
+  const out = new Set<string>();
+  if (configured) { try { out.add(new URL(configured).origin); } catch { /* ignore bad config */ } }
+  const host = (req.headers.get("x-forwarded-host") ?? req.headers.get("host") ?? "").split(",")[0].trim();
+  if (host) {
+    const proto = (req.headers.get("x-forwarded-proto") ?? new URL(req.url).protocol.replace(":", "")).split(",")[0].trim();
+    out.add(`${proto}://${host}`);
+  }
+  if (!out.size) out.add(new URL(req.url).origin);
+  return [...out];
+}
+
+export function isSameOriginMutation(req: Request, expectedOrigin: string | string[]): boolean {
   if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return true;
   const origin = req.headers.get("origin");
-  if (origin) return origin === expectedOrigin;
+  if (origin) return (Array.isArray(expectedOrigin) ? expectedOrigin : [expectedOrigin]).includes(origin);
   const site = req.headers.get("sec-fetch-site");
   if (site && site !== "same-origin" && site !== "none") return false;
   // Browser sessions must demonstrate same-origin intent; headless bearer
@@ -63,9 +80,7 @@ export function withApiSecurity<T extends unknown[]>(handler: (req: NextRequest,
   return async (req: NextRequest, ...args: T): Promise<Response> => {
     try {
       const path = req.nextUrl.pathname;
-      const configured = process.env.NEXT_PUBLIC_APP_URL;
-      const origin = configured ? new URL(configured).origin : req.nextUrl.origin;
-      if (!isSameOriginMutation(req, origin)) return NextResponse.json({ error: "Origen no permitido" }, { status: 403 });
+      if (!isSameOriginMutation(req, allowedOrigins(req, process.env.NEXT_PUBLIC_APP_URL))) return NextResponse.json({ error: "Origen no permitido" }, { status: 403 });
       const mutation = !["GET", "HEAD", "OPTIONS"].includes(req.method);
       const publicAuth = /^\/api\/(?:v1|admin)\/auth\/(?:login|logout|refresh|forgot-password|reset-password)$/.test(path);
       let principal = clientIp(req.headers);

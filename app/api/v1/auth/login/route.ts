@@ -12,6 +12,8 @@ import { signAccessToken, signRefreshToken, isOrganizationActive } from "@/lib/a
 import { rateLimit, clearRateLimit } from "@/lib/auth/rate-limit";
 import { logAudit } from "@/lib/audit/log";
 import { getTenantHomePath } from "@/lib/products";
+import { isTenantIpAllowed } from "@/lib/security/ip-allowlist";
+import { SESSION_TTL_MS, setAuthCookies } from "@/lib/auth/cookies";
 
 async function handlePOST(req: NextRequest) {
   const ip = clientIp(req.headers);
@@ -49,11 +51,20 @@ async function handlePOST(req: NextRequest) {
 
     await clearRateLimit(accountKey);
 
+    // Checked after the password so the response does not reveal which
+    // accounts exist, but before a session is issued: a session from a blocked
+    // network would only bounce between the login form and the portal.
+    if (!await isTenantIpAllowed(user.organizationId, req.headers)) {
+      return NextResponse.json({ error: "Tu dirección IP no tiene permiso para acceder a este portal. Contacta al administrador." }, { status: 403 });
+    }
+
     const homePath = await getTenantHomePath(user.organizationId);
 
     const sessionId  = uuid();
     const tokenNonce = randomBytes(32).toString("hex");
-    const expiresAt  = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const expiresAt  = new Date(Date.now() + SESSION_TTL_MS);
+
+    await db.update(orgUsers).set({ lastLoginAt: new Date() }).where(eq(orgUsers.id, user.id));
 
     await db.insert(authSessions).values({
       id:             sessionId,
@@ -87,16 +98,8 @@ async function handlePOST(req: NextRequest) {
       ipAddress: ip,
     });
 
-    const res    = NextResponse.json({ ok: true, homePath });
-    const secure = process.env.NODE_ENV === "production";
-
-    res.cookies.set("access_token", accessToken, {
-      httpOnly: true, secure, sameSite: "lax", maxAge: 60 * 15, path: "/",
-    });
-    res.cookies.set("refresh_token", refreshToken, {
-      httpOnly: true, secure, sameSite: "lax", maxAge: 60 * 60 * 24 * 7, path: "/",
-    });
-
+    const res = NextResponse.json({ ok: true, homePath });
+    setAuthCookies(res, "tenant", accessToken, refreshToken);
     return res;
   } catch (err) {
     console.error("[tenant-login]", err);

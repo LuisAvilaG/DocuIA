@@ -42,7 +42,7 @@ function TenantLoginForm() {
       });
       const data = await res.json();
       if (!res.ok) { setError(data.error ?? "Error al iniciar sesión"); return; }
-      router.replace(data.homePath ?? "/dashboard");
+      router.replace(returnTo ?? data.homePath ?? "/dashboard");
     } catch {
       setError("No se pudo conectar al servidor");
     } finally {

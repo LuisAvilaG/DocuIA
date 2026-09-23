@@ -13,11 +13,10 @@ import { DryRunBanner } from "@/components/tenant/dry-run-banner";
 import { isTenantIpAllowed } from "@/lib/security/ip-allowlist";
 
 export default async function TenantLayout({ children }: { children: React.ReactNode }) {
-  const rawSession = await getSessionFromCookies();
+  const rawSession = await getSessionFromCookies({ ignoreIp: true });
   if (!rawSession || rawSession.type !== "org_user" || !rawSession.orgId) redirect("/login");
   const session = rawSession as typeof rawSession & { orgId: string; role: string };
-  const requestHeaders = await headers();
-  const ipAllowed = await isTenantIpAllowed(session.orgId, requestHeaders);
+  if (!await isTenantIpAllowed(session.orgId, await headers())) redirect("/unavailable?reason=ip");
 
   // expense_submitter has its own layout under (expenses)
   if (session.role === "expense_submitter") redirect("/expenses");
@@ -30,20 +29,6 @@ export default async function TenantLayout({ children }: { children: React.React
   ]);
 
   if (!org) redirect("/login");
-
-  if (!ipAllowed) {
-    return (
-      <html lang="es">
-        <body style={{ fontFamily: "sans-serif", background: "#0f0f11", color: "#e5e5e5", display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", margin: 0 }}>
-          <div style={{ textAlign: "center", maxWidth: 360 }}>
-            <p style={{ fontSize: 48, margin: "0 0 12px" }}>🔒</p>
-            <h1 style={{ fontSize: 18, fontWeight: 600, margin: "0 0 8px" }}>Acceso restringido</h1>
-            <p style={{ fontSize: 13, color: "#888", margin: 0 }}>Tu dirección IP no tiene permiso para acceder a este portal. Contacta al administrador.</p>
-          </div>
-        </body>
-      </html>
-    );
-  }
 
   const featuresMap  = Object.fromEntries(resolvedFeatures.map(f => [f.id, f.isEnabled]));
   const dryRunActive = resolvedFeatures.find(f => f.id === "netsuite_dry_run")?.isEnabled ?? false;

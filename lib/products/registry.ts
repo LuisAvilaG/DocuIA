@@ -115,5 +115,5 @@ export const PRODUCT_MODULES: Record<ProductKey, NavModule[]> = {
 
 // Always-visible platform modules (not tied to a product).
 export const PLATFORM_MODULES: NavModule[] = [
-  { href: "/settings", label: "Configuración", icon: "Settings" },
+  { href: "/settings", label: "Configuración", icon: "Settings", adminOnly: true },
 ];

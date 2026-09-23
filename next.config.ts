@@ -21,6 +21,10 @@ const nextConfig: NextConfig = {
   // Self-contained server bundle for a small production Docker image.
   // (Next 16 no longer runs ESLint during build; CI lints separately.)
   output: "standalone",
+  // Docker builds run on the VPS: skip the memory-heavy type-check there (CI
+  // runs it) and use a single worker so the build does not exhaust RAM.
+  typescript: { ignoreBuildErrors: process.env.DOCKER_BUILD === "1" },
+  experimental: process.env.DOCKER_BUILD === "1" ? { cpus: 1 } : {},
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },

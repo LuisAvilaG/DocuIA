@@ -4,6 +4,10 @@ import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
 import { webhooks } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
+import { WEBHOOK_EVENTS } from "@/lib/webhooks/deliver";
+
+const VALID_EVENTS = new Set<string>(WEBHOOK_EVENTS);
+const NOT_FOUND = () => NextResponse.json({ error: "Webhook no encontrado" }, { status: 404 });
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -20,14 +24,21 @@ async function handlePATCH(req: NextRequest, { params }: Params) {
     const updates: Record<string, unknown> = {};
 
     if (typeof body.isActive === "boolean") updates.isActive = body.isActive;
-    if (Array.isArray(body.events))          updates.events  = body.events;
+    if (body.events !== undefined) {
+      if (!Array.isArray(body.events) || !body.events.length || !body.events.every((e) => typeof e === "string" && VALID_EVENTS.has(e))) {
+        return NextResponse.json({ error: `Eventos inválidos. Usa: ${WEBHOOK_EVENTS.join(", ")}` }, { status: 400 });
+      }
+      updates.events = [...new Set(body.events as string[])];
+    }
 
     if (Object.keys(updates).length === 0) {
       return NextResponse.json({ error: "Sin cambios" }, { status: 400 });
     }
 
-    await db.update(webhooks).set(updates)
-      .where(and(eq(webhooks.id, id), eq(webhooks.organizationId, session.orgId)));
+    const updated = await db.update(webhooks).set(updates)
+      .where(and(eq(webhooks.id, id), eq(webhooks.organizationId, session.orgId)))
+      .returning({ id: webhooks.id });
+    if (!updated.length) return NOT_FOUND();
 
     return NextResponse.json({ ok: true });
   } catch (err) {
@@ -45,8 +56,10 @@ async function handleDELETE(_req: NextRequest, { params }: Params) {
 
   const { id } = await params;
   try {
-    await db.delete(webhooks)
-      .where(and(eq(webhooks.id, id), eq(webhooks.organizationId, session.orgId)));
+    const deleted = await db.delete(webhooks)
+      .where(and(eq(webhooks.id, id), eq(webhooks.organizationId, session.orgId)))
+      .returning({ id: webhooks.id });
+    if (!deleted.length) return NOT_FOUND();
     return NextResponse.json({ ok: true });
   } catch (err) {
     console.error("[webhooks DELETE]", err);

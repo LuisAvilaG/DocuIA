@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getTenantSession } from "@/lib/auth/jwt";
+import { requireApAutomation } from "@/lib/products";
 import { db } from "@/lib/db";
 import { itemMappings, subsidiaries } from "@/db/schema";
 import { eq, inArray } from "drizzle-orm";
@@ -9,6 +10,7 @@ import { isFeatureEnabled } from "@/lib/features";
 export default async function MappingsPage() {
   const session = await getTenantSession({ area: "documents" });
   if (!session) redirect("/login");
+  await requireApAutomation(session.orgId);
   if (!await isFeatureEnabled(session.orgId, "auto_mapping")) redirect("/dashboard");
 
   type MappingRow = {

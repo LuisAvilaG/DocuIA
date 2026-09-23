@@ -5,7 +5,7 @@
 // (per-org grants come from the client wizard, not from boot).
 import { db } from "@/lib/db";
 import { products, features } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { and, eq, isNotNull, notInArray } from "drizzle-orm";
 import { PRODUCTS, FEATURE_PRODUCT } from "@/lib/products/registry";
 import { FEATURE_CATALOG } from "@/lib/features/catalog";
 
@@ -38,6 +38,10 @@ export async function seedCatalog(): Promise<void> {
   for (const [featureId, productKey] of Object.entries(FEATURE_PRODUCT)) {
     await db.update(features).set({ productKey }).where(eq(features.id, featureId));
   }
+  // A feature removed from the map becomes platform-wide again instead of
+  // staying tied to (and gated by) its old product.
+  await db.update(features).set({ productKey: null })
+    .where(and(isNotNull(features.productKey), notInArray(features.id, Object.keys(FEATURE_PRODUCT))));
 
   console.log(`[seed] catalog ready: ${PRODUCTS.length} products, ${FEATURE_CATALOG.length} features`);
 }

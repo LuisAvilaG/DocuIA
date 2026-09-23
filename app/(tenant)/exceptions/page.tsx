@@ -1,5 +1,7 @@
 import { redirect } from "next/navigation";
 import { getTenantSession } from "@/lib/auth/jwt";
+import { requireApAutomation } from "@/lib/products";
+import { isFeatureEnabled } from "@/lib/features";
 import { db } from "@/lib/db";
 import { exceptionQueue } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
@@ -8,6 +10,8 @@ import { ExceptionsClient } from "./client";
 export default async function ExceptionsPage() {
   const session = await getTenantSession({ area: "documents" });
   if (!session) redirect("/login");
+  await requireApAutomation(session.orgId);
+  if (!await isFeatureEnabled(session.orgId, "exception_queue")) redirect("/dashboard");
 
   let exceptions: {
     id: number; documentType: string | null; originalFilename: string | null;

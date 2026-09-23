@@ -3,7 +3,7 @@
  * Run: npx tsx scripts/seed-features.ts
  * Catalog lives in lib/features/catalog.ts (shared with the runtime seeder).
  */
-import "dotenv/config";
+import "./_load-env"; // must be first: loads .env.local before lib/db reads env
 import { db } from "@/lib/db";
 import { features } from "@/db/schema";
 import { FEATURE_CATALOG } from "@/lib/features/catalog";

@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./_load-env"; // must be first: loads .env.local before lib/db reads env
 import { db } from "@/lib/db";
 import { orgFeatures } from "@/db/schema";
 import { eq } from "drizzle-orm";

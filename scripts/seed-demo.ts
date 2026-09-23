@@ -3,7 +3,7 @@
  * Run: npx tsx scripts/seed-demo.ts
  * Safe to re-run: skips if data already exists (idempotent by slug).
  */
-import "dotenv/config";
+import "./_load-env"; // must be first: loads .env.local before lib/db reads env
 import { db } from "@/lib/db";
 import {
   organizations, orgUsers, subscriptions, usageDaily,

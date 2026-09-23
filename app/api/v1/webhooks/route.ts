@@ -6,9 +6,11 @@ import { webhooks } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { randomBytes } from "crypto";
 import { assertPublicHttpsUrl } from "@/lib/webhooks/ssrf";
+import { WEBHOOK_EVENTS } from "@/lib/webhooks/deliver";
+import { isFeatureEnabled } from "@/lib/features";
 
 const MAX_WEBHOOKS = 10;
-const VALID_EVENTS = new Set(["completed", "review", "failed"]);
+const VALID_EVENTS = new Set<string>(WEBHOOK_EVENTS);
 
 async function handleGET() {
   const session = await getTenantSession({ area: "settings" });
@@ -31,6 +33,10 @@ async function handlePOST(req: NextRequest) {
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (session.role !== "admin") {
     return NextResponse.json({ error: "Solo administradores pueden crear webhooks" }, { status: 403 });
+  }
+  // Delivery requires the feature too; a webhook created without it would never fire.
+  if (!await isFeatureEnabled(session.orgId, "webhook_system")) {
+    return NextResponse.json({ error: "Los webhooks no están habilitados para tu organización" }, { status: 403 });
   }
 
   try {

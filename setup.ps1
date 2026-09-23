@@ -194,6 +194,16 @@ if ($LASTEXITCODE -ne 0) {
   Write-OK "Datos de demo sembrados"
 }
 
+# ── 10b. Productos por organización ───────────────────────────
+# Sin org_products la org demo no ve ningún producto (solo "Configuración").
+Write-Step "Asignando productos a las organizaciones..."
+npx tsx scripts/seed-products.ts
+if ($LASTEXITCODE -ne 0) {
+  Write-Warn "seed-products tuvo un problema"
+} else {
+  Write-OK "Productos asignados"
+}
+
 # ── 11. Crear superadmin ───────────────────────────────────────
 Write-Step "Creando cuenta de superadmin..."
 npx tsx scripts/create-admin.ts $ADMIN_EMAIL $ADMIN_PASSWORD

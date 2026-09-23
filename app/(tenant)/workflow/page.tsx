@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getTenantSession } from "@/lib/auth/jwt";
+import { requireApAutomation } from "@/lib/products";
 import { db } from "@/lib/db";
 import { subsidiaries, historyDocuments } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
@@ -31,6 +32,7 @@ async function getWorkflowData(orgId: string) {
 export default async function WorkflowPage() {
   const session = await getTenantSession({ area: "documents" });
   if (!session) redirect("/login");
+  await requireApAutomation(session.orgId);
 
   const { subs, recentDocs } = await getWorkflowData(session.orgId);
 

@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getTenantSession } from "@/lib/auth/jwt";
+import { requireApAutomation } from "@/lib/products";
 import { db } from "@/lib/db";
 import { subsidiaries, catalogItems, catalogVendors, catalogLocations } from "@/db/schema";
 import { eq, inArray } from "drizzle-orm";
@@ -35,6 +36,7 @@ export type CatalogLocation = {
 export default async function CatalogsPage() {
   const session = await getTenantSession({ area: "documents" });
   if (!session) redirect("/login");
+  await requireApAutomation(session.orgId);
 
   let subs: { id: string; name: string }[] = [];
   const items: Record<string, CatalogItem[]>     = {};

@@ -3,6 +3,7 @@ import { clientIp } from "./request-ip";
 import { rateLimit } from "@/lib/auth/rate-limit";
 import { getSessionFromCookies, getTenantSession } from "@/lib/auth/jwt";
 import { requireAdminSession } from "@/lib/auth/admin";
+import { isProductActive } from "@/lib/products";
 import type { TenantArea } from "@/lib/auth/permissions";
 
 export function isSameOriginMutation(req: Request, expectedOrigin: string): boolean {
@@ -16,6 +17,8 @@ export function isSameOriginMutation(req: Request, expectedOrigin: string): bool
   if (req.headers.has("cookie")) return site === "same-origin";
   return true;
 }
+
+const AP_API = /^\/api\/v1\/(workflow|documents|exceptions|history|mappings|catalog|catalogs)(\/|$)/;
 
 export function tenantAreaForPath(path: string): TenantArea {
   if (path.startsWith("/api/v1/expenses/")) return "expenses";
@@ -81,6 +84,11 @@ export function withApiSecurity<T extends unknown[]>(handler: (req: NextRequest,
             : NextResponse.json({ error: "No autorizado" }, { status: 401 });
         }
         principal = `${session.orgId}:${session.sub}`;
+        // AP Automation APIs need the product itself, not only a role that
+        // may read documents (a contracts-only tenant has no AP access).
+        if (AP_API.test(path) && !await isProductActive(session.orgId, "ap_automation")) {
+          return NextResponse.json({ error: "AP Automation no está activo para tu organización" }, { status: 403 });
+        }
       } else if ((path.startsWith("/api/admin/") || path.startsWith("/api/scripts/")) && !publicAuth) {
         const { error, session } = await requireAdminSession();
         if (error) return error;

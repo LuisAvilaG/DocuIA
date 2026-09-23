@@ -17,6 +17,14 @@ const ALLOWED_MIME = new Set([
 ]);
 const MAX_SIZE = 20 * 1024 * 1024;
 
+function ocrErrorMessage(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (msg.includes("GOOGLE_API_KEY") || msg.includes("clave de IA")) {
+    return "La lectura automática no está configurada para tu organización. Ingresa los datos manualmente.";
+  }
+  return "No se pudo leer el comprobante automáticamente. Ingresa los datos manualmente.";
+}
+
 async function handlePOST(req: NextRequest) {
   const session = await getTenantSession({ area: "expenses", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
@@ -44,23 +52,21 @@ async function handlePOST(req: NextRequest) {
     if (!matchesFileType(buffer, file.type)) return NextResponse.json({ error: "El contenido no corresponde al tipo de archivo" }, { status: 415 });
     const fileKey = `expenses/${session.orgId}/${randomUUID()}-${file.name.replace(/[^a-zA-Z0-9.\-_]/g, "_")}`;
 
-    const [, ocrResult] = await Promise.all([
-      uploadFile(buffer, fileKey, file.type),
-      extractExpenseDocument(buffer, file.type, { apiKey }),
-    ]);
-
+    await uploadFile(buffer, fileKey, file.type);
     const uploadReceipt = signUploadReceipt({ orgId: session.orgId, userId: session.sub, fileKey, mimeType: file.type, originalName: file.name.slice(0, 255) });
-    return NextResponse.json({ ok: true, fileKey, uploadReceipt, ocr: ocrResult });
+
+    // The receipt is stored either way: when OCR is unavailable the person
+    // types the data and the file still travels with the expense line.
+    try {
+      const ocrResult = await extractExpenseDocument(buffer, file.type, { apiKey });
+      return NextResponse.json({ ok: true, fileKey, uploadReceipt, ocr: ocrResult });
+    } catch (err) {
+      console.error("[expenses/ocr] extraction failed", err instanceof Error ? err.message : err);
+      return NextResponse.json({ ok: true, fileKey, uploadReceipt, ocr: null, ocrError: ocrErrorMessage(err) });
+    }
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error("[expenses/ocr]", msg);
-    if (msg.includes("GOOGLE_API_KEY") || msg.includes("clave de IA")) {
-      return NextResponse.json({ error: "Clave de IA no configurada para este cliente. Configúrala en el panel de administración." }, { status: 503 });
-    }
-    if (msg.includes("Gemini error")) {
-      return NextResponse.json({ error: "El servicio OCR no pudo procesar el archivo." }, { status: 502 });
-    }
-    return NextResponse.json({ error: "Error al procesar el documento" }, { status: 500 });
+    console.error("[expenses/ocr]", err instanceof Error ? err.message : err);
+    return NextResponse.json({ error: "No se pudo guardar el comprobante. Inténtalo de nuevo." }, { status: 500 });
   }
 }
 

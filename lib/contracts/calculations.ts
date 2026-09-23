@@ -1,3 +1,4 @@
+import { parseLocaleNumber } from "@/lib/numbers";
 export const CALCULATION_OPERATIONS = ["percentage", "multiply", "add", "subtract", "divide"] as const;
 export type CalculationOperation = typeof CALCULATION_OPERATIONS[number];
 
@@ -55,27 +56,7 @@ export interface CalculationResult {
 type DocsByTypeLike = Record<string, Array<{ values: Record<string, unknown> }>>;
 
 function toNumber(value: unknown): number | null {
-  if (typeof value === "number") return Number.isFinite(value) ? value : null;
-  if (typeof value !== "string") return null;
-  let raw = value.trim().replace(/[^\d,.-]/g, "");
-  if (!raw) return null;
-  const commas = [...raw.matchAll(/,/g)].map((match) => match.index ?? 0);
-  const dots = [...raw.matchAll(/\./g)].map((match) => match.index ?? 0);
-  const lastComma = commas.at(-1) ?? -1;
-  const lastDot = dots.at(-1) ?? -1;
-  const decimal = lastComma > lastDot ? "," : ".";
-  const lastSeparator = Math.max(lastComma, lastDot);
-  const decimals = lastSeparator >= 0 ? raw.length - lastSeparator - 1 : 0;
-
-  // A single separator followed by three digits is conventionally a thousands
-  // separator in contract values ("4.603.482.380" / "4,603,482,380").
-  if ((commas.length + dots.length > 1) || decimals === 3) {
-    raw = raw.replace(/[.,]/g, "");
-  } else if (lastSeparator >= 0) {
-    raw = raw.replace(decimal === "," ? /\./g : /,/g, "").replace(decimal, ".");
-  }
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) ? parsed : null;
+  return parseLocaleNumber(value);
 }
 
 function refName(ref: CalculationReference | CalculationOperand | number): string {

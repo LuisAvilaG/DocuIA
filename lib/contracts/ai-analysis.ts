@@ -36,10 +36,11 @@ function jsonObject(raw: string): Record<string, unknown> {
 
 async function requestJson(instruction: string): Promise<Record<string, unknown>> {
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${encodeURIComponent(getApiKey())}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      // Key in a header, not the URL, so it never lands in proxy or access logs.
+      headers: { "Content-Type": "application/json", "x-goog-api-key": getApiKey() },
       cache: "no-store",
       signal: AbortSignal.timeout(TIMEOUT_MS),
       body: JSON.stringify({

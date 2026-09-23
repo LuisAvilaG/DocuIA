@@ -237,7 +237,7 @@ async function callModel(
 }> {
   const apiKey = getApiKey(apiKeyOverride);
   const maxOutputTokens = outputTokenLimit(maxChars);
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
 
   const maxRetries = retry?.maxRetries ?? 3;
   const attempts = maxRetries + 1;
@@ -252,7 +252,7 @@ async function callModel(
     try {
       response = await fetch(url, {
         method:  "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
         body: JSON.stringify({
           contents:         [{ role: "user", parts }],
           generationConfig: {

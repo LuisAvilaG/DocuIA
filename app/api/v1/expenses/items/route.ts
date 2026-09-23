@@ -9,15 +9,9 @@ import { expenseReports, expenseItems, expenseDocuments } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { validateExpenseAmounts } from "@/lib/expense/tax-engine";
-
-const EXPENSE_DOCUMENT_TYPES = ["invoice", "receipt", "cuenta_cobro", "documento_equivalente", "unknown"] as const;
-type ExpenseDocumentType = typeof EXPENSE_DOCUMENT_TYPES[number];
-
-function toExpenseDocumentType(value: string): ExpenseDocumentType {
-  return (EXPENSE_DOCUMENT_TYPES as readonly string[]).includes(value)
-    ? value as ExpenseDocumentType
-    : "unknown";
-}
+import {
+  createExpenseItemSchema, expenseRecordType, firstIssue, needsDocumentoEquivalente, resolveAmounts,
+} from "@/lib/expense/item-input";
 
 async function handlePOST(req: NextRequest) {
   const session = await getTenantSession({ area: "expenses", permission: "write" });
@@ -27,45 +21,16 @@ async function handlePOST(req: NextRequest) {
   }
 
   try {
-    const body = await req.json() as {
-      reportId:                 string;
-      categoryId?:              number;
-      departmentId?:            number;
-      classId?:                 number;
-      expenseDate?:             string;
-      description?:             string;
-      vendorName?:              string;
-      vendorNit?:               string;
-      invoiceNumber?:           string;
-      invoiceDate?:             string;
-      subtotal:                 number;
-      taxAmount?:               number;
-      retentionAmount?:         number;
-      total:                    number;
-      currency?:                string;
-      paymentMethod:            "personal" | "company_pays_vendor";
-      documentTypeDetected?:    string;
-      needsDocumentoEquivalente?: boolean;
-      fileKey?:                 string;
-      uploadReceipt?:           string;
-      mimeType?:                string;
-      originalName?:            string;
-      ocrRaw?:                  Record<string, unknown>;
-      ocrConfidence?:           number;
-    };
+    const parsed = createExpenseItemSchema.safeParse(await req.json().catch(() => null));
+    if (!parsed.success) return NextResponse.json({ error: firstIssue(parsed.error) }, { status: 400 });
+    const body = parsed.data;
 
-    if (!body.reportId) return NextResponse.json({ error: "reportId requerido" }, { status: 400 });
     if (!await ownsExpenseCatalogReferences(session.orgId, body)) return NextResponse.json({ error: "Categoría, departamento o clase no válidos" }, { status: 400 });
     const receipt = body.fileKey ? verifyUploadReceipt(body.uploadReceipt, session.orgId, session.sub, body.fileKey) : null;
     if (body.fileKey && !receipt) return NextResponse.json({ error: "El archivo no corresponde a una carga tuya válida. Vuelve a cargarlo." }, { status: 400 });
 
     // SECURITY: never trust client-computed money. Enforce arithmetic + bounds.
-    const amounts = {
-      subtotal:        Number(body.subtotal),
-      taxAmount:       Number(body.taxAmount ?? 0),
-      retentionAmount: Number(body.retentionAmount ?? 0),
-      total:           Number(body.total),
-    };
+    const amounts = resolveAmounts({ ...body, total: body.total });
     const amountCheck = validateExpenseAmounts(amounts);
     if (!amountCheck.ok) return NextResponse.json({ error: amountCheck.error }, { status: 400 });
 
@@ -85,20 +50,8 @@ async function handlePOST(req: NextRequest) {
     }
 
     const nextLine = (report.items.reduce((max, i) => Math.max(max, i.lineNumber), 0)) + 1;
-
-    // Auto-detect if needs documento equivalente
-    const docType = toExpenseDocumentType(body.documentTypeDetected ?? "unknown");
-    const needsDE = body.needsDocumentoEquivalente ??
-      (docType === "receipt" || docType === "cuenta_cobro");
-
-    // Determine NS record type
-    // Company-paid receipts and cuentas de cobro become Vendor Bills when they
-    // need a Documento Equivalente, so the configured NetSuite Custom Form can
-    // be applied during sync.
-    const nsRecordType = body.paymentMethod === "company_pays_vendor" && (docType === "invoice" || needsDE)
-      ? "vendor_bill" as const
-      : "expense_report" as const;
-
+    const docType = body.documentTypeDetected ?? "unknown";
+    const needsDE = needsDocumentoEquivalente(docType, body.needsDocumentoEquivalente);
     const itemId = randomUUID();
 
     await db.insert(expenseItems).values({
@@ -108,12 +61,12 @@ async function handlePOST(req: NextRequest) {
       categoryId:               body.categoryId ?? null,
       departmentId:             body.departmentId ?? null,
       classId:                  body.classId ?? null,
-      expenseDate:              body.expenseDate ? new Date(body.expenseDate) : null,
-      description:              body.description?.trim() || null,
-      vendorName:               body.vendorName?.trim() || null,
-      vendorNit:                body.vendorNit?.trim() || null,
-      invoiceNumber:            body.invoiceNumber?.trim() || null,
-      invoiceDate:              body.invoiceDate ? new Date(body.invoiceDate) : null,
+      expenseDate:              body.expenseDate ?? null,
+      description:              body.description ?? null,
+      vendorName:               body.vendorName ?? null,
+      vendorNit:                body.vendorNit ?? null,
+      invoiceNumber:            body.invoiceNumber ?? null,
+      invoiceDate:              body.invoiceDate ?? null,
       subtotal:                 String(amounts.subtotal),
       taxAmount:                String(amounts.taxAmount),
       retentionAmount:          String(amounts.retentionAmount),
@@ -122,7 +75,7 @@ async function handlePOST(req: NextRequest) {
       paymentMethod:            body.paymentMethod,
       documentTypeDetected:     docType,
       needsDocumentoEquivalente: needsDE,
-      nsRecordType,
+      nsRecordType:             expenseRecordType(body.paymentMethod, docType, needsDE),
     });
 
     if (body.fileKey) {
@@ -131,8 +84,6 @@ async function handlePOST(req: NextRequest) {
         fileKey:              body.fileKey,
         mimeType:             receipt!.mimeType,
         originalName:         receipt!.originalName,
-        ocrRaw:               body.ocrRaw ?? null,
-        ocrConfidence:        body.ocrConfidence != null ? String(body.ocrConfidence) : null,
         documentTypeDetected: docType,
       });
     }

@@ -5,6 +5,7 @@ import { eq, and, inArray, lt, or } from "drizzle-orm";
 import { decryptField } from "@/lib/crypto/encrypt";
 import { buildOAuthHeader, buildRestApiUrl, NSCredentials } from "@/lib/netsuite/oauth";
 import { getExpenseManagementConfig } from "@/lib/expense/config";
+import { nitCandidates } from "@/lib/expense/nit";
 
 const NS_TIMEOUT_MS = Number(process.env.NETSUITE_TIMEOUT_MS) || 30_000;
 
@@ -20,7 +21,7 @@ async function nsRest(
   url: string,
   creds: NSCredentials,
   body?: unknown,
-): Promise<{ ok: boolean; status: number; data: unknown }> {
+): Promise<{ ok: boolean; status: number; data: unknown; location: string | null }> {
   const authHeader = buildOAuthHeader(url, method, creds);
   const res = await fetch(url, {
     method,
@@ -34,7 +35,8 @@ async function nsRest(
   });
   let data: unknown;
   try { data = await res.json(); } catch { data = null; }
-  return { ok: res.ok, status: res.status, data };
+  // Record creation replies 204 with the new record's URL in Location.
+  return { ok: res.ok, status: res.status, data, location: res.headers.get("location") };
 }
 
 async function suiteQL(
@@ -57,11 +59,14 @@ async function suiteQL(
 // ── Vendor resolution ─────────────────────────────────────────────────
 
 async function lookupVendor(creds: NSCredentials, vendorNit: string): Promise<string | null> {
-  const safe = vendorNit.replace(/[^0-9A-Za-z\-]/g, "");
+  const candidates = nitCandidates(vendorNit);
+  if (!candidates.length) return null;
+  const list = candidates.map((c) => `'${c}'`).join(", ");
   const rows = await suiteQL(
     creds,
-    `SELECT id FROM vendor WHERE REGEXP_LIKE(entityid, '${safe}') AND isinactive = 'F'`,
+    `SELECT id FROM vendor WHERE isinactive = 'F' AND (UPPER(entityid) IN (${list}) OR REPLACE(UPPER(entityid), '-', '') IN (${list}))`,
   );
+  if (rows.length > 1) throw new Error(`Hay más de un proveedor activo en NetSuite con el NIT ${vendorNit}`);
   return rows.length > 0 && rows[0].id ? String(rows[0].id) : null;
 }
 
@@ -103,6 +108,13 @@ interface ExpenseLineForNS {
   class?:      { id: string };
 }
 
+// A record created by an earlier run that could not read its ID (or that
+// timed out after NetSuite committed) must be reused, not posted again.
+async function findTransactionByExternalId(creds: NSCredentials, externalId: string): Promise<string | null> {
+  const rows = await suiteQL(creds, `SELECT id FROM transaction WHERE externalid = '${externalId.replace(/'/g, "''")}'`);
+  return rows.length > 0 && rows[0].id ? String(rows[0].id) : null;
+}
+
 async function createNSExpenseReport(
   creds: NSCredentials,
   opts: {
@@ -114,6 +126,8 @@ async function createNSExpenseReport(
     lines:          ExpenseLineForNS[];
   },
 ): Promise<string> {
+  const existing = await findTransactionByExternalId(creds, opts.externalId);
+  if (existing) return existing;
   const url = `${buildRestApiUrl(creds.accountId)}/expensereport`;
   const result = await nsRest("POST", url, creds, {
     externalId:  opts.externalId,
@@ -131,6 +145,10 @@ async function createNSExpenseReport(
   const created = result.data as Record<string, unknown> | null;
   if (created?.id) return String(created.id);
   if (created?.internalid) return String(created.internalid);
+  const fromLocation = result.location?.match(/\/expensereport\/(\d+)/i)?.[1];
+  if (fromLocation) return fromLocation;
+  const created204 = await findTransactionByExternalId(creds, opts.externalId);
+  if (created204) return created204;
   throw new Error("NS creó el Expense Report pero no devolvió el ID");
 }
 
@@ -339,6 +357,9 @@ export async function syncReportToNetsuite(reportId: string, orgId: string): Pro
       const found = await lookupVendor(creds, nit);
       if (found) {
         vendorMap.set(nit, found);
+        await db.update(expenseItems)
+          .set({ vendorNsInternalId: found, updatedAt: new Date() })
+          .where(and(eq(expenseItems.reportId, reportId), eq(expenseItems.vendorNit, nit)));
       } else if (expenseConfig.autoCreateVendor) {
         // The feature explicitly allows creating a missing vendor in NetSuite.
         const nsId = await createVendor(creds, nit, item.vendorName ?? nit, subsidiaryNsId);

@@ -35,12 +35,12 @@ export function ExpenseReportsList({ reports }: { reports: Report[] }) {
         <p className="text-xs text-muted-foreground mt-1 max-w-xs">
           Crea tu primer informe para empezar a registrar tus gastos en campo.
         </p>
-        <a
+        <Link
           href="/expenses/new"
           className="mt-4 inline-flex items-center px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
         >
           Nuevo informe
-        </a>
+        </Link>
       </div>
     );
   }

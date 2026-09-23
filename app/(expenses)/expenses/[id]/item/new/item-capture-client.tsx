@@ -1,5 +1,6 @@
 "use client";
 
+import { parseLocaleNumber } from "@/lib/numbers";
 import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
@@ -9,6 +10,12 @@ import {
 } from "lucide-react";
 import { calculateTaxes } from "@/lib/expense/tax-engine";
 import type { ExpenseOcrResult } from "@/lib/expense/extract";
+
+// Typed amounts accept "150.000", "1.234,56" or "1,234.56".
+const amount = (value: string): number | null => parseLocaleNumber(value);
+// OCR numbers rounded to cents, so "1234.567" can never read back as thousands.
+const amountText = (value: number | null | undefined): string =>
+  value == null ? "" : String(Math.round(value * 100) / 100);
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -85,9 +92,9 @@ export function ItemCaptureClient({ reportId, reportPurpose, categories, departm
   const validateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function recalculateTotal(nextSubtotal: string, nextTax: string, nextRetention: string) {
-    const s = parseFloat(nextSubtotal) || 0;
-    const t = parseFloat(nextTax) || 0;
-    const r = parseFloat(nextRetention) || 0;
+    const s = amount(nextSubtotal) ?? 0;
+    const t = amount(nextTax) ?? 0;
+    const r = amount(nextRetention) ?? 0;
     if (s > 0) setTotal(String(parseFloat((s + t - r).toFixed(2))));
   }
 
@@ -104,7 +111,7 @@ export function ItemCaptureClient({ reportId, reportPurpose, categories, departm
           body: JSON.stringify({
             vendorNit:     vendorNit || undefined,
             invoiceNumber: invoiceNumber || undefined,
-            subtotal:      parseFloat(subtotal) || undefined,
+            subtotal:      amount(subtotal) ?? undefined,
             categoryId:    categoryId ? Number(categoryId) : undefined,
           }),
         });
@@ -119,7 +126,7 @@ export function ItemCaptureClient({ reportId, reportPurpose, categories, departm
 
   // Client-side tax preview
   const taxPreview = (() => {
-    const s = parseFloat(subtotal);
+    const s = amount(subtotal);
     if (!s || !ocr?.documentType) return null;
     try {
       return calculateTaxes({
@@ -152,15 +159,22 @@ export function ItemCaptureClient({ reportId, reportPurpose, categories, departm
       if (!res.ok) { setError(data.error ?? "Error al procesar el documento"); setStep("capture"); return; }
       setFileKey(data.fileKey);
       setUploadReceipt(data.uploadReceipt);
+      if (!data.ocr) {
+        // Stored without OCR: keep the file and let the person type the data.
+        setOcr(null);
+        setError(data.ocrError ?? "Ingresa los datos manualmente.");
+        setStep("review");
+        return;
+      }
       setOcr(data.ocr);
       setVendorName(data.ocr.vendorName ?? "");
       setVendorNit(data.ocr.vendorNit ?? "");
       setInvoiceNumber(data.ocr.invoiceNumber ?? "");
       setInvoiceDate(data.ocr.invoiceDate ?? "");
-      setSubtotal(data.ocr.subtotal != null ? String(data.ocr.subtotal) : "");
-      setTaxAmount(data.ocr.taxAmount != null ? String(data.ocr.taxAmount) : "");
-      setRetentionAmount(data.ocr.retentionAmount != null ? String(data.ocr.retentionAmount) : "");
-      setTotal(data.ocr.total != null ? String(data.ocr.total) : "");
+      setSubtotal(amountText(data.ocr.subtotal));
+      setTaxAmount(amountText(data.ocr.taxAmount));
+      setRetentionAmount(amountText(data.ocr.retentionAmount));
+      setTotal(amountText(data.ocr.total));
       setCurrency(data.ocr.currency || "COP");
       setStep("review");
     } catch {
@@ -181,7 +195,7 @@ export function ItemCaptureClient({ reportId, reportPurpose, categories, departm
   // Submit item
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!total || parseFloat(total) <= 0) { setError("Ingresa el total del documento"); return; }
+    if ((amount(total) ?? 0) <= 0) { setError("Ingresa el total del documento"); return; }
     setError(null);
     setStep("submitting");
     try {
@@ -197,12 +211,13 @@ export function ItemCaptureClient({ reportId, reportPurpose, categories, departm
           vendorNit:       vendorNit || undefined,
           invoiceNumber:   invoiceNumber || undefined,
           invoiceDate:     invoiceDate || undefined,
-          subtotal:        subtotal ? parseFloat(subtotal) : undefined,
-          taxAmount:       taxAmount ? parseFloat(taxAmount) : undefined,
-          retentionAmount: retentionAmount ? parseFloat(retentionAmount) : undefined,
-          total:           parseFloat(total),
+          // Typed amounts accept "150.000", "1.234,56" or "1,234.56".
+          subtotal:        amount(subtotal) ?? undefined,
+          taxAmount:       amount(taxAmount) ?? undefined,
+          retentionAmount: amount(retentionAmount) ?? undefined,
+          total:           amount(total),
           currency,
-          categoryId:      Number(categoryId),
+          categoryId:      categoryId ? Number(categoryId) : null,
           departmentId:    departmentId ? Number(departmentId) : undefined,
           classId:         classId ? Number(classId) : undefined,
           paymentMethod,
@@ -481,6 +496,8 @@ export function ItemCaptureClient({ reportId, reportPurpose, categories, departm
                 <option value="COP">COP — Peso colombiano</option>
                 <option value="MXN">MXN — Peso mexicano</option>
                 <option value="USD">USD — Dólar estadounidense</option>
+                {/* Keep a currency read from the receipt visible and selected. */}
+                {!["COP", "MXN", "USD"].includes(currency) && <option value={currency}>{currency}</option>}
               </select>
               <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             </div>
@@ -702,7 +719,7 @@ export function ItemCaptureClient({ reportId, reportPurpose, categories, departm
       >
         <button
           type="button"
-          disabled={isSubmitting || !total || parseFloat(total) <= 0}
+          disabled={isSubmitting || (amount(total) ?? 0) <= 0}
           onClick={handleSubmit}
           className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >

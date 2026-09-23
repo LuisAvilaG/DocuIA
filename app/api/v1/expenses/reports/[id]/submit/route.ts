@@ -43,7 +43,7 @@ async function handlePOST(
     // Sin aprobación requerida: auto-aprobar y sincronizar directamente.
     // The status guard makes a double click submit (and sync) only once.
     const claimed = await db.update(expenseReports)
-      .set({ status: "approved", submittedAt: new Date(), approvedAt: new Date(), updatedAt: new Date() })
+      .set({ status: "approved", submittedAt: new Date(), approvedAt: new Date(), rejectedReason: null, updatedAt: new Date() })
       .where(and(eq(expenseReports.id, id), eq(expenseReports.status, "draft")))
       .returning({ id: expenseReports.id });
     if (!claimed.length) return NextResponse.json({ error: "El informe cambió de estado mientras lo procesabas. Recarga la página." }, { status: 409 });
@@ -71,7 +71,7 @@ async function handlePOST(
 
   // Con aprobación: pasar a submitted y notificar admins
   const submitted = await db.update(expenseReports)
-    .set({ status: "submitted", submittedAt: new Date(), updatedAt: new Date() })
+    .set({ status: "submitted", submittedAt: new Date(), rejectedReason: null, updatedAt: new Date() })
     .where(and(eq(expenseReports.id, id), eq(expenseReports.status, "draft")))
     .returning({ id: expenseReports.id });
   if (!submitted.length) return NextResponse.json({ error: "El informe cambió de estado mientras lo procesabas. Recarga la página." }, { status: 409 });

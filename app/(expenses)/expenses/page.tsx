@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { expenseReports } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
 import { ExpenseReportsList } from "./reports-list";
+import Link from "next/link";
 
 export default async function ExpensesPage() {
   const session = await getTenantSession({ area: "expenses" });
@@ -22,14 +23,18 @@ export default async function ExpensesPage() {
           <h1 className="text-base font-semibold text-foreground">Mis informes de gastos</h1>
           <p className="text-xs text-muted-foreground mt-0.5">{reports.length} informe{reports.length !== 1 ? "s" : ""}</p>
         </div>
-        <a
+        <Link
           href="/expenses/new"
           className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
         >
           + Nuevo informe
-        </a>
+        </Link>
       </div>
-      <ExpenseReportsList reports={reports as any} />
+      <ExpenseReportsList reports={reports.map((r) => ({
+        ...r,
+        submittedAt: r.submittedAt?.toISOString() ?? null,
+        createdAt:   r.createdAt.toISOString(),
+      }))} />
     </div>
   );
 }

@@ -1,6 +1,7 @@
 ﻿"use client";
 
 import { useMemo } from "react";
+import Link from "next/link";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend,
@@ -274,12 +275,12 @@ export function StatisticsClient({ rows, expenseStats }: Props) {
           <div className="bg-card rounded-xl border border-border overflow-hidden">
             <div className="px-5 py-3.5 border-b border-border flex items-center justify-between">
               <h2 className="text-sm font-semibold tracking-[-0.01em] text-foreground">Módulo de Gastos</h2>
-              <a
+              <Link
                 href="/accounting/expenses"
                 className="text-xs text-primary hover:underline"
               >
                 Ver todos →
-              </a>
+              </Link>
             </div>
             <div className="p-5 grid grid-cols-2 gap-4">
               <div>

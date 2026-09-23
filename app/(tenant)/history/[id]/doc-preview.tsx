@@ -22,36 +22,17 @@ function mimeFromExt(ext: string): "pdf" | "image" | "xml" | "unknown" {
   return "unknown";
 }
 
-export function DocPreview({ docId, activeBbox, fileExt }: DocPreviewProps) {
-  const kind = mimeFromExt(fileExt.toLowerCase());
-  const fileUrl = `/api/v1/documents/${docId}/file`;
+interface ToolbarProps {
+  numPages: number;
+  pageNum: number;
+  setPageNum: React.Dispatch<React.SetStateAction<number>>;
+  scale: number;
+  zoomIn: () => void;
+  zoomOut: () => void;
+}
 
-  const [numPages, setNumPages] = useState(0);
-  const [pageNum, setPageNum] = useState(1);
-  const [scale, setScale] = useState(1.0);
-  const [renderWidth, setRenderWidth] = useState(480);
-
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  // Measure container width for responsive PDF rendering
-  useEffect(() => {
-    if (!containerRef.current) return;
-    const obs = new ResizeObserver(([entry]) => {
-      if (entry) setRenderWidth(Math.max(240, entry.contentRect.width - 32));
-    });
-    obs.observe(containerRef.current);
-    return () => obs.disconnect();
-  }, []);
-
-  // Jump to bbox page when active line changes
-  useEffect(() => {
-    if (activeBbox?.page) setPageNum(activeBbox.page);
-  }, [activeBbox]);
-
-  const zoomIn  = useCallback(() => setScale(s => Math.min(3, +(s + 0.25).toFixed(2))), []);
-  const zoomOut = useCallback(() => setScale(s => Math.max(0.4, +(s - 0.25).toFixed(2))), []);
-
-  const Toolbar = () => (
+function Toolbar({ numPages, pageNum, setPageNum, scale, zoomIn, zoomOut }: ToolbarProps) {
+  return (
     <div className="px-4 py-2 border-b border-border bg-card flex items-center gap-2 shrink-0">
       {numPages > 1 && (
         <>
@@ -87,31 +68,71 @@ export function DocPreview({ docId, activeBbox, fileExt }: DocPreviewProps) {
       </button>
     </div>
   );
+}
 
-  const BboxHighlight = ({ bbox, page }: { bbox: BBox | undefined; page?: number }) => {
-    if (!bbox) return null;
-    if (page !== undefined && bbox.page !== page) return null;
-    return (
-      <div
-        style={{
-          position:        "absolute",
-          left:            `${bbox.x1 * 100}%`,
-          top:             `${bbox.y1 * 100}%`,
-          width:           `${(bbox.x2 - bbox.x1) * 100}%`,
-          height:          `${(bbox.y2 - bbox.y1) * 100}%`,
-          backgroundColor: "oklch(0.80 0.18 85 / 0.22)",
-          border:          "2px solid oklch(0.58 0.18 85 / 0.65)",
-          borderRadius:    "3px",
-          pointerEvents:   "none",
-          transition:      "all 200ms ease-out",
-        }}
-      />
-    );
-  };
+function BboxHighlight({ bbox, page }: { bbox: BBox | undefined; page?: number }) {
+  if (!bbox) return null;
+  if (page !== undefined && bbox.page !== page) return null;
+  return (
+    <div
+      style={{
+        position:        "absolute",
+        left:            `${bbox.x1 * 100}%`,
+        top:             `${bbox.y1 * 100}%`,
+        width:           `${(bbox.x2 - bbox.x1) * 100}%`,
+        height:          `${(bbox.y2 - bbox.y1) * 100}%`,
+        backgroundColor: "oklch(0.80 0.18 85 / 0.22)",
+        border:          "2px solid oklch(0.58 0.18 85 / 0.65)",
+        borderRadius:    "3px",
+        pointerEvents:   "none",
+        transition:      "all 200ms ease-out",
+      }}
+    />
+  );
+}
+
+export function DocPreview({ docId, activeBbox, fileExt }: DocPreviewProps) {
+  const kind = mimeFromExt(fileExt.toLowerCase());
+  const fileUrl = `/api/v1/documents/${docId}/file`;
+
+  const [numPages, setNumPages] = useState(0);
+  // Mount: start on the initial bbox page (previously done by an effect on mount).
+  const [pageNum, setPageNum] = useState(() => activeBbox?.page || 1);
+  const [scale, setScale] = useState(1.0);
+  const [renderWidth, setRenderWidth] = useState(480);
+
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Measure container width for responsive PDF rendering
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const obs = new ResizeObserver(([entry]) => {
+      if (entry) setRenderWidth(Math.max(240, entry.contentRect.width - 32));
+    });
+    obs.observe(containerRef.current);
+    return () => obs.disconnect();
+  }, []);
+
+  // Jump to bbox page when active line changes
+  const [prevActiveBbox, setPrevActiveBbox] = useState(activeBbox);
+  if (activeBbox !== prevActiveBbox) {
+    setPrevActiveBbox(activeBbox);
+    if (activeBbox?.page) setPageNum(activeBbox.page);
+  }
+
+  const zoomIn  = useCallback(() => setScale(s => Math.min(3, +(s + 0.25).toFixed(2))), []);
+  const zoomOut = useCallback(() => setScale(s => Math.max(0.4, +(s - 0.25).toFixed(2))), []);
 
   return (
     <div className="flex flex-col h-full overflow-hidden border-l border-border">
-      <Toolbar />
+      <Toolbar
+        numPages={numPages}
+        pageNum={pageNum}
+        setPageNum={setPageNum}
+        scale={scale}
+        zoomIn={zoomIn}
+        zoomOut={zoomOut}
+      />
 
       <div
         ref={containerRef}

@@ -356,8 +356,8 @@ function AiAnalysisForm({ rule, setRule, docTypes }: { rule: Record<string, unkn
   const outputMode = String(rule.outputMode ?? "free");
   const patch = (input: Record<string, unknown>) => setRule({ ...rule, ...input });
 
+  // Only called on mount, where templatesLoading already starts as true.
   const loadTemplates = useCallback(async () => {
-    setTemplatesLoading(true);
     try {
       const response = await fetch("/api/v1/contracts/ai-analysis/templates");
       const payload = await response.json() as { templates?: AiTemplate[] };

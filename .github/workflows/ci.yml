@@ -27,11 +27,9 @@ jobs:
       - name: Unit tests
         run: npm test
 
-      # Advisory for now: the codebase has pre-existing `any` lint errors. Keep
-      # lint visible without blocking; tighten to a hard gate once cleaned up.
+      # Hard gate: errors fail the build (warnings stay visible).
       - name: Lint
         run: npx eslint .
-        continue-on-error: true
 
   # FOLLOW-UP: an e2e job that spins up postgres+minio (services:), runs the
   # seeds, boots `next start`, and executes scripts/e2e-*.mjs against it. Left

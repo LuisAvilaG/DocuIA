@@ -1,7 +1,7 @@
 "use client";
 
 import { TENANT_ROLES, TENANT_ROLE_LABELS, type TenantRole } from "@/lib/auth/permissions";
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, type ComponentProps } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
@@ -162,9 +162,11 @@ export function ClientDetailContent({ org, features, subsidiaries }: Props) {
     () => new Map(features.map(f => [f.id, f.adminGranted]))
   );
   // Cuando router.refresh() trae datos frescos del server, actualizar el mapa
-  useEffect(() => {
+  const [prevFeatures, setPrevFeatures] = useState(features);
+  if (features !== prevFeatures) {
+    setPrevFeatures(features);
     setFeatureEnabledMap(new Map(features.map(f => [f.id, f.adminGranted])));
-  }, [features]);
+  }
   function handleFeatureEnabledChange(featureId: string, val: boolean) {
     setFeatureEnabledMap(prev => new Map(prev).set(featureId, val));
   }
@@ -201,7 +203,8 @@ export function ClientDetailContent({ org, features, subsidiaries }: Props) {
   }, [org.id]);
 
   useEffect(() => {
-    if (tab === "users" && users === null) loadUsers();
+    // Deferred so the loader's setState isn't called synchronously in the effect body.
+    if (tab === "users" && users === null) queueMicrotask(() => { void loadUsers(); });
   }, [tab, users, loadUsers]);
 
   async function handleCreateUser() {
@@ -252,7 +255,8 @@ export function ClientDetailContent({ org, features, subsidiaries }: Props) {
   }, [org.id]);
 
   useEffect(() => {
-    if (tab === "ai" && aiConfigured === null) loadAiConfig();
+    // Deferred so the loader's setState isn't called synchronously in the effect body.
+    if (tab === "ai" && aiConfigured === null) queueMicrotask(() => { void loadAiConfig(); });
   }, [tab, aiConfigured, loadAiConfig]);
 
   async function handleSaveAiKey() {
@@ -324,7 +328,8 @@ export function ClientDetailContent({ org, features, subsidiaries }: Props) {
   }, [org.id]);
 
   useEffect(() => {
-    if (tab === "netsuite" && nsConns === null) loadNsConnections();
+    // Deferred so the loader's setState isn't called synchronously in the effect body.
+    if (tab === "netsuite" && nsConns === null) queueMicrotask(() => { void loadNsConnections(); });
   }, [tab, nsConns, loadNsConnections]);
 
   async function handleSaveNsCredentials() {
@@ -349,16 +354,19 @@ export function ClientDetailContent({ org, features, subsidiaries }: Props) {
   }
 
   // Sync script form when environment tab or connection data changes
-  useEffect(() => {
-    if (!nsConns) return;
-    const conn = nsConns.find(c => c.environment === nsEditEnv);
-    setNsScriptForm({
-      catalogScriptId: conn?.catalogScriptId ?? "",
-      catalogDeployId: conn?.catalogDeployId ?? "",
-      processScriptId: conn?.processScriptId ?? "",
-      processDeployId: conn?.processDeployId ?? "",
-    });
-  }, [nsEditEnv, nsConns]);
+  const [prevNsScriptSource, setPrevNsScriptSource] = useState({ nsEditEnv, nsConns });
+  if (prevNsScriptSource.nsEditEnv !== nsEditEnv || prevNsScriptSource.nsConns !== nsConns) {
+    setPrevNsScriptSource({ nsEditEnv, nsConns });
+    if (nsConns) {
+      const conn = nsConns.find(c => c.environment === nsEditEnv);
+      setNsScriptForm({
+        catalogScriptId: conn?.catalogScriptId ?? "",
+        catalogDeployId: conn?.catalogDeployId ?? "",
+        processScriptId: conn?.processScriptId ?? "",
+        processDeployId: conn?.processDeployId ?? "",
+      });
+    }
+  }
 
   async function handleSaveNsScripts() {
     setNsScriptSaving(true);
@@ -551,7 +559,8 @@ export function ClientDetailContent({ org, features, subsidiaries }: Props) {
   }, [org.id]);
 
   useEffect(() => {
-    if (tab === "gastos" && expenseCounts === null) loadExpenseStatus();
+    // Deferred so the loader's setState isn't called synchronously in the effect body.
+    if (tab === "gastos" && expenseCounts === null) queueMicrotask(() => { void loadExpenseStatus(); });
   }, [tab, expenseCounts, loadExpenseStatus]);
 
   async function handleExpenseSync(action: string) {
@@ -734,9 +743,8 @@ export function ClientDetailContent({ org, features, subsidiaries }: Props) {
                   className="break-inside-avoid mb-3"
                   style={featureCategory !== "all" && f.category !== featureCategory ? { display: "none" } : undefined}
                 >
-                  {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
                   <FeatureToggle
-                    feature={f as any}
+                    feature={f as ComponentProps<typeof FeatureToggle>["feature"]}
                     orgId={org.id}
                     subsidiaries={subsList.map(s => ({ id: s.id, name: s.name }))}
                     onEnabledChange={handleFeatureEnabledChange}

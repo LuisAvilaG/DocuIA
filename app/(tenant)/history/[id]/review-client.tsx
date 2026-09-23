@@ -197,23 +197,41 @@ export function ReviewClient({
   const [searchLoading, setSearchLoading] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // Focus + prefill when vendor search opens
-  useEffect(() => {
+  // Prefill when vendor search opens (adjusted during render)
+  const [prevVendorSearchOpen, setPrevVendorSearchOpen] = useState(vendorSearchOpen);
+  if (vendorSearchOpen !== prevVendorSearchOpen) {
+    setPrevVendorSearchOpen(vendorSearchOpen);
     if (vendorSearchOpen) {
       setVendorQuery(doc.vendor.name ?? "");
       setVendorResults([]);
+    }
+  }
+
+  // Focus when vendor search opens
+  useEffect(() => {
+    if (vendorSearchOpen) {
       setTimeout(() => vendorSearchInputRef.current?.focus(), 60);
     }
-  }, [vendorSearchOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [vendorSearchOpen]);
 
-  // Debounced vendor search
-  useEffect(() => {
+  // Debounced vendor search — reset/loading flags adjusted during render
+  const [prevVendorSearch, setPrevVendorSearch] = useState({ vendorQuery, vendorSearchOpen, subsidiaryId });
+  if (
+    prevVendorSearch.vendorQuery !== vendorQuery ||
+    prevVendorSearch.vendorSearchOpen !== vendorSearchOpen ||
+    prevVendorSearch.subsidiaryId !== subsidiaryId
+  ) {
+    setPrevVendorSearch({ vendorQuery, vendorSearchOpen, subsidiaryId });
     if (!vendorSearchOpen || vendorQuery.length < 1) {
       setVendorResults([]);
       setVendorSearchLoading(false);
-      return;
+    } else {
+      setVendorSearchLoading(true);
     }
-    setVendorSearchLoading(true);
+  }
+
+  useEffect(() => {
+    if (!vendorSearchOpen || vendorQuery.length < 1) return;
     const t = setTimeout(async () => {
       try {
         const res = await fetch(
@@ -243,8 +261,11 @@ export function ReviewClient({
   useEffect(() => {
     if (!poProcessingEnabled || !vendorId) return;
     let cancelled = false;
-    setPurchaseOrdersLoading(true);
-    setPurchaseOrdersError("");
+    // Deferred to a microtask so setState is not called synchronously in the effect body.
+    void Promise.resolve().then(() => {
+      setPurchaseOrdersLoading(true);
+      setPurchaseOrdersError("");
+    });
     void fetch(`/api/v1/catalog/open-purchase-orders?subsidiaryId=${encodeURIComponent(subsidiaryId)}&vendorId=${encodeURIComponent(vendorId)}`)
       .then(async res => {
         const data = await res.json();
@@ -258,24 +279,42 @@ export function ReviewClient({
     return () => { cancelled = true; };
   }, [poProcessingEnabled, subsidiaryId, vendorId]);
 
-  // Focus + prefill when search dialog opens
-  useEffect(() => {
+  // Prefill when search dialog opens (adjusted during render)
+  const [prevSearchIdx, setPrevSearchIdx] = useState(searchIdx);
+  if (searchIdx !== prevSearchIdx) {
+    setPrevSearchIdx(searchIdx);
     if (searchIdx !== null) {
       const prefill = lines[searchIdx]?.description ?? "";
       setSearchQuery(prefill);
       setSearchResults([]);
+    }
+  }
+
+  // Focus when search dialog opens
+  useEffect(() => {
+    if (searchIdx !== null) {
       setTimeout(() => searchInputRef.current?.focus(), 60);
     }
-  }, [searchIdx]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [searchIdx]);
 
-  // Debounced catalog search
-  useEffect(() => {
+  // Debounced catalog search — reset/loading flags adjusted during render
+  const [prevCatalogSearch, setPrevCatalogSearch] = useState({ searchQuery, searchIdx, subsidiaryId });
+  if (
+    prevCatalogSearch.searchQuery !== searchQuery ||
+    prevCatalogSearch.searchIdx !== searchIdx ||
+    prevCatalogSearch.subsidiaryId !== subsidiaryId
+  ) {
+    setPrevCatalogSearch({ searchQuery, searchIdx, subsidiaryId });
     if (searchIdx === null || !searchQuery.trim() || searchQuery.length < 2) {
       setSearchResults([]);
       setSearchLoading(false);
-      return;
+    } else {
+      setSearchLoading(true);
     }
-    setSearchLoading(true);
+  }
+
+  useEffect(() => {
+    if (searchIdx === null || !searchQuery.trim() || searchQuery.length < 2) return;
     const t = setTimeout(async () => {
       try {
         const res = await fetch(
@@ -547,7 +586,7 @@ export function ReviewClient({
                 </div>
               ) : vendorResults.length === 0 ? (
                 <div className="py-10 text-center">
-                  <p className="text-sm text-muted-foreground">Sin resultados para "{vendorQuery}"</p>
+                  <p className="text-sm text-muted-foreground">Sin resultados para &quot;{vendorQuery}&quot;</p>
                 </div>
               ) : (
                 <div className="py-1">
@@ -636,7 +675,7 @@ export function ReviewClient({
                 </div>
               ) : searchResults.length === 0 ? (
                 <div className="py-12 text-center">
-                  <p className="text-sm text-muted-foreground">Sin resultados para "{searchQuery}"</p>
+                  <p className="text-sm text-muted-foreground">Sin resultados para &quot;{searchQuery}&quot;</p>
                   <p className="text-xs text-muted-foreground/60 mt-1">Intenta con otro nombre o código</p>
                 </div>
               ) : (

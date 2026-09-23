@@ -169,7 +169,8 @@ export function comparePoLines(
   invoiceLines: InvoiceLineInput[],
   po: NSPurchaseOrderDetail,
   cfg: Pick<PoMatchConfig, "priceTolerancePct" | "qtyTolerancePct" | "totalToleranceType" | "totalToleranceValue">,
-  opts: { requireReceipt: boolean; invoiceTotal: number },
+  // invoiceTotal is kept for callers; totals are computed from the matched lines.
+  opts: { requireReceipt: boolean; invoiceTotal?: number },
 ): PoComparison {
   const remaining = po.lines
     .filter((l) => !l.closed)
@@ -220,16 +221,26 @@ export function comparePoLines(
 
   const counts = { match: 0, price_within_tolerance: 0, price_mismatch: 0, qty_over: 0, not_received: 0, not_in_po: 0 } as Record<LineStatus, number>;
   for (const l of lines) counts[l.status]++;
-  const totalDifference = round2(opts.invoiceTotal - po.total);
+  // Totals compare what the invoice charges for the PO lines it covers against
+  // what those same quantities cost on the PO. Invoices usually cover part of a
+  // PO (one delivery), and the PO amounts exclude tax, so the whole-PO total or
+  // the invoice grand total would flag every partial invoice as a mismatch.
+  const matched = lines.filter((l) => l.status !== "not_in_po");
+  const invoiceAmount = round2(matched.reduce((sum, l) => {
+    const inv = invoiceLines.find((x) => x.index === l.index);
+    return sum + (inv?.amount ?? (inv?.rate ?? 0) * l.quantity);
+  }, 0));
+  const expectedAmount = round2(matched.reduce((sum, l) => sum + (l.poRate ?? 0) * l.quantity, 0));
+  const totalDifference = round2(invoiceAmount - expectedAmount);
   return {
     poInternalId: po.internal_id,
     poTranid: po.tranid,
     lines,
-    invoiceTotal: opts.invoiceTotal,
-    poTotal: po.total,
+    invoiceTotal: invoiceAmount,
+    poTotal: expectedAmount,
     totalDifference,
-    totalDifferencePct: po.total ? round2((totalDifference / po.total) * 100) : 0,
-    totalWithinTolerance: totalWithinTolerance(opts.invoiceTotal, po.total, cfg),
+    totalDifferencePct: expectedAmount ? round2((totalDifference / expectedAmount) * 100) : 0,
+    totalWithinTolerance: matched.length === 0 || totalWithinTolerance(invoiceAmount, expectedAmount, cfg),
     counts,
   };
 }

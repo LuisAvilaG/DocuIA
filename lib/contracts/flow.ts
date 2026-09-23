@@ -247,10 +247,32 @@ export function validateFlowReferences(graph: FlowGraph): string | null {
     return null;
   };
 
+  const aiNodes = new Set(graph.nodes
+    .filter((n) => n.kind === "validate" && (n.data.rule as ValidationRule).kind === "ai_analysis")
+    .map((n) => n.id));
+  const calculationKeys = new Set<string>();
+
   for (const n of graph.nodes) {
     if (n.kind === "calculate") {
-      if (n.data.base.type !== "fixed") {
-        const err = checkRef(n.data.base, `cálculo "${n.data.name}"`);
+      const where = `cálculo "${n.data.name}"`;
+      if (calculationKeys.has(n.data.key)) return `Dos cálculos usan la misma clave "${n.data.key}"; cada resultado necesita una clave única.`;
+      calculationKeys.add(n.data.key);
+      const fixedKeys = new Set(n.data.fixedValues.map((value) => value.key));
+      const itemMode = n.data.mode === "each_analysis_item";
+      if (itemMode && (!n.data.analysisNodeId || !aiNodes.has(n.data.analysisNodeId))) {
+        return `El ${where} recorre los hallazgos de un análisis con IA que ya no existe en el flujo.`;
+      }
+      for (const [role, ref] of [["base", n.data.base], ["operando", n.data.operand]] as const) {
+        if (typeof ref === "number" || ref.type === "number") continue;
+        if (ref.type === "fixed") {
+          if (!fixedKeys.has(ref.key)) return `El ${where} usa el valor fijo "${ref.key}" (${role}) que no está definido.`;
+          continue;
+        }
+        if (ref.type === "item") {
+          if (!itemMode) return `El ${where} usa un campo de hallazgo (${role}) pero no recorre un análisis con IA.`;
+          continue;
+        }
+        const err = checkRef(ref, where);
         if (err) return err;
       }
     }

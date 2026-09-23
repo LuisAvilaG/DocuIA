@@ -379,9 +379,13 @@ export function assembleCaseData(
   const data: Record<string, unknown> = {};
   for (const d of docs) {
     const values = (d.extractedJson ?? {}) as Record<string, unknown>;
+    // First document with a value wins, matching validations and calculations.
     for (const [k, v] of Object.entries(values)) {
-      data[k] = v;
-      if (d.detectedType) data[`${d.detectedType}.${k}`] = v;
+      const empty = v === null || v === undefined || (Array.isArray(v) ? v.length === 0 : String(v).trim() === "");
+      if (empty) continue;
+      if (!(k in data)) data[k] = v;
+      const typed = d.detectedType ? `${d.detectedType}.${k}` : null;
+      if (typed && !(typed in data)) data[typed] = v;
     }
   }
   data._validations = validations.map((v) => `${v.subject}: ${v.status}${v.reason ? ` — ${v.reason}` : ""}`);

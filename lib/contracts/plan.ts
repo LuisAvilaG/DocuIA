@@ -44,7 +44,7 @@ export interface ContractPlan {
 
 // Resolve a flow to run: the one the client picked (flowId) if it belongs to the
 // org, otherwise the most recently updated flow. Returns null if none parse.
-export async function getActiveFlow(orgId: string, flowId?: string | null): Promise<{ id: string; name: string; graph: FlowGraph } | null> {
+export async function getActiveFlow(orgId: string, flowId?: string | null, { fallback = true } = {}): Promise<{ id: string; name: string; graph: FlowGraph } | null> {
   const row = flowId
     ? await db.query.contractFlows.findFirst({ where: and(eq(contractFlows.id, flowId), eq(contractFlows.organizationId, orgId)) })
     : await db.query.contractFlows.findFirst({
@@ -52,29 +52,58 @@ export async function getActiveFlow(orgId: string, flowId?: string | null): Prom
         orderBy: [desc(contractFlows.updatedAt)],
       });
   if (!row) {
-    // A stale/foreign flowId falls back to the org's most recent flow.
-    return flowId ? getActiveFlow(orgId, null) : null;
+    // A stale/foreign flowId falls back to the org's most recent flow when a
+    // new case starts; an existing case must never switch to another flow.
+    return flowId && fallback ? getActiveFlow(orgId, null) : null;
   }
   const parsed = flowGraphSchema.safeParse(row.graphJson);
   if (!parsed.success) return null;
   return { id: row.id, name: row.name, graph: parsed.data };
 }
 
+function planFromFlow(flowId: string, graph: FlowGraph): ContractPlan {
+  const c = compileFlow(graph);
+  return {
+    source: "flow",
+    flowId,
+    flow: graph,
+    docTypes: c.docTypes,
+    fieldsByType: c.fieldsByType,
+    calculations: c.calculations,
+    rules: c.rules.map((r) => ({ nodeId: r.nodeId, name: r.name, severity: r.severity, conditionsJson: r.conditionsJson })),
+    template: c.template,
+  };
+}
+
+/** Stored on the case when it is processed (resultJson.flow.snapshot). */
+export interface FlowSnapshot { flowId: string; graph: FlowGraph }
+
+export function flowSnapshot(plan: ContractPlan): FlowSnapshot | null {
+  return plan.flowId && plan.flow ? { flowId: plan.flowId, graph: plan.flow } : null;
+}
+
+/**
+ * The plan a case was processed with. Generation and corrections must use the
+ * same flow even if it was edited, deactivated or deleted afterwards, so the
+ * snapshot taken at processing time wins over the live flow.
+ */
+export async function loadCasePlan(kase: { organizationId: string; flowId: string | null; resultJson: unknown }): Promise<ContractPlan> {
+  const snapshot = (kase.resultJson as { flow?: { snapshot?: unknown } } | null)?.flow?.snapshot as Partial<FlowSnapshot> | undefined;
+  if (snapshot?.flowId) {
+    const parsed = flowGraphSchema.safeParse(snapshot.graph);
+    if (parsed.success) return planFromFlow(snapshot.flowId, parsed.data);
+  }
+  if (kase.flowId) {
+    const active = await getActiveFlow(kase.organizationId, kase.flowId, { fallback: false });
+    if (!active) throw new Error("El flujo con el que se procesó este caso ya no existe o no es válido. Vuelve a procesarlo con un flujo vigente.");
+    return planFromFlow(active.id, active.graph);
+  }
+  return loadContractPlan(kase.organizationId, null);
+}
+
 export async function loadContractPlan(orgId: string, flowId?: string | null): Promise<ContractPlan> {
   const active = await getActiveFlow(orgId, flowId);
-  if (active) {
-    const c = compileFlow(active.graph);
-    return {
-      source: "flow",
-      flowId: active.id,
-      flow: active.graph,
-      docTypes: c.docTypes,
-      fieldsByType: c.fieldsByType,
-      calculations: c.calculations,
-      rules: c.rules.map((r) => ({ nodeId: r.nodeId, name: r.name, severity: r.severity, conditionsJson: r.conditionsJson })),
-      template: c.template,
-    };
-  }
+  if (active) return planFromFlow(active.id, active.graph);
 
   const [config, rules, templates] = await Promise.all([
     getContractConfig(orgId),

@@ -117,3 +117,14 @@ export function withApiSecurity<T extends unknown[]>(handler: (req: NextRequest,
     }
   };
 }
+
+/**
+ * Content-Disposition that survives any file name: an ASCII fallback plus the
+ * RFC 5987 UTF-8 form. Header values are ByteStrings, so a raw "–" or "“" in a
+ * template name used to make the download throw.
+ */
+export function contentDisposition(kind: "inline" | "attachment", fileName: string): string {
+  const clean = fileName.replace(/[\r\n"\\]/g, "").trim() || "archivo";
+  const ascii = clean.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^\x20-\x7e]/g, "_");
+  return `${kind}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(clean)}`;
+}

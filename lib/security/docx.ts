@@ -1,5 +1,30 @@
 import { fromBuffer, type Entry, type ZipFile } from "yauzl";
 
+// Field codes that fetch or execute external content. They are only dangerous
+// inside a field instruction, never as ordinary words ("Link de pago").
+const DANGEROUS_FIELD = /\b(DDEAUTO|DDE|INCLUDETEXT|INCLUDEPICTURE|LINK)\b/i;
+
+function fieldInstructions(xml: string): string {
+  const complex = [...xml.matchAll(/<w:instrText\b[^>]*>([\s\S]*?)<\/w:instrText>/gi)].map((m) => m[1]);
+  const simple = [...xml.matchAll(/<w:fldSimple\b[^>]*\bw:instr\s*=\s*("[^"]*"|'[^']*')/gi)].map((m) => m[1]);
+  return [...complex, ...simple].join(" ");
+}
+
+// External relationships are fetched by Word/LibreOffice (images, frames,
+// templates) and are rejected; a clickable web or mail hyperlink is not
+// fetched and is allowed, e.g. a company website in the footer.
+function hasForbiddenRelationship(rels: string): boolean {
+  for (const [tag] of rels.matchAll(/<Relationship\b[^>]*>/gi)) {
+    const external = /TargetMode\s*=\s*["']\s*External/i.test(tag);
+    const target = /\bTarget\s*=\s*["']\s*([^"']*)/i.exec(tag)?.[1]?.trim() ?? "";
+    const remote = /^(https?|file|ftp|smb):/i.test(target) || target.startsWith("//") || target.startsWith("\\\\");
+    if (!external && !remote) continue;
+    const hyperlink = /\bType\s*=\s*["'][^"']*\/hyperlink["']/i.test(tag);
+    if (!(hyperlink && /^(https?:\/\/|mailto:)/i.test(target))) return true;
+  }
+  return false;
+}
+
 /** Bound actual decompression before PizZip/LibreOffice sees a DOCX. Reject
  * macros, embedded executables, external relationships and dynamic includes. */
 export async function validateDocx(buffer: Buffer): Promise<void> {
@@ -41,7 +66,9 @@ export async function validateDocx(buffer: Buffer): Promise<void> {
         stream.on("end", () => {
           if (xml) {
             const text = Buffer.concat(chunks).toString("utf8").replace(/&#(?:x([0-9a-f]+)|(\d+));/gi, (_, hex, dec) => String.fromCodePoint(Math.min(0x10ffff, parseInt(hex || dec, hex ? 16 : 10))));
-            if (text.includes("\0") || /<!DOCTYPE|<!ENTITY|TargetMode\s*=\s*["']\s*External|Target\s*=\s*["']\s*(https?|file|ftp):|<[^>]*altChunk\b|macroEnabled|vbaProject/i.test(text) || /\b(DDEAUTO|DDE|INCLUDETEXT|INCLUDEPICTURE|LINK)\b/i.test(text.replace(/<[^>]+>/g, ""))) {
+            if (text.includes("\0") || /<!DOCTYPE|<!ENTITY|<[^>]*altChunk\b|macroEnabled|vbaProject/i.test(text)
+              || (/\.rels$/i.test(name) && hasForbiddenRelationship(text))
+              || DANGEROUS_FIELD.test(fieldInstructions(text))) {
               return fail(new Error("La plantilla contiene vínculos externos o contenido activo no permitido"));
             }
           }

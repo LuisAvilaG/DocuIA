@@ -1,4 +1,4 @@
-import { withApiSecurity } from "@/lib/security/http";
+import { contentDisposition, withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
@@ -33,7 +33,7 @@ async function handleGET(_req: NextRequest, { params }: { params: Promise<{ id: 
     return new NextResponse(webStream, {
       headers: {
         "Content-Type": doc.mimeType || "application/octet-stream",
-        "Content-Disposition": `inline; filename="${name}"`,
+        "Content-Disposition": contentDisposition("inline", name),
         "Cache-Control": "private, max-age=3600",
       },
     });

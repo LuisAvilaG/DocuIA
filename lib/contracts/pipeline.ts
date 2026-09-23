@@ -4,15 +4,15 @@ import { contractCases, contractDocuments, contractExtractionLearnings, contract
 import { and, desc, eq } from "drizzle-orm";
 import { uploadFile, getFileBuffer } from "@/lib/storage/minio";
 import { realExtractDeps, type ContractExtractDeps, type ExtractSource } from "./extract";
-import { runValidations, caseVerdict, type DocsByType, type ValidationResult } from "./validate";
-import { loadContractPlan } from "./plan";
+import type { DocsByType } from "./validate";
+import { flowSnapshot, loadContractPlan } from "./plan";
+import { assembleResults, isAiRule, type AnalysisOutcome } from "./assemble";
 import { buildFlowTrace } from "./trace";
 import { getFeature, isFeatureEnabled } from "@/lib/features";
 import { normalizeContractDate } from "./normalization";
 import { logAudit } from "@/lib/audit/log";
 import type { VisualTrainingVariant } from "./visual-training";
-import { runAiAnalysis, type AiAnalysisRule } from "./ai-analysis";
-import { evaluateCalculations } from "./calculations";
+import { runAiAnalysis } from "./ai-analysis";
 
 export interface CaseFileInput { buffer: Buffer; fileName: string; mimeType: string }
 
@@ -96,7 +96,11 @@ export async function processContractCase(caseId: string, deps: ContractExtractD
   if (!kase) throw new Error(`Contract case ${caseId} not found`);
 
   if (!await isFeatureEnabled(kase.organizationId, "contract_ai_extraction")) {
-    throw new Error("El análisis AI de contratos fue deshabilitado antes de procesar este caso.");
+    // Terminal, not retried: without this the case stayed "En cola" forever.
+    const message = "El análisis AI de contratos fue deshabilitado antes de procesar este caso.";
+    await db.update(contractCases).set({ status: "failed", errorMessage: message, updatedAt: new Date() }).where(eq(contractCases.id, caseId));
+    await logAudit({ orgId: kase.organizationId, action: "contract.processing_failed", resourceType: "contract_case", resourceId: caseId, metadata: { message } });
+    return;
   }
 
   await db.update(contractCases).set({ status: "processing", updatedAt: new Date() }).where(eq(contractCases.id, caseId));
@@ -177,12 +181,8 @@ export async function processContractCase(caseId: string, deps: ContractExtractD
     // AI analysis is deliberately a validation kind too, but its rich response
     // is stored separately while a compact outcome participates in the same
     // verdict and approval mechanics as every other rule.
-    const regularRules = plan.rules.filter((rule) => (rule.conditionsJson as { kind?: unknown } | null)?.kind !== "ai_analysis");
-    const aiRules = plan.rules.filter((rule): rule is typeof rule & { conditionsJson: AiAnalysisRule } =>
-      (rule.conditionsJson as { kind?: unknown } | null)?.kind === "ai_analysis",
-    );
-    const baseValidations = validationsFeature ? runValidations(regularRules, docsByType, new Date()) : [];
-    const analyses = validationsFeature
+    const aiRules = plan.rules.filter(isAiRule);
+    const analyses: AnalysisOutcome[] = validationsFeature
       ? await Promise.all(aiRules.map(async (configured) => {
         try {
           return {
@@ -211,61 +211,8 @@ export async function processContractCase(caseId: string, deps: ContractExtractD
       }))
       : [];
 
-    // Calculations are always deterministic. They run after structured AI
-    // analyses so a generic calculation can use an analysis item as input,
-    // while the model still never performs arithmetic itself.
-    const analysisItemsByNode = Object.fromEntries(analyses
-      .filter((analysis) => analysis.nodeId)
-      .map((analysis) => [analysis.nodeId!, analysis.response.items]));
-    const calculations = evaluateCalculations(plan.calculations, docsByType, analysisItemsByNode);
-    const calculationValues = Object.fromEntries(calculations.map((item) => [item.key,
-      item.items?.map((entry) => ({ ...entry.values, value: entry.value, status: entry.status, evidence: entry.evidence ?? null })) ?? item.value,
-    ]));
-    const aiValidations: ValidationResult[] = analyses.map((analysis) => ({
-      ruleName: analysis.ruleName,
-      // An explicit block from the governed prompt must remain a block even
-      // if the node was originally configured as a softer review rule.
-      severity: analysis.response.outcome === "block" ? "block" : analysis.severity,
-      subject: "Análisis con IA",
-      status: analysis.response.outcome === "pass" ? "sin observaciones" : analysis.response.outcome === "block" ? "bloqueado" : "requiere revisión",
-      ok: analysis.response.outcome === "pass" ? true : analysis.response.outcome === "block" ? false : null,
-      reason: analysis.response.summary ?? (analysis.response.items.length > 0 ? `${analysis.response.items.length} hallazgo(s) estructurado(s).` : "El análisis requiere revisión."),
-      checks: [],
-      citation: analysis.response.citations[0] ?? null,
-    }));
-    const validations = [...baseValidations, ...aiValidations];
-    const verdict = caseVerdict(validations);
-
-    // Replace any prior validations for this case, then persist fresh results.
-    await db.delete(contractValidations).where(eq(contractValidations.caseId, caseId));
-    if (validations.length > 0) {
-      await db.insert(contractValidations).values(validations.map((v) => ({
-        caseId,
-        ruleName:   v.ruleName,
-        severity:   v.severity,
-        subject:    v.subject,
-        status:     v.status,
-        ok:         v.ok,
-        reason:     v.reason,
-        checksJson: v.checks,
-        citation:   v.citation,
-      })));
-    }
-
-    await db.delete(contractAiAnalysisResults).where(eq(contractAiAnalysisResults.caseId, caseId));
-    if (analyses.length > 0) {
-      await db.insert(contractAiAnalysisResults).values(analyses.map((analysis) => ({
-        id: randomUUID(),
-        caseId,
-        ruleName: analysis.ruleName,
-        severity: analysis.response.outcome === "block" ? "block" : analysis.severity,
-        outputMode: analysis.outputMode,
-        outcome: analysis.response.outcome,
-        summary: analysis.response.summary,
-        itemsJson: analysis.response.items,
-        citationsJson: analysis.response.citations,
-      })));
-    }
+    // Calculations are always deterministic and use the AI items as inputs.
+    const { validations, calculations, calculationValues, verdict } = assembleResults(plan, docsByType, analyses, { validationsEnabled: validationsFeature });
 
     // Derive key-date obligations (renewal/expiry) using the tenant-configured alert lead time.
     const obligations: Array<{ type: string; description: string; dueDate: Date; alertAt: Date }> = [];
@@ -282,27 +229,65 @@ export async function processContractCase(caseId: string, deps: ContractExtractD
         }
       }
     }
-    await db.delete(contractObligations).where(eq(contractObligations.caseId, caseId));
-    if (obligations.length > 0) {
-      await db.insert(contractObligations).values(obligations.map((o) => ({ caseId, type: o.type, description: o.description, dueDate: o.dueDate, alertAt: o.alertAt, status: "open" })));
-    }
 
     // Per-stage trace of the flow run (only when a visual flow is active).
     const stages = plan.flow ? buildFlowTrace(plan.flow, docsByType, summary, !!plan.template, calculations) : null;
 
-    await db.update(contractCases).set({
-      status: "validated",
-      resultJson: {
-        documents: summary,
-        validations: validations.length,
-        analyses: analyses.length,
-        calculations,
-        calculationValues,
-        verdict,
-        flow: { source: plan.source, stages },
-      },
-      updatedAt: new Date(),
-    }).where(eq(contractCases.id, caseId));
+    // Replace prior results and publish the verdict as one unit: a retry that
+    // overlaps (or a crash midway) must not leave duplicated or partial rows.
+    await db.transaction(async (tx) => {
+      await tx.delete(contractValidations).where(eq(contractValidations.caseId, caseId));
+      if (validations.length > 0) {
+        await tx.insert(contractValidations).values(validations.map((v) => ({
+          caseId,
+          ruleName:   v.ruleName,
+          severity:   v.severity,
+          subject:    v.subject,
+          status:     v.status,
+          ok:         v.ok,
+          reason:     v.reason,
+          checksJson: v.checks,
+          citation:   v.citation,
+        })));
+      }
+
+      await tx.delete(contractAiAnalysisResults).where(eq(contractAiAnalysisResults.caseId, caseId));
+      if (analyses.length > 0) {
+        await tx.insert(contractAiAnalysisResults).values(analyses.map((analysis) => ({
+          id: randomUUID(),
+          caseId,
+          ruleName: analysis.ruleName,
+          severity: analysis.response.outcome === "block" ? "block" : analysis.severity,
+          outputMode: analysis.outputMode,
+          outcome: analysis.response.outcome,
+          summary: analysis.response.summary,
+          itemsJson: analysis.response.items,
+          citationsJson: analysis.response.citations,
+        })));
+      }
+
+      await tx.delete(contractObligations).where(eq(contractObligations.caseId, caseId));
+      if (obligations.length > 0) {
+        await tx.insert(contractObligations).values(obligations.map((o) => ({ caseId, type: o.type, description: o.description, dueDate: o.dueDate, alertAt: o.alertAt, status: "open" })));
+      }
+
+      await tx.update(contractCases).set({
+        status: "validated",
+        // Pin the flow actually used; generation and corrections replay this
+        // snapshot even if the live flow changes or disappears.
+        flowId: plan.flowId,
+        resultJson: {
+          documents: summary,
+          validations: validations.length,
+          analyses: analyses.length,
+          calculations,
+          calculationValues,
+          verdict,
+          flow: { source: plan.source, stages, snapshot: flowSnapshot(plan) },
+        },
+        updatedAt: new Date(),
+      }).where(eq(contractCases.id, caseId));
+    });
     await logAudit({
       orgId: kase.organizationId,
       action: "contract.processing_completed",

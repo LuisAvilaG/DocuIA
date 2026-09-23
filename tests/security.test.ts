@@ -138,6 +138,11 @@ test("DOCX validation accepts basic templates and rejects active content and ZIP
   await assert.rejects(validateDocx(word(['word/_rels/document.xml.rels','<Relationship TargetMode="Ext&#101;rnal" Target="file:///secret"/>'])));
   await assert.rejects(validateDocx(word(['word/document.xml','<w:instrText>INCLUDETEXT file:///secret</w:instrText>'])));
   await assert.rejects(validateDocx(word(['word/huge.xml','x'.repeat(21*1024*1024)])));
+  await assert.rejects(validateDocx(word(['word/document.xml','<w:fldSimple w:instr=" DDEAUTO cmd "/>'])));
+  await assert.rejects(validateDocx(word(['word/_rels/document.xml.rels','<Relationship Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" TargetMode="External" Target="https://evil.example/x.png"/>'])));
+  // Ordinary words and web hyperlinks are legitimate template content.
+  await validateDocx(word(['word/document.xml','<w:document><w:p><w:t>Link de pago y DDE del contrato</w:t></w:p></w:document>']));
+  await validateDocx(word(['word/_rels/document.xml.rels','<Relationship Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" TargetMode="External" Target="https://empresa.example"/>']));
 });
 test("bcrypt passwords have byte-length limits, including Unicode", () => {
   assert.equal(passwordSchema.safeParse('strong-password').success,true);

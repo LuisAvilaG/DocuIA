@@ -1,4 +1,4 @@
-import { withApiSecurity } from "@/lib/security/http";
+import { contentDisposition, withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
@@ -12,10 +12,6 @@ import { convertWordToPdf } from "@/lib/contracts/word-to-pdf";
 
 const WORD_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const PDF_MIME = "application/pdf";
-
-function safeName(value: string) {
-  return value.replace(/[\r\n"]/g, "");
-}
 
 function pdfName(value: string) {
   return `${value.replace(/\.docx$/i, "")}.pdf`;
@@ -54,7 +50,7 @@ async function handleGET(req: NextRequest, { params }: { params: Promise<{ id: s
         headers: {
           "Content-Type": PDF_MIME,
           "Cache-Control": "private, max-age=3600",
-          "Content-Disposition": `attachment; filename="${safeName(pdfName(result?.outputName || `contrato-${id.slice(0, 8)}.docx`))}"`,
+          "Content-Disposition": contentDisposition("attachment", pdfName(result?.outputName || `contrato-${id.slice(0, 8)}.docx`)),
         },
       });
     }
@@ -65,7 +61,7 @@ async function handleGET(req: NextRequest, { params }: { params: Promise<{ id: s
       headers: {
         "Content-Type": result?.outputMime || PDF_MIME,
         "Cache-Control": "private, max-age=3600",
-        "Content-Disposition": `attachment; filename="${safeName(result?.outputName || `contrato-${id.slice(0, 8)}.pdf`)}"`,
+        "Content-Disposition": contentDisposition("attachment", result?.outputName || `contrato-${id.slice(0, 8)}.pdf`),
       },
     });
   } catch {

@@ -53,10 +53,19 @@ define(["N/search", "N/record", "N/log"], (search, record, log) => {
 
   // The tax id (RFC) is not a searchable column in every account, so it is read
   // from the record; a missing field or permission just leaves it empty.
+  // Localizations keep it in different fields: the standard one first, then any
+  // custom subsidiary field whose id mentions "rfc" (e.g. custrecord..._rfc_subsidiaria).
   function subsidiaryTaxId(id) {
     try {
       const rec = record.load({ type: record.Type.SUBSIDIARY, id: id });
-      return str(rec.getValue({ fieldId: "federalidnumber" }));
+      const standard = str(rec.getValue({ fieldId: "federalidnumber" }));
+      if (standard) return standard;
+      const custom = rec.getFields().filter((f) => /^custrecord/i.test(f) && /rfc/i.test(f));
+      for (const f of custom) {
+        const v = str(rec.getValue({ fieldId: f })).toUpperCase();
+        if (/^[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}$/.test(v)) return v;
+      }
+      return "";
     } catch (e) {
       log.debug({ title: "subsidiary tax id", details: str(e && e.message) });
       return "";

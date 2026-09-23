@@ -137,9 +137,9 @@ async function handlePOST(req: NextRequest) {
       });
     }
 
-    if (result.status === "pending_approval") {
+    if (result.status === "pending_approval" || result.status === "awaiting_receipt") {
       return NextResponse.json({
-        ok: true, status: "pending_approval",
+        ok: true, status: result.status,
         documentId: result.documentId,
       });
     }

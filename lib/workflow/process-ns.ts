@@ -83,6 +83,11 @@ function buildRestletBody(payload: Record<string, unknown>): Record<string, unkn
     apply_to_po_lines: Boolean(payload.apply_to_po_lines ?? true),
     set_unselected_po_lines_to_zero: Boolean(payload.set_unselected_po_lines_to_zero ?? false),
     allow_additional_lines: Boolean(payload.allow_additional_lines ?? true),
+    // erp_attachments feature: CFDI fields and files attached to the bill.
+    ...(payload.custom_fields && typeof payload.custom_fields === "object" ? { custom_fields: payload.custom_fields } : {}),
+    ...(Array.isArray(payload.attachments) && payload.attachments.length
+      ? { attachments: payload.attachments, attachment_folder_id: payload.attachment_folder_id ?? null }
+      : {}),
   };
 }
 

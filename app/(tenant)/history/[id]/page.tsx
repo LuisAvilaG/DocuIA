@@ -28,6 +28,7 @@ const STATUS_META: Record<string, { label: string; color: string; bg: string; bo
   processing:       { ...DOC_STATUS.processing,       borderColor: "border-warning/20" },
   completed:        { ...DOC_STATUS.completed,        borderColor: "border-success/20" },
   failed:           { ...DOC_STATUS.failed,           borderColor: "border-destructive/20" },
+  awaiting_receipt: { ...DOC_STATUS.awaiting_receipt, borderColor: "border-[oklch(0.85_0.05_250)]" },
 };
 
 const DOC_LABELS: Record<string, string> = {

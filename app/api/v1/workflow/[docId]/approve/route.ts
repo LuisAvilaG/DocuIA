@@ -5,15 +5,11 @@ import { canApprove } from "@/lib/auth/permissions";
 import { db } from "@/lib/db";
 import { historyDocuments, subsidiaries } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
-import { processInNetSuite } from "@/lib/workflow/process-ns";
-import { isFeatureEnabled, getFeature } from "@/lib/features";
-import { upsertItemMappings } from "@/lib/workflow/mappings";
-import { resolveCustomFormId } from "@/lib/netsuite/custom-forms";
 import { fetchOpenPurchaseOrders } from "@/lib/netsuite/client";
 import { getActiveNsConnection, nsCredentials } from "@/lib/netsuite/connection";
-import { buildNsPayload, draftFromReviewBody, storedDraft, type NsDraft, type PoConfig } from "@/lib/workflow/ns-payload";
-import { deliverWebhooks } from "@/lib/webhooks/deliver";
-import { recordPostedAmount } from "@/lib/workflow/pipeline";
+import { draftFromReviewBody, storedDraft, type NsDraft } from "@/lib/workflow/ns-payload";
+import { gateDraftAgainstPo, loadFeatureFlags, type ApChecks } from "@/lib/workflow/ap-checks";
+import { postClaimedDocument } from "@/lib/workflow/post-draft";
 
 type Params = { params: Promise<{ docId: string }> };
 type WaitingStatus = "review" | "pending_approval";
@@ -21,18 +17,23 @@ type WaitingStatus = "review" | "pending_approval";
 const CONFLICT = "Otro usuario ya está procesando o procesó este documento. Recarga la página.";
 
 // The RESTlet re-validates too, but a stale or foreign PO should fail here with
-// a clear message instead of as a NetSuite error.
+// a clear message instead of as an ERP error.
 async function validatePurchaseOrder(orgId: string, nsSubsidiaryId: string, draft: NsDraft): Promise<string | null> {
   const connection = await getActiveNsConnection(orgId);
   if (!connection?.catalogScriptId || !connection.catalogDeployId) {
-    return "No hay un catálogo de NetSuite configurado para validar la PO seleccionada";
+    return "No hay un catálogo del ERP configurado para validar la OC seleccionada";
   }
   const open = await fetchOpenPurchaseOrders(nsCredentials(connection), connection.catalogScriptId, connection.catalogDeployId, nsSubsidiaryId, draft.vendorId ?? "");
-  if (!open.ok) return `No se pudo validar la PO en NetSuite: ${open.error ?? "error desconocido"}`;
+  if (!open.ok) return `No se pudo validar la OC en el ERP: ${open.error ?? "error desconocido"}`;
   if (!open.data?.some((po) => po.internal_id === draft.poId)) {
-    return "La PO elegida no está abierta o no corresponde al proveedor y subsidiaria seleccionados";
+    return "La OC elegida no está abierta o no corresponde al proveedor y subsidiaria seleccionados";
   }
   return null;
+}
+
+function storedChecks(products: unknown): ApChecks | null {
+  const p = products && typeof products === "object" ? products as { ap_checks?: ApChecks } : null;
+  return p?.ap_checks ?? null;
 }
 
 async function handlePOST(req: NextRequest, { params }: Params) {
@@ -54,13 +55,7 @@ async function handlePOST(req: NextRequest, { params }: Params) {
   }
   const from: WaitingStatus = doc.status;
   const approver = canApprove(session.role, "documents");
-
-  const [formsFeat, autoMappingFeat, poFeature, approvalRequired] = await Promise.all([
-    getFeature(session.orgId, "custom_netsuite_forms"),
-    getFeature(session.orgId, "auto_mapping"),
-    getFeature(session.orgId, "po_processing"),
-    isFeatureEnabled(session.orgId, "approval_workflow"),
-  ]);
+  const flags = await loadFeatureFlags(session.orgId);
 
   let draft: NsDraft;
   if (from === "review") {
@@ -74,8 +69,9 @@ async function handlePOST(req: NextRequest, { params }: Params) {
     draft = saved;
   }
 
-  if (draft.poId && (!poFeature.isEnabled || doc.documentType !== "invoice")) {
-    return NextResponse.json({ error: "El procesamiento con PO no está habilitado para este documento" }, { status: 403 });
+  const poAllowed = flags.isEnabled("po_processing") || flags.isEnabled("po_matching");
+  if (draft.poId && (!poAllowed || doc.documentType === "purchase_order")) {
+    return NextResponse.json({ error: "El procesamiento con OC no está habilitado para este documento" }, { status: 403 });
   }
 
   const sub = await db.query.subsidiaries.findFirst({
@@ -88,100 +84,69 @@ async function handlePOST(req: NextRequest, { params }: Params) {
     if (poError) return NextResponse.json({ error: poError }, { status: 422 });
   }
 
-  // With the approval workflow on, whoever reviews a low-confidence document
-  // still needs someone with approval permission to post it.
-  if (from === "review" && approvalRequired && !approver) {
-    const base = doc.products && typeof doc.products === "object" ? doc.products as Record<string, unknown> : {};
+  const base = doc.products && typeof doc.products === "object" ? doc.products as Record<string, unknown> : {};
+  const park = async (status: "pending_approval" | "awaiting_receipt", reason: string | null, extra: Record<string, unknown> = {}) => {
+    const now = new Date();
+    const recheckHours = Math.min(48, Math.max(1, Number(flags.getConfig("three_way_match").recheck_hours) || 2));
     const parked = await db.update(historyDocuments)
       .set({
-        status:   "pending_approval",
+        status,
         vendor:   draft.vendorName ?? doc.vendor,
-        products: { ...base, approval_draft: draft, approval_requested_by: session.sub } as unknown,
-        updatedAt: new Date(),
+        products: { ...base, ...extra, approval_draft: draft, approval_requested_by: session.sub } as unknown,
+        poInternalId: draft.poId ?? doc.poInternalId,
+        errorMessage: reason,
+        ...(status === "awaiting_receipt"
+          ? { awaitingSince: doc.awaitingSince ?? now, nextReceiptCheckAt: new Date(now.getTime() + recheckHours * 3_600_000) }
+          : {}),
+        updatedAt: now,
       })
-      .where(and(eq(historyDocuments.id, docIdNum), eq(historyDocuments.status, "review")))
+      .where(and(eq(historyDocuments.id, docIdNum), eq(historyDocuments.status, from)))
       .returning({ id: historyDocuments.id });
-    if (!parked.length) return NextResponse.json({ error: CONFLICT }, { status: 409 });
-    return NextResponse.json({ ok: true, status: "pending_approval" });
+    return parked.length
+      ? NextResponse.json({ ok: true, status, reason })
+      : NextResponse.json({ error: CONFLICT }, { status: 409 });
+  };
+
+  // Check the (possibly edited) draft against its PO before posting it.
+  const previous = storedChecks(doc.products);
+  const gate = await gateDraftAgainstPo({
+    organizationId: session.orgId,
+    draft,
+    invoiceTotal: Number(doc.total ?? 0),
+    storedChecks: previous,
+    flags,
+  });
+  const gateChecks = gate.comparison && previous?.po
+    ? { ap_checks: { ...previous, po: { ...previous.po, selectedPoId: draft.poId, comparison: gate.comparison, outcome: gate.outcome } } }
+    : {};
+  if (gate.outcome?.kind === "await_receipt") return park("awaiting_receipt", gate.outcome.reason, gateChecks);
+  if ((gate.outcome?.kind === "needs_approval" || gate.outcome?.kind === "blocked") && !approver) {
+    // An approver may send it anyway; everyone else hands it to one.
+    return park("pending_approval", gate.outcome.reason, gateChecks);
+  }
+
+  // With the approval workflow on, whoever reviews a low-confidence document
+  // still needs someone with approval permission to post it.
+  if (from === "review" && flags.isEnabled("approval_workflow") && !approver) {
+    return park("pending_approval", null);
   }
 
   // Claim the document atomically: of two concurrent approvals only one moves
-  // it to processing, so NetSuite receives a single request.
+  // it to processing, so the ERP receives a single request.
   const claimed = await db.update(historyDocuments)
     .set({ status: "processing", errorMessage: null, updatedAt: new Date() })
     .where(and(eq(historyDocuments.id, docIdNum), eq(historyDocuments.status, from)))
-    .returning({ id: historyDocuments.id });
+    .returning();
   if (!claimed.length) return NextResponse.json({ error: CONFLICT }, { status: 409 });
 
-  try {
-    const dryRun = await isFeatureEnabled(session.orgId, "netsuite_dry_run");
-    const customFormId = formsFeat.isEnabled
-      ? resolveCustomFormId(formsFeat.config, doc.subsidiaryId, doc.documentType)
-      : "";
-
-    const nsResult = await processInNetSuite(session.orgId, buildNsPayload(draft, {
-      organizationId: session.orgId,
-      documentId:     docIdNum,
-      documentType:   doc.documentType,
-      nsSubsidiaryId: sub.nsSubsidiaryId,
-      dryRun,
-      customFormId:   customFormId || undefined,
-      poConfig:       poFeature.config as PoConfig,
-    }));
-
-    const vendorName = draft.vendorName ?? doc.vendor ?? null;
-    await db.update(historyDocuments).set({
-      status:        "completed",
-      vendor:        vendorName,
-      netsuiteDocId: nsResult.internalId ?? null,
-      urlNetsuite:   nsResult.recordUrl ?? null,
-      products:      draft.lines.map((l) => ({
-        description: l.item_document_name,
-        quantity:    l.quantity,
-        unitPrice:   l.rate,
-        total:       l.amount,
-        nsItemId:    l.internal_id,
-        unit:        l.unit,
-      })) as unknown,
-      approvedBy:    session.sub,
-      updatedAt:     new Date(),
-    }).where(and(eq(historyDocuments.id, docIdNum), eq(historyDocuments.status, "processing")));
-
-    void recordPostedAmount(session.orgId, Number(doc.total ?? 0)).catch(() => {});
-
-    void deliverWebhooks(session.orgId, "document.completed", {
-      document: {
-        id: docIdNum, status: "completed", documentType: doc.documentType,
-        vendor: vendorName, total: doc.total?.toString() ?? null,
-        netsuiteDocId: nsResult.internalId, recordUrl: nsResult.recordUrl,
-      },
-    });
-
-    if (autoMappingFeat.isEnabled) void upsertItemMappings(
-      draft.lines.map((l) => ({
-        subsidiaryId:       doc.subsidiaryId,
-        vendor:             vendorName ?? "",
-        vendorItemName:     l.item_document_name,
-        netsuiteInternalId: l.internal_id,
-        netsuiteItemName:   null,
-        netsuiteUnit:       l.unit ?? null,
-        autoMap:            false,
-      })),
-      { mergeSimilarity: Number(autoMappingFeat.config.merge_similarity) },
-    ).catch(() => {});
-
-    return NextResponse.json({ ok: true, status: "completed", netsuiteId: nsResult.internalId, recordUrl: nsResult.recordUrl });
-  } catch (err) {
-    console.error("[workflow/approve]", err);
-    const message = err instanceof Error ? err.message : "Error interno del servidor";
-    // Back to the state it was claimed from: a failed approval must not turn a
-    // pending-approval document into one any reviewer can post.
-    await db.update(historyDocuments)
-      .set({ status: from, errorMessage: message, updatedAt: new Date() })
-      .where(and(eq(historyDocuments.id, docIdNum), eq(historyDocuments.status, "processing")))
-      .catch(() => {});
-    return NextResponse.json({ error: message }, { status: 502 });
+  // Back to the state it was claimed from on failure: a failed approval must
+  // not turn a pending-approval document into one any reviewer can post.
+  const result = await postClaimedDocument({ doc: claimed[0], draft, approvedBy: session.sub, revertTo: from });
+  if (!result.ok) {
+    console.error("[workflow/approve]", result.error);
+    return NextResponse.json({ error: result.error }, { status: 502 });
   }
+  return NextResponse.json({ ok: true, status: "completed", netsuiteId: result.netsuiteId, recordUrl: result.recordUrl });
 }
 
 export const POST = withApiSecurity(handlePOST);

@@ -12,6 +12,7 @@ import type { PgBoss } from "pg-boss";
  */
 export const INTERNAL_SCHEDULES = [
   { key: "reap-stuck", queue: "system-reap-stuck", cron: "*/5 * * * *", expireInSeconds: 120 },
+  { key: "receipt-check", queue: "system-receipt-check", cron: "*/15 * * * *", expireInSeconds: 10 * 60 },
   { key: "auto-sync", queue: "system-auto-sync", cron: "*/5 * * * *", expireInSeconds: 20 * 60 },
   { key: "expense-categories-sync", queue: "system-expense-categories-sync", cron: "20 2 * * *", expireInSeconds: 20 * 60 },
   { key: "retention", queue: "system-retention", cron: "0 3 * * *", expireInSeconds: 20 * 60 },
@@ -39,6 +40,11 @@ async function invokeTask(task: ScheduledTask): Promise<unknown> {
   switch (task.key) {
     case "reap-stuck": {
       const route = await import("@/app/api/internal/cron/reap-stuck/route");
+      response = await route.GET(request);
+      break;
+    }
+    case "receipt-check": {
+      const route = await import("@/app/api/internal/cron/receipt-check/route");
       response = await route.GET(request);
       break;
     }

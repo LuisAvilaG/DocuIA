@@ -25,7 +25,7 @@ const DOC_LABELS: Record<string, string> = {
 
 // Terminal = no longer self-advancing. pending_approval/approved wait on a human,
 // so polling them forever just wastes requests until the tab closes.
-const TERMINAL = new Set(["completed", "review", "failed", "pending_approval", "approved"]);
+const TERMINAL = new Set(["completed", "review", "failed", "pending_approval", "approved", "awaiting_receipt"]);
 const BULK_MAX = 20;
 const POLL_MIN = 3000;
 const POLL_MAX = 15000;

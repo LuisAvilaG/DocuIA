@@ -11,7 +11,10 @@ export type CfdiLine = {
 
 export type CfdiData = {
   version: string;
+  serie: string;
   folio: string;
+  metodoPago: string;
+  formaPago: string;
   fecha: string;
   uuid: string;
   tipoComprobante: string;
@@ -83,7 +86,10 @@ export function parseCfdi(xmlText: string): CfdiData {
 
   return {
     version:          attr(comprobante, "Version") || attr(comprobante, "version"),
+    serie:            attr(comprobante, "Serie"),
     folio:            attr(comprobante, "Folio"),
+    metodoPago:       attr(comprobante, "MetodoPago"),
+    formaPago:        attr(comprobante, "FormaPago"),
     fecha:            attr(comprobante, "Fecha"),
     uuid:             extractUUID(xmlText),
     tipoComprobante:  attr(comprobante, "TipoDeComprobante"),

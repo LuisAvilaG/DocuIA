@@ -18,6 +18,8 @@ export interface NSSubsidiary {
   name: string;
   country: string;
   currency: string;
+  /** Federal tax id (RFC in Mexico), when the catalog script provides it. */
+  tax_id?: string;
 }
 
 export interface NSCatalogItem {
@@ -38,6 +40,8 @@ export interface NSVendor {
   email: string;
   phone: string;
   rfc: string;
+  category_id?: string;
+  category_name?: string;
   inactive: boolean;
 }
 

@@ -8,6 +8,13 @@ import { randomUUID } from "crypto";
 
 type Params = { params: Promise<{ id: string }> };
 
+// RFC / tax id as stored for CFDI receiver validation.
+function cleanTaxId(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const clean = value.toUpperCase().replace(/[^A-Z0-9&Ñ]/g, "").slice(0, 20);
+  return clean || null;
+}
+
 async function handleGET(_req: NextRequest, { params }: Params) {
   const { error } = await requireAdminSession();
   if (error) return error;
@@ -33,7 +40,7 @@ async function handlePOST(req: NextRequest, { params }: Params) {
     const body = await req.json();
 
     // body.subsidiaries: Array<{ nsSubsidiaryId, name, currency?, locale? }>
-    const incoming: Array<{ nsSubsidiaryId: string; name: string; currency?: string; locale?: string }> =
+    const incoming: Array<{ nsSubsidiaryId: string; name: string; currency?: string; locale?: string; taxId?: string }> =
       body.subsidiaries ?? [];
 
     if (!incoming.length) {
@@ -54,7 +61,7 @@ async function handlePOST(req: NextRequest, { params }: Params) {
       const existingRow = existingByNsId.get(sub.nsSubsidiaryId);
       if (existingRow) {
         await db.update(subsidiaries)
-          .set({ name: sub.name, currency: sub.currency ?? existingRow.currency, updatedAt: now })
+          .set({ name: sub.name, currency: sub.currency ?? existingRow.currency, taxId: cleanTaxId(sub.taxId) ?? existingRow.taxId, updatedAt: now })
           .where(eq(subsidiaries.id, existingRow.id));
         upserted.push(existingRow.id);
       } else {
@@ -66,6 +73,7 @@ async function handlePOST(req: NextRequest, { params }: Params) {
           nsSubsidiaryId: sub.nsSubsidiaryId,
           currency: sub.currency ?? "USD",
           locale: sub.locale ?? "en-US",
+          taxId: cleanTaxId(sub.taxId),
           isActive: true,
           createdAt: now,
           updatedAt: now,

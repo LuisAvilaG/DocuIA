@@ -103,7 +103,7 @@ export function withApiSecurity<T extends unknown[]>(handler: (req: NextRequest,
       let bounded = req;
       if (mutation && req.body) {
         const multipart = req.headers.get("content-type")?.startsWith("multipart/form-data");
-        const limit = publicAuth || path === "/api/v1/contact" ? 16_384 : multipart ? (path === "/api/v1/contracts/cases" ? 60 : 21) * 1024 * 1024 : 2 * 1024 * 1024;
+        const limit = publicAuth || path === "/api/v1/contact" ? 16_384 : multipart ? (path === "/api/v1/contracts/cases" ? 60 : path === "/api/v1/workflow/upload" ? 42 : 21) * 1024 * 1024 : 2 * 1024 * 1024;
         const body = await readBoundedBody(req, limit);
         // Next can supply a Request from a different realm; copying explicitly
         // avoids losing its method when instanceof Request is false.

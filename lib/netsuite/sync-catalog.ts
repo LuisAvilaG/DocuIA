@@ -88,12 +88,16 @@ export async function syncSubsidiaryCatalog(
           await db.insert(catalogVendors).values({
             subsidiaryId, internalId: row.internal_id,
             entityid: row.entityid || null, name: row.name || null, email: row.email || null,
-            phone: row.phone || null, rfc: row.rfc || null, isInactive: row.inactive ?? false, updatedAt: now,
+            phone: row.phone || null, rfc: row.rfc || null,
+            categoryId: row.category_id || null, categoryName: row.category_name || null,
+            isInactive: row.inactive ?? false, updatedAt: now,
           }).onConflictDoUpdate({
             target: [catalogVendors.subsidiaryId, catalogVendors.internalId],
             set: {
               entityid: row.entityid || null, name: row.name || null, email: row.email || null,
-              phone: row.phone || null, rfc: row.rfc || null, isInactive: row.inactive ?? false, updatedAt: now,
+              phone: row.phone || null, rfc: row.rfc || null,
+              categoryId: row.category_id || null, categoryName: row.category_name || null,
+              isInactive: row.inactive ?? false, updatedAt: now,
             },
           });
         }

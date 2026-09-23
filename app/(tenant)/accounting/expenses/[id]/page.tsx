@@ -12,7 +12,7 @@ export default async function AccountingExpenseDetailPage({
 }) {
   const { id } = await params;
 
-  const session = await getTenantSession();
+  const session = await getTenantSession({ area: "expenses" });
   if (!session) redirect("/login");
   if (session.role !== "admin") redirect("/dashboard");
 

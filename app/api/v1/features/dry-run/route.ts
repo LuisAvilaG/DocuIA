@@ -1,9 +1,10 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { setTenantEnabled, getFeature } from "@/lib/features";
 
-export async function PATCH(req: Request) {
-  const session = await getTenantSession();
+async function handlePATCH(req: Request) {
+  const session = await getTenantSession({ area: "settings", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (session.role !== "admin") return NextResponse.json({ error: "Se requiere rol admin" }, { status: 403 });
 
@@ -32,8 +33,8 @@ export async function PATCH(req: Request) {
   }
 }
 
-export async function GET() {
-  const session = await getTenantSession();
+async function handleGET() {
+  const session = await getTenantSession({ area: "settings" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
   const feature = await getFeature(session.orgId, "netsuite_dry_run");
@@ -43,3 +44,6 @@ export async function GET() {
     tenantEnabled: feature.tenantEnabled,
   });
 }
+
+export const PATCH = withApiSecurity(handlePATCH);
+export const GET = withApiSecurity(handleGET);

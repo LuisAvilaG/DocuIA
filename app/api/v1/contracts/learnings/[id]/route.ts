@@ -1,3 +1,4 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { getTenantSession } from "@/lib/auth/jwt";
@@ -5,8 +6,8 @@ import { logAudit } from "@/lib/audit/log";
 import { db } from "@/lib/db";
 import { contractExtractionLearnings } from "@/db/schema";
 
-export async function DELETE(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getTenantSession();
+async function handleDELETE(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const session = await getTenantSession({ area: "contracts", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (session.role !== "admin") return NextResponse.json({ error: "Solo administradores pueden retirar aprendizajes." }, { status: 403 });
   const { id: rawId } = await params;
@@ -21,3 +22,5 @@ export async function DELETE(_request: NextRequest, { params }: { params: Promis
   await logAudit({ orgId: session.orgId, userId: session.sub, action: "contract.extraction_learning_retired", resourceType: "contract_extraction_learning", resourceId: String(id) });
   return NextResponse.json({ ok: true });
 }
+
+export const DELETE = withApiSecurity(handleDELETE);

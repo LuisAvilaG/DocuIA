@@ -1,3 +1,4 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { contractCases, contractObligations } from "@/db/schema";
@@ -12,7 +13,7 @@ function cronAuth(req: NextRequest): boolean {
 
 // Fires renewal/expiry alerts: any open obligation whose alert date has arrived
 // is marked "alerted". (Delivery via email/webhook can hook in here.)
-export async function GET(req: NextRequest) {
+async function handleGET(req: NextRequest) {
   if (!cronAuth(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   try {
@@ -42,3 +43,5 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Internal error" }, { status: 500 });
   }
 }
+
+export const GET = withApiSecurity(handleGET);

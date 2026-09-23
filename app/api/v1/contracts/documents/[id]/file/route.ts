@@ -1,3 +1,4 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
@@ -7,8 +8,8 @@ import { getFileStream } from "@/lib/storage/minio";
 import { Readable } from "node:stream";
 
 // Stream a source document of a contract case (tenant-scoped).
-export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getTenantSession();
+async function handleGET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const session = await getTenantSession({ area: "contracts" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   const { id } = await params;
 
@@ -40,3 +41,5 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: "Error al leer el documento" }, { status: 500 });
   }
 }
+
+export const GET = withApiSecurity(handleGET);

@@ -1,3 +1,4 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { isFeatureEnabled } from "@/lib/features";
@@ -9,8 +10,8 @@ import { logAudit } from "@/lib/audit/log";
 
 type Params = { params: Promise<{ id: string }> };
 
-export async function POST(req: NextRequest, { params }: Params) {
-  const session = await getTenantSession();
+async function handlePOST(req: NextRequest, { params }: Params) {
+  const session = await getTenantSession({ area: "expenses", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (session.role !== "admin") return NextResponse.json({ error: "Solo administradores pueden rechazar informes" }, { status: 403 });
   if (!await isFeatureEnabled(session.orgId, "expense_management")) {
@@ -67,3 +68,5 @@ export async function POST(req: NextRequest, { params }: Params) {
 
   return NextResponse.json({ ok: true });
 }
+
+export const POST = withApiSecurity(handlePOST);

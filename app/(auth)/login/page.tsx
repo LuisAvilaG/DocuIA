@@ -1,4 +1,5 @@
 "use client";
+import { safeReturnPath } from "@/lib/security/return-path";
 
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -14,7 +15,7 @@ function TenantLoginForm() {
   const [error,    setError]    = useState("");
   const [loading,  setLoading]  = useState(false);
   const requestedPath = searchParams.get("returnTo");
-  const returnTo = requestedPath?.startsWith("/") && !requestedPath.startsWith("//") ? requestedPath : null;
+  const returnTo = safeReturnPath(requestedPath);
   const [restoring, setRestoring] = useState(() => Boolean(returnTo));
 
   useEffect(() => {

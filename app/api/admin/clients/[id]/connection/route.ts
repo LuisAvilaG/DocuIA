@@ -1,3 +1,4 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession } from "@/lib/auth/admin";
 import { db } from "@/lib/db";
@@ -8,7 +9,7 @@ import { encryptField } from "@/lib/crypto/encrypt";
 
 type Params = { params: Promise<{ id: string }> };
 
-export async function GET(_req: NextRequest, { params }: Params) {
+async function handleGET(_req: NextRequest, { params }: Params) {
   const { error } = await requireAdminSession();
   if (error) return error;
 
@@ -42,7 +43,7 @@ export async function GET(_req: NextRequest, { params }: Params) {
   }
 }
 
-export async function POST(req: NextRequest, { params }: Params) {
+async function handlePOST(req: NextRequest, { params }: Params) {
   const { error } = await requireAdminSession();
   if (error) return error;
 
@@ -140,7 +141,7 @@ export async function POST(req: NextRequest, { params }: Params) {
 }
 
 /** PATCH — update only script IDs for an existing connection (no credentials needed) */
-export async function PATCH(req: NextRequest, { params }: Params) {
+async function handlePATCH(req: NextRequest, { params }: Params) {
   const { error } = await requireAdminSession();
   if (error) return error;
 
@@ -180,3 +181,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     return NextResponse.json({ error: "Internal error" }, { status: 500 });
   }
 }
+
+export const GET = withApiSecurity(handleGET);
+export const POST = withApiSecurity(handlePOST);
+export const PATCH = withApiSecurity(handlePATCH);

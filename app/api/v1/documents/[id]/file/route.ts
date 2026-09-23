@@ -1,3 +1,4 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
@@ -18,11 +19,11 @@ const MIME_MAP: Record<string, string> = {
   xml:  "application/xml",
 };
 
-export async function GET(
+async function handleGET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const session = await getTenantSession();
+  const session = await getTenantSession({ area: "documents" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
   const { id } = await params;
@@ -64,3 +65,5 @@ export async function GET(
     return NextResponse.json({ error: "Error al leer el archivo" }, { status: 500 });
   }
 }
+
+export const GET = withApiSecurity(handleGET);

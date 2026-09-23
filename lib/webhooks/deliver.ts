@@ -2,7 +2,7 @@ import { createHmac } from "crypto";
 import { db } from "@/lib/db";
 import { webhooks } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
-import { assertPublicHttpsUrl } from "./ssrf";
+import { postPublicWebhook } from "./ssrf";
 import { isFeatureEnabled } from "@/lib/features";
 
 export type WebhookEvent = "document.completed" | "document.review" | "document.failed";
@@ -58,19 +58,11 @@ export async function deliverWebhooks(
       const sig = sign(bodyStr, hook.secret);
       let statusCode = 0;
       try {
-        // Re-validate at delivery time to defeat DNS rebinding since save.
-        await assertPublicHttpsUrl(hook.url);
-        const res = await fetch(hook.url, {
-          method: "POST",
-          headers: {
+        statusCode = await postPublicWebhook(hook.url, bodyStr, {
             "Content-Type":     "application/json",
             "X-DocuIA-Event":   event,
             "X-DocuIA-Signature": sig,
-          },
-          body: bodyStr,
-          signal: AbortSignal.timeout(10_000),
         });
-        statusCode = res.status;
       } catch {
         statusCode = 0;
       }

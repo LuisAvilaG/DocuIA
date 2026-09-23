@@ -1,11 +1,12 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
 import { organizations } from "@/db/schema";
 import { eq } from "drizzle-orm";
 
-export async function PATCH(req: NextRequest) {
-  const session = await getTenantSession();
+async function handlePATCH(req: NextRequest) {
+  const session = await getTenantSession({ area: "settings", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (session.role !== "admin") {
     return NextResponse.json({ error: "Solo administradores pueden modificar la configuración" }, { status: 403 });
@@ -62,3 +63,5 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: "Error interno" }, { status: 500 });
   }
 }
+
+export const PATCH = withApiSecurity(handlePATCH);

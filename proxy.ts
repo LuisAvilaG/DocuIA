@@ -1,18 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { jwtSecret } from "@/lib/env";
+import { accessPayloadSchema } from "@/lib/auth/token-payload";
 
 const TENANT_ROUTES = [
   "/dashboard", "/workflow", "/history", "/exceptions",
   "/mappings", "/catalogs", "/statistics", "/settings",
   "/expenses", "/accounting", "/contracts",
+  "/cases",
 ];
-
-function tenantHomePath(homePath: unknown): "/dashboard" | "/contracts/dashboard" | "/accounting/expenses" {
-  return homePath === "/contracts/dashboard" || homePath === "/accounting/expenses" || homePath === "/dashboard"
-    ? homePath
-    : "/dashboard";
-}
 
 function isExpiredJwt(error: unknown) {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ERR_JWT_EXPIRED";
@@ -21,18 +17,9 @@ function isExpiredJwt(error: unknown) {
 export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
-  // ── Admin login page ─────────────────────────────────────────
-  if (pathname === "/admin/login") {
-    const token = req.cookies.get("admin_access_token")?.value;
-    if (token) {
-      try {
-        const { payload } = await jwtVerify(token, jwtSecret(), { algorithms: ["HS256"] });
-        if (payload.type === "platform_admin")
-          return NextResponse.redirect(new URL("/admin", req.url));
-      } catch { /* invalid/expired — let through */ }
-    }
-    return NextResponse.next();
-  }
+  // Login must remain reachable after a server-side revocation. The data layer
+  // validates active sessions; a signed cookie alone cannot redirect from login.
+  if (pathname === "/admin/login" || pathname === "/login") return NextResponse.next();
 
   // ── Admin protected routes ───────────────────────────────────
   if (pathname.startsWith("/admin")) {
@@ -40,7 +27,7 @@ export async function proxy(req: NextRequest) {
     if (!token) return NextResponse.redirect(new URL("/admin/login", req.url));
     try {
       const { payload } = await jwtVerify(token, jwtSecret(), { algorithms: ["HS256"] });
-      if (payload.type !== "platform_admin") throw new Error();
+      if (!accessPayloadSchema.safeParse(payload).success || payload.type !== "platform_admin") throw new Error();
       return NextResponse.next();
     } catch {
       const res = NextResponse.redirect(new URL("/admin/login", req.url));
@@ -50,19 +37,6 @@ export async function proxy(req: NextRequest) {
     }
   }
 
-  // ── Tenant login page ────────────────────────────────────────
-  if (pathname === "/login") {
-    const token = req.cookies.get("access_token")?.value;
-    if (token) {
-      try {
-        const { payload } = await jwtVerify(token, jwtSecret(), { algorithms: ["HS256"] });
-        if (payload.type === "org_user")
-          return NextResponse.redirect(new URL(tenantHomePath((payload as Record<string, unknown>).homePath), req.url));
-      } catch { /* let through */ }
-    }
-    return NextResponse.next();
-  }
-
   // ── Tenant protected routes ──────────────────────────────────
   const isTenant = TENANT_ROUTES.some((r) => pathname.startsWith(r));
   if (isTenant) {
@@ -70,7 +44,7 @@ export async function proxy(req: NextRequest) {
     if (!token) return NextResponse.redirect(new URL("/login", req.url));
     try {
       const { payload } = await jwtVerify(token, jwtSecret(), { algorithms: ["HS256"] });
-      if (payload.type !== "org_user") throw new Error();
+      if (!accessPayloadSchema.safeParse(payload).success || payload.type !== "org_user") throw new Error();
       return NextResponse.next();
     } catch (error) {
       // An expired access token can still be renewed through the rotating
@@ -107,6 +81,7 @@ export const config = {
     "/expenses/:path*",
     "/accounting/:path*",
     "/contracts/:path*",
+    "/cases/:path*",
     "/login",
   ],
 };

@@ -1,3 +1,4 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { hashSync } from "bcryptjs";
@@ -7,7 +8,7 @@ import { authSessions, platformAdmins } from "@/db/schema";
 
 type Params = { params: Promise<{ adminId: string }> };
 
-export async function PATCH(req: NextRequest, { params }: Params) {
+async function handlePATCH(req: NextRequest, { params }: Params) {
   const { error, session } = await requireAdminSession();
   if (error) return error;
 
@@ -105,3 +106,5 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     return NextResponse.json({ error: "No se pudo actualizar el administrador" }, { status: 500 });
   }
 }
+
+export const PATCH = withApiSecurity(handlePATCH);

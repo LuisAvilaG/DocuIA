@@ -8,7 +8,7 @@ import { contractCases, contractDocuments, contractFlows, contractValidations } 
 import { ContractMetricsClient } from "./metrics-client";
 
 export default async function ContractMetricsPage() {
-  const session = await getTenantSession();
+  const session = await getTenantSession({ area: "contracts" });
   if (!session) redirect("/login");
   if (!(await isProductActive(session.orgId, "contract_intelligence"))) redirect("/dashboard");
   if (!(await isFeatureEnabled(session.orgId, "contract_metrics"))) redirect("/contracts/dashboard");

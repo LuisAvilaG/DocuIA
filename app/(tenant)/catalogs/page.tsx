@@ -33,7 +33,7 @@ export type CatalogLocation = {
 };
 
 export default async function CatalogsPage() {
-  const session = await getTenantSession();
+  const session = await getTenantSession({ area: "documents" });
   if (!session) redirect("/login");
 
   let subs: { id: string; name: string }[] = [];

@@ -20,9 +20,8 @@ export async function sendEmail({ to, subject, html }: SendEmailOptions): Promis
   const apiKey = process.env.RESEND_API_KEY;
 
   if (!apiKey) {
-    const text = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-    console.log(`\n[email:dev] To: ${to}\nSubject: ${subject}\n${text}\n`);
-    return { ok: true };
+    console.error("[email] RESEND_API_KEY is not configured; message not sent");
+    return { ok: false };
   }
 
   try {
@@ -30,6 +29,7 @@ export async function sendEmail({ to, subject, html }: SendEmailOptions): Promis
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({ from: FROM, to, subject, html }),
+      signal: AbortSignal.timeout(15_000),
     });
     return { ok: res.ok };
   } catch (err) {

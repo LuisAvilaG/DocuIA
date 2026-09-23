@@ -16,6 +16,7 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  poweredByHeader: false,
   turbopack: {},
   // Self-contained server bundle for a small production Docker image.
   // (Next 16 no longer runs ESLint during build; CI lints separately.)

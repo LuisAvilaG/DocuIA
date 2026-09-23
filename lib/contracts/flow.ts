@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { sanitizeContractHtml } from "@/lib/security/html";
 import type { ContractPreset } from "./presets";
 import { ruleRefs, type ValidationRule, type Severity } from "./validate";
 import type { ContractDoc } from "./generate";
@@ -104,7 +105,7 @@ const zDoc = z.object({ brandColor: z.string().optional(), logo: z.string().opti
 const zGenerate = z.object({
   id: z.string().min(1), kind: z.literal("generate"), position: zPosition,
   data: z.object({
-    templateKey: z.string().min(1), name: z.string().min(1), body: z.string().default(""), doc: zDoc.optional(), html: z.string().optional(),
+    templateKey: z.string().min(1), name: z.string().min(1), body: z.string().default(""), doc: zDoc.optional(), html: z.string().max(1_000_000).transform(sanitizeContractHtml).optional(),
     source: z.enum(["editor", "word"]).default("editor"),
     wordTemplate: z.object({
       storageKey: z.string().min(1), originalName: z.string().min(1),

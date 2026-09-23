@@ -1,3 +1,4 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession } from "@/lib/auth/admin";
 import { db } from "@/lib/db";
@@ -10,7 +11,7 @@ import { seedContractPreset } from "@/lib/contracts/presets";
 
 const VALID_PRODUCTS = new Set(PRODUCTS.map((p) => p.key));
 
-export async function GET() {
+async function handleGET() {
   const { error } = await requireAdminSession();
   if (error) return error;
 
@@ -26,7 +27,7 @@ export async function GET() {
   }
 }
 
-export async function POST(req: NextRequest) {
+async function handlePOST(req: NextRequest) {
   const { error, session } = await requireAdminSession();
   if (error) return error;
 
@@ -108,3 +109,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Internal error" }, { status: 500 });
   }
 }
+
+export const GET = withApiSecurity(handleGET);
+export const POST = withApiSecurity(handlePOST);

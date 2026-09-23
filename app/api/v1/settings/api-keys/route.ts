@@ -1,3 +1,4 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { apiKeys } from "@/db/schema";
@@ -7,8 +8,8 @@ import { isFeatureEnabled } from "@/lib/features";
 import { randomBytes, createHash } from "crypto";
 import { v4 as uuid } from "uuid";
 
-export async function GET() {
-  const session = await getTenantSession();
+async function handleGET() {
+  const session = await getTenantSession({ area: "settings" });
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const enabled = await isFeatureEnabled(session.orgId, "api_keys");
@@ -31,8 +32,8 @@ export async function GET() {
   return NextResponse.json(keys.map(k => ({ ...k, isActive: k.revokedAt === null })));
 }
 
-export async function POST(req: NextRequest) {
-  const session = await getTenantSession();
+async function handlePOST(req: NextRequest) {
+  const session = await getTenantSession({ area: "settings", permission: "write" });
   if (!session || session.role !== "admin") {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -54,7 +55,7 @@ export async function POST(req: NextRequest) {
     name,
     keyHash,
     keyPrefix,
-    scopes:         [],
+    scopes:         ["documents:read", "documents:write"],
     createdBy:      session.sub,
   }).returning({
     id:        apiKeys.id,
@@ -65,3 +66,6 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({ ...key, isActive: true, rawKey });
 }
+
+export const GET = withApiSecurity(handleGET);
+export const POST = withApiSecurity(handlePOST);

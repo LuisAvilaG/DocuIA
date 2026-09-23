@@ -1,3 +1,4 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
@@ -6,8 +7,8 @@ import { and, eq } from "drizzle-orm";
 
 type Params = { params: Promise<{ id: string }> };
 
-export async function PATCH(req: NextRequest, { params }: Params) {
-  const session = await getTenantSession();
+async function handlePATCH(req: NextRequest, { params }: Params) {
+  const session = await getTenantSession({ area: "settings", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (session.role !== "admin") {
     return NextResponse.json({ error: "Solo administradores" }, { status: 403 });
@@ -35,8 +36,8 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   }
 }
 
-export async function DELETE(_req: NextRequest, { params }: Params) {
-  const session = await getTenantSession();
+async function handleDELETE(_req: NextRequest, { params }: Params) {
+  const session = await getTenantSession({ area: "settings", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (session.role !== "admin") {
     return NextResponse.json({ error: "Solo administradores" }, { status: 403 });
@@ -52,3 +53,6 @@ export async function DELETE(_req: NextRequest, { params }: Params) {
     return NextResponse.json({ error: "Error interno" }, { status: 500 });
   }
 }
+
+export const PATCH = withApiSecurity(handlePATCH);
+export const DELETE = withApiSecurity(handleDELETE);

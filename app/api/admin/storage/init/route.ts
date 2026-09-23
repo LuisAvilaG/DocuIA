@@ -1,8 +1,9 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextResponse } from "next/server";
 import { requireAdminSession } from "@/lib/auth/admin";
 import { ensureBucket } from "@/lib/storage/minio";
 
-export async function POST() {
+async function handlePOST() {
   const { error } = await requireAdminSession();
   if (error) return error;
 
@@ -17,3 +18,5 @@ export async function POST() {
     return NextResponse.json({ ok: false, bucket, error: message }, { status: 500 });
   }
 }
+
+export const POST = withApiSecurity(handlePOST);

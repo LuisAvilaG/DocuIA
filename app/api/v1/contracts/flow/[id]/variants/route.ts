@@ -1,3 +1,5 @@
+import { withApiSecurity } from "@/lib/security/http";
+import { matchesFileType } from "@/lib/security/files";
 import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { and, desc, eq } from "drizzle-orm";
@@ -44,8 +46,8 @@ async function ownedFlow(id: string, orgId: string) {
   });
 }
 
-export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getTenantSession();
+async function handleGET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const session = await getTenantSession({ area: "contracts" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (session.role !== "admin") return NextResponse.json({ error: "Solo administradores" }, { status: 403 });
   if (!await guard(session.orgId)) return NextResponse.json({ error: "El entrenamiento visual no está habilitado" }, { status: 403 });
@@ -60,8 +62,8 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   return NextResponse.json({ variants: variants.map((variant) => ({ ...variant, mappings: variant.mappingsJson })) });
 }
 
-export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getTenantSession();
+async function handlePOST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const session = await getTenantSession({ area: "contracts", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (session.role !== "admin") return NextResponse.json({ error: "Solo administradores" }, { status: 403 });
   if (!await guard(session.orgId)) return NextResponse.json({ error: "El entrenamiento visual no está habilitado" }, { status: 403 });
@@ -81,7 +83,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 180) || "muestra";
   const storageKey = `contracts/${session.orgId}/flow-training/${flowId}/${variantId}-${safeName}`;
   try {
-    await uploadFile(Buffer.from(await file.arrayBuffer()), storageKey, file.type);
+    const buffer = Buffer.from(await file.arrayBuffer());
+    if (!matchesFileType(buffer, file.type)) return NextResponse.json({ error: "El contenido no corresponde al tipo de archivo" }, { status: 415 });
+    await uploadFile(buffer, storageKey, file.type);
     await db.insert(contractVisualTrainingVariants).values({
       id: variantId, organizationId: session.orgId, flowId, documentType, name: name.slice(0, 150), storageKey,
       originalName: file.name.slice(0, 255), mimeType: file.type, signatureText, mappingsJson: mappings,
@@ -92,3 +96,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: "No se pudo guardar la variante." }, { status: 500 });
   }
 }
+
+export const GET = withApiSecurity(handleGET);
+export const POST = withApiSecurity(handlePOST);

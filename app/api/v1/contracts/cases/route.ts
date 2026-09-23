@@ -1,3 +1,5 @@
+import { withApiSecurity } from "@/lib/security/http";
+import { matchesFileType } from "@/lib/security/files";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { isProductActive } from "@/lib/products";
@@ -16,8 +18,8 @@ async function guard(orgId: string) {
   return isProductActive(orgId, "contract_intelligence");
 }
 
-export async function GET() {
-  const session = await getTenantSession();
+async function handleGET() {
+  const session = await getTenantSession({ area: "contracts" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (!await guard(session.orgId)) return NextResponse.json({ error: "Producto no activo" }, { status: 403 });
   if (!await isFeatureEnabled(session.orgId, "contract_ai_extraction")) {
@@ -45,8 +47,8 @@ export async function GET() {
   });
 }
 
-export async function POST(req: NextRequest) {
-  const session = await getTenantSession();
+async function handlePOST(req: NextRequest) {
+  const session = await getTenantSession({ area: "contracts", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (!await guard(session.orgId)) return NextResponse.json({ error: "Producto no activo" }, { status: 403 });
   if (!await isFeatureEnabled(session.orgId, "contract_ai_extraction")) {
@@ -59,6 +61,7 @@ export async function POST(req: NextRequest) {
     const flowId = String(form.get("flowId") ?? "") || undefined;
     const rawFiles = form.getAll("files").filter((f): f is File => f instanceof File);
     if (rawFiles.length === 0) return NextResponse.json({ error: "Se requiere al menos un archivo" }, { status: 400 });
+    if (rawFiles.length > 10) return NextResponse.json({ error: "Máximo 10 archivos por caso" }, { status: 413 });
     if (flowId) {
       const selectedFlow = await db.query.contractFlows.findFirst({
         where: and(eq(contractFlows.id, flowId), eq(contractFlows.organizationId, session.orgId)),
@@ -73,7 +76,9 @@ export async function POST(req: NextRequest) {
     for (const f of rawFiles) {
       if (!ALLOWED.has(f.type)) return NextResponse.json({ error: `Tipo no permitido: ${f.type}` }, { status: 415 });
       if (f.size > MAX_FILE) return NextResponse.json({ error: `${f.name} excede 20 MB` }, { status: 413 });
-      files.push({ buffer: Buffer.from(await f.arrayBuffer()), fileName: f.name, mimeType: f.type });
+      const buffer = Buffer.from(await f.arrayBuffer());
+      if (!matchesFileType(buffer, f.type)) return NextResponse.json({ error: "El contenido no corresponde al tipo de archivo" }, { status: 415 });
+      files.push({ buffer, fileName: f.name, mimeType: f.type });
     }
 
     const caseId = await createContractCase({ organizationId: session.orgId, createdBy: session.sub, title, flowId, files });
@@ -102,3 +107,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Error interno" }, { status: 500 });
   }
 }
+
+export const GET = withApiSecurity(handleGET);
+export const POST = withApiSecurity(handlePOST);

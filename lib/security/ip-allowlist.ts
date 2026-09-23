@@ -1,8 +1,9 @@
 import { getFeature } from "@/lib/features";
+import { clientIp } from "./request-ip";
 
 function ipv4ToUint32(ip: string): number | null {
   const octets = ip.split(".");
-  if (octets.length !== 4) return null;
+  if (octets.length !== 4 || octets.some(value => !/^\d{1,3}$/.test(value))) return null;
   const values = octets.map(value => Number(value));
   if (values.some(value => !Number.isInteger(value) || value < 0 || value > 255)) return null;
   return values.reduce((acc, value) => ((acc << 8) | value) >>> 0, 0);
@@ -27,10 +28,6 @@ function isAllowedIp(ip: string, allowlist: string[]): boolean {
   return false;
 }
 
-function requestIp(headers: Headers): string {
-  return (headers.get("x-forwarded-for")?.split(",")[0] ?? headers.get("x-real-ip") ?? "").trim();
-}
-
 /** Applies only after an organization user has authenticated. Public login and platform admin never call this. */
 export async function isTenantIpAllowed(organizationId: string, requestHeaders: Headers): Promise<boolean> {
   const feature = await getFeature(organizationId, "ip_allowlist");
@@ -39,9 +36,6 @@ export async function isTenantIpAllowed(organizationId: string, requestHeaders: 
   const allowlist = Array.isArray(raw) ? raw : String(raw ?? "").split(",");
   if (!allowlist.some(value => value.trim())) return true;
 
-  const ip = requestIp(requestHeaders);
-  // Local development has no proxy header. It is intentionally never treated as
-  // a production allowlist entry.
-  if (ip === "127.0.0.1" || ip === "::1" || ip === "localhost") return true;
+  const ip = clientIp(requestHeaders);
   return isAllowedIp(ip, allowlist);
 }

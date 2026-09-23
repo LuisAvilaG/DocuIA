@@ -1,3 +1,4 @@
+import { withApiSecurity } from "@/lib/security/http";
 /**
  * Real-time validation endpoint for expense item form.
  * Checks: duplicate invoice, spending cap, fiscal ID format.
@@ -11,8 +12,8 @@ import { eq, and, gte, sql } from "drizzle-orm";
 import { validateFiscalId } from "@/lib/expense/tax-engine";
 import { getExpenseManagementConfig } from "@/lib/expense/config";
 
-export async function POST(req: NextRequest) {
-  const session = await getTenantSession();
+async function handlePOST(req: NextRequest) {
+  const session = await getTenantSession({ area: "expenses", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (!await isFeatureEnabled(session.orgId, "expense_management")) {
     return NextResponse.json({ error: "Módulo de gastos no activado" }, { status: 403 });
@@ -110,3 +111,5 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({ ok: true, warnings });
 }
+
+export const POST = withApiSecurity(handlePOST);

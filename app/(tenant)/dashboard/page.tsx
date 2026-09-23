@@ -101,7 +101,7 @@ async function getDashboardData(orgId: string) {
 }
 
 export default async function TenantDashboardPage() {
-  const session = await getTenantSession();
+  const session = await getTenantSession({ area: "documents" });
   if (!session) redirect("/login");
   if (!await isProductActive(session.orgId, "ap_automation")) {
     const homePath = await getTenantHomePath(session.orgId);

@@ -1,3 +1,4 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { getTenantSession } from "@/lib/auth/jwt";
@@ -48,8 +49,8 @@ function configuredMinimum(config: Record<string, unknown>): number {
   return Number.isFinite(value) ? Math.max(1, Math.min(100, Math.round(value))) : 5;
 }
 
-export async function POST(req: NextRequest) {
-  const session = await getTenantSession();
+async function handlePOST(req: NextRequest) {
+  const session = await getTenantSession({ area: "documents", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (session.role !== "admin") return NextResponse.json({ error: "Solo administradores pueden crear mapeos" }, { status: 403 });
 
@@ -89,3 +90,5 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "No se pudo crear el mapeo" }, { status: 500 });
   }
 }
+
+export const POST = withApiSecurity(handlePOST);

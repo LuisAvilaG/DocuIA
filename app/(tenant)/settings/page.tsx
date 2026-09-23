@@ -7,7 +7,7 @@ import { getFeature, isFeatureEnabled } from "@/lib/features";
 import { SettingsClient } from "./client";
 
 export default async function SettingsPage() {
-  const session = await getTenantSession();
+  const session = await getTenantSession({ area: "settings" });
   if (!session) redirect("/login");
 
   try {

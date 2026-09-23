@@ -29,7 +29,7 @@ async function getWorkflowData(orgId: string) {
 }
 
 export default async function WorkflowPage() {
-  const session = await getTenantSession();
+  const session = await getTenantSession({ area: "documents" });
   if (!session) redirect("/login");
 
   const { subs, recentDocs } = await getWorkflowData(session.orgId);

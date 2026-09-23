@@ -1,3 +1,4 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { and, eq, sql } from "drizzle-orm";
 import { getTenantSession } from "@/lib/auth/jwt";
@@ -57,7 +58,7 @@ async function ownedMapping(mappingId: number, orgId: string) {
 }
 
 async function requireMappingAdmin() {
-  const session = await getTenantSession();
+  const session = await getTenantSession({ area: "documents" });
   if (!session) return { session: null, error: NextResponse.json({ error: "No autorizado" }, { status: 401 }) };
   if (session.role !== "admin") return { session: null, error: NextResponse.json({ error: "Solo administradores pueden administrar mapeos" }, { status: 403 }) };
   const feature = await getFeature(session.orgId, "auto_mapping");
@@ -65,7 +66,7 @@ async function requireMappingAdmin() {
   return { session, feature, error: null };
 }
 
-export async function PATCH(req: NextRequest, { params }: Params) {
+async function handlePATCH(req: NextRequest, { params }: Params) {
   const auth = await requireMappingAdmin();
   if (auth.error || !auth.session || !auth.feature) return auth.error!;
   const id = Number((await params).id);
@@ -105,7 +106,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   }
 }
 
-export async function DELETE(_req: NextRequest, { params }: Params) {
+async function handleDELETE(_req: NextRequest, { params }: Params) {
   const auth = await requireMappingAdmin();
   if (auth.error || !auth.session) return auth.error!;
   const id = Number((await params).id);
@@ -124,3 +125,6 @@ export async function DELETE(_req: NextRequest, { params }: Params) {
     return NextResponse.json({ error: "No se pudo eliminar el mapeo" }, { status: 500 });
   }
 }
+
+export const PATCH = withApiSecurity(handlePATCH);
+export const DELETE = withApiSecurity(handleDELETE);

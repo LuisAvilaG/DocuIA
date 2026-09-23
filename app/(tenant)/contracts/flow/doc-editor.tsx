@@ -1,4 +1,5 @@
 "use client";
+import { sanitizeContractHtml } from "@/lib/security/html";
 
 import { useRef, useState, useEffect } from "react";
 import {
@@ -148,9 +149,14 @@ export function DocEditor({ initialHtml, fields, onSave, onClose }: {
 .doc-page td,.doc-page th{border:1px solid #ccc;padding:6px}
 .doc-page img{max-width:100%}`}</style>
           <div ref={ref} contentEditable suppressContentEditableWarning
+            onPaste={(event) => {
+              const html = event.clipboardData.getData("text/html");
+              if (html) { event.preventDefault(); document.execCommand("insertHTML", false, sanitizeContractHtml(html)); }
+            }}
+            onDrop={(event) => event.preventDefault()}
             className="doc-page bg-white mx-auto shadow-sm rounded-sm"
             style={{ width: "100%", maxWidth: 760, minHeight: 900, padding: "56px 64px" }}
-            dangerouslySetInnerHTML={{ __html: initialHtml || "<h1>Documento</h1><p>Escribe aquí. Usa la barra para dar formato e inserta campos del caso con “+ Insertar campo”.</p>" }} />
+            dangerouslySetInnerHTML={{ __html: sanitizeContractHtml(initialHtml || "<h1>Documento</h1><p>Escribe aquí. Usa la barra para dar formato e inserta campos del caso con “+ Insertar campo”.</p>") }} />
         </div>
       </div>
     </div>

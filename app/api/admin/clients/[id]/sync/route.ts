@@ -1,10 +1,11 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession } from "@/lib/auth/admin";
 import { syncSubsidiaryCatalog, type CatalogType } from "@/lib/netsuite/sync-catalog";
 
 type Params = { params: Promise<{ id: string }> };
 
-export async function POST(req: NextRequest, { params }: Params) {
+async function handlePOST(req: NextRequest, { params }: Params) {
   const { error } = await requireAdminSession();
   if (error) return error;
 
@@ -27,3 +28,5 @@ export async function POST(req: NextRequest, { params }: Params) {
     return NextResponse.json({ error: "Internal error" }, { status: 500 });
   }
 }
+
+export const POST = withApiSecurity(handlePOST);

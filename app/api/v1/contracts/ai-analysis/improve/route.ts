@@ -1,10 +1,11 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { isProductActive } from "@/lib/products";
 import { improveAiAnalysisPrompt } from "@/lib/contracts/ai-analysis";
 
-export async function POST(req: NextRequest) {
-  const session = await getTenantSession();
+async function handlePOST(req: NextRequest) {
+  const session = await getTenantSession({ area: "contracts", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (session.role !== "admin") return NextResponse.json({ error: "Solo administradores pueden mejorar prompts de flujo." }, { status: 403 });
   if (!await isProductActive(session.orgId, "contract_intelligence")) return NextResponse.json({ error: "Contract Intelligence no está activo" }, { status: 403 });
@@ -17,3 +18,5 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "No se pudo mejorar el prompt." }, { status: 502 });
   }
 }
+
+export const POST = withApiSecurity(handlePOST);

@@ -6,7 +6,7 @@ import { eq, and, desc, notInArray } from "drizzle-orm";
 import { AccountingExpenseList } from "./accounting-list";
 
 export default async function AccountingExpensesPage() {
-  const session = await getTenantSession();
+  const session = await getTenantSession({ area: "expenses" });
   if (!session) redirect("/login");
   if (session.role !== "admin") redirect("/dashboard");
 

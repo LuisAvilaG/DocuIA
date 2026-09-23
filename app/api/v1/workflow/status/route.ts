@@ -1,3 +1,4 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
@@ -6,8 +7,8 @@ import { and, eq, inArray } from "drizzle-orm";
 
 // Batch status endpoint: the workflow poller fetches all active documents in a
 // single request instead of one request per document per tick.
-export async function GET(req: NextRequest) {
-  const session = await getTenantSession();
+async function handleGET(req: NextRequest) {
+  const session = await getTenantSession({ area: "documents" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
   const ids = (req.nextUrl.searchParams.get("ids") ?? "")
@@ -35,3 +36,5 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Error interno" }, { status: 500 });
   }
 }
+
+export const GET = withApiSecurity(handleGET);

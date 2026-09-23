@@ -1,3 +1,4 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -17,7 +18,7 @@ function cronAuth(req: NextRequest): boolean {
   return Boolean(secret) && req.headers.get("x-cron-secret") === secret;
 }
 
-export async function GET(req: NextRequest) {
+async function handleGET(req: NextRequest) {
   if (!cronAuth(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   try {
@@ -71,3 +72,5 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Internal error" }, { status: 500 });
   }
 }
+
+export const GET = withApiSecurity(handleGET);

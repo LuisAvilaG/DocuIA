@@ -1,11 +1,12 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
 import { subsidiaries, catalogVendors } from "@/db/schema";
 import { and, eq, inArray, or, ilike } from "drizzle-orm";
 
-export async function GET(req: NextRequest) {
-  const session = await getTenantSession();
+async function handleGET(req: NextRequest) {
+  const session = await getTenantSession({ area: "documents" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
   const { searchParams } = req.nextUrl;
@@ -57,3 +58,5 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Internal error" }, { status: 500 });
   }
 }
+
+export const GET = withApiSecurity(handleGET);

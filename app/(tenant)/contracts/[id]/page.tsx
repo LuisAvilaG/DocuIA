@@ -71,7 +71,7 @@ function getRuleOutcomeTag(items: ValidationOutcome[]) {
 
 export default async function ContractCasePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const session = await getTenantSession();
+  const session = await getTenantSession({ area: "contracts" });
   // Access tokens are intentionally short lived. Preserve the case URL so the
   // login page can refresh the tenant session and return the user here instead
   // of looking like the case unexpectedly signed them out.

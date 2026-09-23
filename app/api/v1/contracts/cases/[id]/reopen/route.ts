@@ -1,3 +1,4 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
@@ -7,8 +8,8 @@ import { logAudit } from "@/lib/audit/log";
 import { isFeatureEnabled } from "@/lib/features";
 
 // Reopen a decided case back to review, keeping the prior decision in history.
-export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getTenantSession();
+async function handlePOST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const session = await getTenantSession({ area: "contracts", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (session.role !== "admin") return NextResponse.json({ error: "Solo administradores pueden reabrir" }, { status: 403 });
   if (!await isFeatureEnabled(session.orgId, "contract_approval_workflow")) {
@@ -42,3 +43,5 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
   await logAudit({ orgId: session.orgId, userId: session.sub, userEmail: session.email, action: "contract.reopened", resourceType: "contract_case", resourceId: id });
   return NextResponse.json({ ok: true, status: "validated" });
 }
+
+export const POST = withApiSecurity(handlePOST);

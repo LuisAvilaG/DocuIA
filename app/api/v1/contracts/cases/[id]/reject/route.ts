@@ -1,3 +1,4 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
@@ -6,8 +7,8 @@ import { and, eq } from "drizzle-orm";
 import { logAudit } from "@/lib/audit/log";
 import { isFeatureEnabled } from "@/lib/features";
 
-export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getTenantSession();
+async function handlePOST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const session = await getTenantSession({ area: "contracts", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (session.role !== "admin") return NextResponse.json({ error: "Solo administradores pueden rechazar" }, { status: 403 });
   if (!await isFeatureEnabled(session.orgId, "contract_approval_workflow")) {
@@ -38,3 +39,5 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   await logAudit({ orgId: session.orgId, userId: session.sub, userEmail: session.email, action: "contract.rejected", resourceType: "contract_case", resourceId: id, metadata: { reason } });
   return NextResponse.json({ ok: true, status: "rejected" });
 }
+
+export const POST = withApiSecurity(handlePOST);

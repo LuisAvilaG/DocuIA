@@ -1,3 +1,6 @@
+import { withApiSecurity } from "@/lib/security/http";
+import { isOrgWordTemplateKey } from "@/lib/security/storage-key";
+import { validateDocx } from "@/lib/security/docx";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
@@ -10,8 +13,8 @@ import { fillWordTemplate } from "@/lib/contracts/word-template";
 import { logAudit } from "@/lib/audit/log";
 import { getFeature, isFeatureEnabled } from "@/lib/features";
 
-export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getTenantSession();
+async function handlePOST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const session = await getTenantSession({ area: "contracts", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (session.role !== "admin") return NextResponse.json({ error: "Solo administradores pueden generar documentos." }, { status: 403 });
   if (!await isFeatureEnabled(session.orgId, "contract_document_generation")) {
@@ -59,7 +62,10 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     let outputMime = "application/pdf";
     let outputName = `${title}.pdf`;
     if (tpl?.source === "word" && tpl.wordTemplate) {
-      output = fillWordTemplate(await getFileBuffer(tpl.wordTemplate.storageKey), tpl.wordTemplate, data);
+      if (!isOrgWordTemplateKey(tpl.wordTemplate.storageKey, session.orgId)) return NextResponse.json({ error: "Plantilla no permitida" }, { status: 403 });
+      const source = await getFileBuffer(tpl.wordTemplate.storageKey);
+      await validateDocx(source);
+      output = fillWordTemplate(source, tpl.wordTemplate, data);
       missing = [...tpl.wordTemplate.mappings, ...(tpl.wordTemplate.tableRepeats ?? [])]
         .filter((mapping) => {
           const value = data[mapping.fieldKey];
@@ -100,3 +106,5 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     return NextResponse.json({ error: "Error al generar el documento" }, { status: 500 });
   }
 }
+
+export const POST = withApiSecurity(handlePOST);

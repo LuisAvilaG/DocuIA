@@ -1,3 +1,4 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { desc, eq } from "drizzle-orm";
 import { hashSync } from "bcryptjs";
@@ -24,7 +25,7 @@ function safeAdmin(admin: typeof platformAdmins.$inferSelect) {
   };
 }
 
-export async function GET() {
+async function handleGET() {
   const { error, session } = await requireAdminSession();
   if (error) return error;
 
@@ -44,7 +45,7 @@ export async function GET() {
   }
 }
 
-export async function POST(req: NextRequest) {
+async function handlePOST(req: NextRequest) {
   const { error } = await requireAdminSession();
   if (error) return error;
 
@@ -92,3 +93,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "No se pudo crear el administrador" }, { status: 500 });
   }
 }
+
+export const GET = withApiSecurity(handleGET);
+export const POST = withApiSecurity(handlePOST);

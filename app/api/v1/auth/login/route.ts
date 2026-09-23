@@ -1,3 +1,6 @@
+import { clientIp } from "@/lib/security/request-ip";
+import { loginSchema, accountRateKey } from "@/lib/auth/input";
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { orgUsers, authSessions } from "@/db/schema";
@@ -5,18 +8,15 @@ import { eq } from "drizzle-orm";
 import { compare } from "bcryptjs";
 import { v4 as uuid } from "uuid";
 import { randomBytes } from "crypto";
-import { signAccessToken, signRefreshToken } from "@/lib/auth/jwt";
+import { signAccessToken, signRefreshToken, isOrganizationActive } from "@/lib/auth/jwt";
 import { rateLimit, clearRateLimit } from "@/lib/auth/rate-limit";
 import { logAudit } from "@/lib/audit/log";
 import { getTenantHomePath } from "@/lib/products";
 
-export async function POST(req: NextRequest) {
-  const ip =
-    req.headers.get("x-forwarded-for")?.split(",")[0].trim() ??
-    req.headers.get("x-real-ip") ??
-    "unknown";
+async function handlePOST(req: NextRequest) {
+  const ip = clientIp(req.headers);
 
-  const rl = await rateLimit(ip);
+  const rl = await rateLimit(`tenant-login:ip:${ip}`, { max: 30, windowSec: 900 });
   if (!rl.ok) {
     return NextResponse.json(
       { error: `Demasiados intentos. Inténtalo en ${Math.ceil((rl.retryAfterSec ?? 900) / 60)} min.` },
@@ -25,19 +25,20 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const body = await req.json();
-    const email    = String(body.email ?? "").toLowerCase().trim();
-    const password = String(body.password ?? "");
-
-    if (!email || !password) {
+    const parsed = loginSchema.safeParse(await req.json());
+    if (!parsed.success) {
       return NextResponse.json({ error: "Email y contraseña requeridos" }, { status: 400 });
     }
+    const { email, password } = parsed.data;
+    const accountKey = accountRateKey("tenant-login", email);
+    const accountLimit = await rateLimit(accountKey, { max: 5, windowSec: 900 });
+    if (!accountLimit.ok) return NextResponse.json({ error: "Demasiados intentos" }, { status: 429, headers: { "Retry-After": String(accountLimit.retryAfterSec ?? 900) } });
 
     const user = await db.query.orgUsers.findFirst({
       where: eq(orgUsers.email, email),
     });
 
-    if (!user || !user.passwordHash || !user.isActive) {
+    if (!user || !user.passwordHash || !user.isActive || !await isOrganizationActive(user.organizationId)) {
       return NextResponse.json({ error: "Credenciales inválidas" }, { status: 401 });
     }
 
@@ -46,7 +47,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Credenciales inválidas" }, { status: 401 });
     }
 
-    await clearRateLimit(ip);
+    await clearRateLimit(accountKey);
 
     const homePath = await getTenantHomePath(user.organizationId);
 
@@ -66,7 +67,7 @@ export async function POST(req: NextRequest) {
     });
 
     const [accessToken, refreshToken] = await Promise.all([
-      signAccessToken({
+      signAccessToken({ sessionId,
         sub:   user.id,
         type:  "org_user",
         orgId: user.organizationId,
@@ -102,3 +103,5 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Error interno del servidor" }, { status: 500 });
   }
 }
+
+export const POST = withApiSecurity(handlePOST);

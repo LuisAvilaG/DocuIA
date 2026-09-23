@@ -8,7 +8,7 @@ import { eq, desc } from "drizzle-orm";
 import { ContractsClient } from "../contracts/client";
 
 export default async function CasesPage() {
-  const session = await getTenantSession();
+  const session = await getTenantSession({ area: "contracts" });
   if (!session) redirect("/login");
   if (!(await isProductActive(session.orgId, "contract_intelligence"))) redirect("/dashboard");
   if (!(await isFeatureEnabled(session.orgId, "contract_ai_extraction"))) redirect("/contracts/dashboard");

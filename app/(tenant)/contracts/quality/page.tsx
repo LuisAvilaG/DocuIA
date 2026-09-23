@@ -8,7 +8,7 @@ import { isProductActive } from "@/lib/products";
 import { ContractLearningClient } from "./quality-client";
 
 export default async function ContractQualityPage() {
-  const session = await getTenantSession();
+  const session = await getTenantSession({ area: "contracts" });
   if (!session) redirect("/login");
   if (!(await isProductActive(session.orgId, "contract_intelligence"))) redirect("/dashboard");
   if (!(await isFeatureEnabled(session.orgId, "contract_ai_extraction"))) redirect("/contracts/dashboard");

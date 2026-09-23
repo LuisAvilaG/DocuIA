@@ -5,7 +5,7 @@ import { isFeatureEnabled } from "@/lib/features";
 import { ContractFlowClient } from "../client";
 
 export default async function ContractFlowEditorPage({ params }: { params: Promise<{ id: string }> }) {
-  const session = await getTenantSession();
+  const session = await getTenantSession({ area: "contracts" });
   if (!session) redirect("/login");
   if (!(await isProductActive(session.orgId, "contract_intelligence"))) redirect("/dashboard");
   if (!(await isFeatureEnabled(session.orgId, "contract_flow_builder"))) redirect("/contracts/dashboard");

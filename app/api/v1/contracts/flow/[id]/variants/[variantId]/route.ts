@@ -1,3 +1,4 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -16,8 +17,8 @@ function validMappings(value: unknown): value is VisualFieldMapping[] {
   return Array.isArray(value) && value.length <= 120 && value.every((m) => m && typeof m === "object" && typeof m.fieldKey === "string" && Number.isInteger(m.page) && [m.x, m.y, m.width, m.height].every((v) => typeof v === "number" && v >= 0 && v <= 1) && m.width > 0 && m.height > 0 && (m.anchorText === undefined || typeof m.anchorText === "string"));
 }
 
-export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string; variantId: string }> }) {
-  const session = await getTenantSession();
+async function handlePATCH(req: NextRequest, { params }: { params: Promise<{ id: string; variantId: string }> }) {
+  const session = await getTenantSession({ area: "contracts", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (session.role !== "admin") return NextResponse.json({ error: "Solo administradores" }, { status: 403 });
   if (!await guard(session.orgId)) return NextResponse.json({ error: "El entrenamiento visual no está habilitado" }, { status: 403 });
@@ -34,8 +35,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   return NextResponse.json({ ok: true });
 }
 
-export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string; variantId: string }> }) {
-  const session = await getTenantSession();
+async function handleDELETE(_req: NextRequest, { params }: { params: Promise<{ id: string; variantId: string }> }) {
+  const session = await getTenantSession({ area: "contracts", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (session.role !== "admin") return NextResponse.json({ error: "Solo administradores" }, { status: 403 });
   if (!await guard(session.orgId)) return NextResponse.json({ error: "El entrenamiento visual no está habilitado" }, { status: 403 });
@@ -46,3 +47,6 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
   void deleteFile(row.storageKey).catch((error) => console.error("[contracts/visual-training DELETE]", error));
   return NextResponse.json({ ok: true });
 }
+
+export const PATCH = withApiSecurity(handlePATCH);
+export const DELETE = withApiSecurity(handleDELETE);

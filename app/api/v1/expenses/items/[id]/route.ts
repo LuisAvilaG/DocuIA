@@ -1,3 +1,5 @@
+import { withApiSecurity } from "@/lib/security/http";
+import { ownsExpenseCatalogReferences } from "@/lib/expense/catalog-access";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { isFeatureEnabled } from "@/lib/features";
@@ -6,11 +8,11 @@ import { expenseItems } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { validateExpenseAmounts } from "@/lib/expense/tax-engine";
 
-export async function DELETE(
+async function handleDELETE(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await getTenantSession();
+  const session = await getTenantSession({ area: "expenses", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (!await isFeatureEnabled(session.orgId, "expense_management")) {
     return NextResponse.json({ error: "Módulo de gastos no activado" }, { status: 403 });
@@ -33,11 +35,11 @@ export async function DELETE(
   return NextResponse.json({ ok: true });
 }
 
-export async function PATCH(
+async function handlePATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await getTenantSession();
+  const session = await getTenantSession({ area: "expenses", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (!await isFeatureEnabled(session.orgId, "expense_management")) {
     return NextResponse.json({ error: "Módulo de gastos no activado" }, { status: 403 });
@@ -56,6 +58,7 @@ export async function PATCH(
   if (item.report.status !== "draft") return NextResponse.json({ error: "Solo se pueden editar gastos de informes en borrador" }, { status: 409 });
 
   const body = await req.json() as Record<string, unknown>;
+  if (!await ownsExpenseCatalogReferences(session.orgId, body)) return NextResponse.json({ error: "Categoría, departamento o clase no válidos" }, { status: 400 });
   const allowed = ["categoryId","departmentId","classId","expenseDate","description","vendorName","vendorNit","invoiceNumber","invoiceDate","subtotal","taxAmount","retentionAmount","total","currency","paymentMethod","documentTypeDetected","needsDocumentoEquivalente"];
   const updates: Record<string, unknown> = { updatedAt: new Date() };
   for (const key of allowed) {
@@ -81,7 +84,10 @@ export async function PATCH(
     }
   }
 
-  await db.update(expenseItems).set(updates as any).where(eq(expenseItems.id, id));
+  await db.update(expenseItems).set(updates as Partial<typeof expenseItems.$inferInsert>).where(eq(expenseItems.id, id));
 
   return NextResponse.json({ ok: true });
 }
+
+export const DELETE = withApiSecurity(handleDELETE);
+export const PATCH = withApiSecurity(handlePATCH);

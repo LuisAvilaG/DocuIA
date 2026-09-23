@@ -1,3 +1,4 @@
+import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { getTenantSession } from "@/lib/auth/jwt";
@@ -7,8 +8,8 @@ import { contractCases, contractDocuments, contractExtractionLearnings, contract
 import { calculateContractRevalidation } from "@/lib/contracts/revalidate";
 import { isFeatureEnabled } from "@/lib/features";
 
-export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getTenantSession();
+async function handlePATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const session = await getTenantSession({ area: "contracts", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (session.role !== "admin") return NextResponse.json({ error: "Solo administradores pueden corregir extracciones." }, { status: 403 });
   if (!await isFeatureEnabled(session.orgId, "contract_ai_extraction")) return NextResponse.json({ error: "La extracción de contratos no está habilitada." }, { status: 403 });
@@ -93,3 +94,5 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
   return NextResponse.json({ ok: true, extractedJson: values, appliedToFuture: applyToFuture });
 }
+
+export const PATCH = withApiSecurity(handlePATCH);

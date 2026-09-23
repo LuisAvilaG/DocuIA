@@ -7,7 +7,7 @@ import { isFeatureEnabled } from "@/lib/features";
 import { ExpenseSidebar } from "@/components/expense/expense-sidebar";
 
 export default async function ExpenseLayout({ children }: { children: React.ReactNode }) {
-  const session = await getTenantSession();
+  const session = await getTenantSession({ area: "expenses" });
   if (!session) redirect("/login");
 
   // Only expense_submitter and admin can access this layout

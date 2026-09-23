@@ -4,10 +4,13 @@ import { createHash } from "node:crypto";
 import { jwtSecret, refreshSecret } from "@/lib/env";
 import { isTenantIpAllowed } from "@/lib/security/ip-allowlist";
 import { db } from "@/lib/db";
-import { apiKeys } from "@/db/schema";
-import { and, eq, isNull } from "drizzle-orm";
+import { apiKeys, authSessions, orgUsers, organizations, platformAdmins } from "@/db/schema";
+import { and, eq, gt, isNull, inArray } from "drizzle-orm";
 import { isFeatureEnabled } from "@/lib/features";
 import type { TenantHomePath } from "@/lib/products";
+import { accessPayloadSchema, refreshPayloadSchema } from "./token-payload";
+import { canAccessTenantArea, type TenantAccess } from "./permissions";
+import { clientIp } from "@/lib/security/request-ip";
 
 export interface AccessTokenPayload {
   sub: string;          // user id
@@ -16,6 +19,7 @@ export interface AccessTokenPayload {
   role?: string;
   email: string;
   homePath?: TenantHomePath;
+  sessionId: string;
 }
 
 export interface RefreshTokenPayload {
@@ -26,7 +30,7 @@ export interface RefreshTokenPayload {
 }
 
 export async function signAccessToken(payload: AccessTokenPayload): Promise<string> {
-  return new SignJWT({ ...payload })
+  return new SignJWT({ ...payload, tokenUse: "access" })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime(process.env.JWT_EXPIRES_IN ?? "15m")
@@ -34,7 +38,7 @@ export async function signAccessToken(payload: AccessTokenPayload): Promise<stri
 }
 
 export async function signRefreshToken(payload: RefreshTokenPayload): Promise<string> {
-  return new SignJWT({ ...payload })
+  return new SignJWT({ ...payload, tokenUse: "refresh" })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime(process.env.JWT_REFRESH_EXPIRES_IN ?? "7d")
@@ -43,12 +47,44 @@ export async function signRefreshToken(payload: RefreshTokenPayload): Promise<st
 
 export async function verifyAccessToken(token: string): Promise<AccessTokenPayload> {
   const { payload } = await jwtVerify(token, jwtSecret(), { algorithms: ["HS256"] });
-  return payload as unknown as AccessTokenPayload;
+  return accessPayloadSchema.parse(payload);
 }
 
 export async function verifyRefreshToken(token: string): Promise<RefreshTokenPayload> {
   const { payload } = await jwtVerify(token, refreshSecret(), { algorithms: ["HS256"] });
-  return payload as unknown as RefreshTokenPayload;
+  return refreshPayloadSchema.parse(payload);
+}
+
+async function validateSession(token: string, type: AccessTokenPayload["type"]): Promise<AccessTokenPayload | null> {
+  const payload = await verifyAccessToken(token);
+  if (payload.type !== type) return null;
+  const session = await db.query.authSessions.findFirst({
+    where: and(eq(authSessions.id, payload.sessionId), eq(authSessions.userId, payload.sub),
+      eq(authSessions.userType, type), isNull(authSessions.revokedAt), gt(authSessions.expiresAt, new Date())),
+  });
+  if (!session) return null;
+  if (type === "platform_admin") {
+    const admin = await db.query.platformAdmins.findFirst({
+      where: and(eq(platformAdmins.id, payload.sub), eq(platformAdmins.isActive, true)),
+      columns: { email: true },
+    });
+    return admin ? { ...payload, email: admin.email } : null;
+  }
+  if (!payload.orgId || session.organizationId !== payload.orgId) return null;
+  const user = await db.query.orgUsers.findFirst({
+    where: and(eq(orgUsers.id, payload.sub), eq(orgUsers.organizationId, payload.orgId), eq(orgUsers.isActive, true)),
+    columns: { role: true, email: true },
+  });
+  if (!user || !await isOrganizationActive(payload.orgId)) return null;
+  if (!await isTenantIpAllowed(payload.orgId, await headers())) return null;
+  return { ...payload, role: user.role, email: user.email };
+}
+
+export async function isOrganizationActive(orgId: string): Promise<boolean> {
+  return Boolean(await db.query.organizations.findFirst({
+    where: and(eq(organizations.id, orgId), inArray(organizations.status, ["active", "trial"])),
+    columns: { id: true },
+  }));
 }
 
 export async function getSessionFromCookies(): Promise<AccessTokenPayload | null> {
@@ -56,7 +92,7 @@ export async function getSessionFromCookies(): Promise<AccessTokenPayload | null
     const cookieStore = await cookies();
     const token = cookieStore.get("access_token")?.value;
     if (!token) return null;
-    return await verifyAccessToken(token);
+    return await validateSession(token, "org_user");
   } catch {
     return null;
   }
@@ -67,13 +103,13 @@ export async function getAdminSessionFromCookies(): Promise<AccessTokenPayload |
     const cookieStore = await cookies();
     const token = cookieStore.get("admin_access_token")?.value;
     if (!token) return null;
-    return await verifyAccessToken(token);
+    return await validateSession(token, "platform_admin");
   } catch {
     return null;
   }
 }
 
-async function getApiKeySession(requestHeaders: Headers): Promise<
+async function getApiKeySession(requestHeaders: Headers, access: TenantAccess): Promise<
   (AccessTokenPayload & { orgId: string; role: string }) | null
 > {
   const authorization = requestHeaders.get("authorization") ?? "";
@@ -85,16 +121,20 @@ async function getApiKeySession(requestHeaders: Headers): Promise<
     where: and(eq(apiKeys.keyHash, keyHash), isNull(apiKeys.revokedAt)),
   });
   if (!key || (key.expiresAt && key.expiresAt <= new Date())) return null;
+  const scopes = Array.isArray(key.scopes) ? key.scopes.filter((s): s is string => typeof s === "string") : [];
+  if (!canAccessTenantArea("api_key", access, scopes)) return null;
+  if (!await isOrganizationActive(key.organizationId)) return null;
   if (!await isFeatureEnabled(key.organizationId, "api_keys")) return null;
   if (!await isTenantIpAllowed(key.organizationId, requestHeaders)) return null;
 
-  const forwardedFor = requestHeaders.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
+  const ip = clientIp(requestHeaders);
   await db.update(apiKeys)
-    .set({ lastUsedAt: new Date(), lastUsedIp: forwardedFor?.slice(0, 64) ?? null })
+    .set({ lastUsedAt: new Date(), lastUsedIp: ip === "unknown" ? null : ip })
     .where(eq(apiKeys.id, key.id));
 
   return {
-    sub: `api_key:${key.id}`,
+    sub: key.id,
+    sessionId: key.id,
     type: "org_user",
     orgId: key.organizationId,
     // API keys intentionally never inherit an administrator role.
@@ -103,15 +143,16 @@ async function getApiKeySession(requestHeaders: Headers): Promise<
   };
 }
 
-export async function getTenantSession(): Promise<
+export async function getTenantSession(access: TenantAccess = {}): Promise<
   (AccessTokenPayload & { orgId: string; role: string }) | null
 > {
   const requestHeaders = await headers();
   const cookieSession = await getSessionFromCookies();
   const session = cookieSession?.type === "org_user" && cookieSession.orgId
     ? cookieSession
-    : await getApiKeySession(requestHeaders);
+    : await getApiKeySession(requestHeaders, access);
   if (!session || session.type !== "org_user" || !session.orgId) return null;
+  if (session.role !== "api_key" && !canAccessTenantArea(session.role ?? "", access)) return null;
   if (!await isTenantIpAllowed(session.orgId, requestHeaders)) return null;
   return session as AccessTokenPayload & { orgId: string; role: string };
 }

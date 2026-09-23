@@ -1,4 +1,5 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
+import { requireAdminSession } from "@/lib/auth/admin";
 import { db } from "@/lib/db";
 import {
   organizations, subscriptions,
@@ -10,6 +11,7 @@ import { and, eq, gte, inArray, sql } from "drizzle-orm";
 import { ClientDetailContent, type FullFeature, type OrgSummary, type SubsidiaryRow } from "./client";
 
 async function getClientData(id: string): Promise<{ org: OrgSummary; allFeatures: FullFeature[]; subsidiaryRows: SubsidiaryRow[] } | null> {
+  if ((await requireAdminSession()).error) redirect("/admin/login");
   try {
     const monthStart = new Date().toISOString().slice(0, 7) + "-01";
 

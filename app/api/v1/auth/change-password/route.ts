@@ -1,3 +1,5 @@
+import { withApiSecurity } from "@/lib/security/http";
+import { passwordSchema } from "@/lib/auth/input";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
@@ -7,8 +9,8 @@ import { compare, hash } from "bcryptjs";
 import { rateLimit } from "@/lib/auth/rate-limit";
 import { logAudit } from "@/lib/audit/log";
 
-export async function POST(req: NextRequest) {
-  const session = await getTenantSession();
+async function handlePOST(req: NextRequest) {
+  const session = await getTenantSession({ area: "profile", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
   // Throttle current-password guessing (keyed by the authenticated user).
@@ -23,11 +25,8 @@ export async function POST(req: NextRequest) {
     newPassword?: string;
   };
 
-  if (!currentPassword || !newPassword) {
+  if (typeof currentPassword !== "string" || currentPassword.length > 1024 || !passwordSchema.safeParse(newPassword).success) {
     return NextResponse.json({ error: "Contraseña actual y nueva son requeridas" }, { status: 400 });
-  }
-  if (newPassword.length < 8) {
-    return NextResponse.json({ error: "La nueva contraseña debe tener al menos 8 caracteres" }, { status: 400 });
   }
 
   const user = await db.query.orgUsers.findFirst({
@@ -39,15 +38,21 @@ export async function POST(req: NextRequest) {
   const valid = await compare(currentPassword, user.passwordHash);
   if (!valid) return NextResponse.json({ error: "Contraseña actual incorrecta" }, { status: 400 });
 
-  const newHash = await hash(newPassword, 12);
-  await db.update(orgUsers)
-    .set({ passwordHash: newHash, updatedAt: new Date() })
-    .where(eq(orgUsers.id, session.sub));
+  const newHash = await hash(newPassword!, 12);
+  const changed = await db.transaction(async tx => {
+  const updated = await tx.update(orgUsers)
+    .set({ passwordHash: newHash, resetToken: null, resetTokenExpiresAt: null, updatedAt: new Date() })
+    .where(and(eq(orgUsers.id, session.sub), eq(orgUsers.passwordHash, user.passwordHash!)))
+    .returning({ id: orgUsers.id });
+  if (!updated.length) return false;
 
   // Revoke all other sessions so a stolen session can't survive the change.
-  await db.update(authSessions)
+  await tx.update(authSessions)
     .set({ revokedAt: new Date() })
     .where(and(eq(authSessions.userId, session.sub), eq(authSessions.userType, "org_user")));
+  return true;
+  });
+  if (!changed) return NextResponse.json({ error: "La contraseña cambió. Inicia sesión nuevamente." }, { status: 409 });
 
   await logAudit({
     orgId: session.orgId, userId: session.sub, userEmail: session.email,
@@ -56,3 +61,5 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({ ok: true });
 }
+
+export const POST = withApiSecurity(handlePOST);

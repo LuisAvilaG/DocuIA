@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, FileUp, Clock, AlertTriangle,
   GitMerge, Database, BarChart3, Settings, Workflow, ClipboardCheck,
-  LogOut, User, Zap, Crown, Receipt, ScrollText, FolderOpen, BrainCircuit, KeyRound,
+  LogOut, User, Zap, Crown, Receipt, ScrollText, FolderOpen, BrainCircuit, KeyRound, ListChecks,
 } from "lucide-react";
 import { useState } from "react";
 import { ChangePasswordDialog } from "@/components/shared/change-password-dialog";
@@ -18,7 +18,7 @@ import { canAccessTenantArea, TENANT_ROLE_LABELS, isTenantRole } from "@/lib/aut
 // lucide icon name → component (registry stores names as strings)
 const ICONS: Record<string, React.ElementType> = {
   LayoutDashboard, FileUp, Clock, AlertTriangle, GitMerge, Database,
-  BarChart3, Settings, Workflow, ClipboardCheck, Receipt, ScrollText, FolderOpen, BrainCircuit,
+  BarChart3, Settings, Workflow, ClipboardCheck, Receipt, ScrollText, FolderOpen, BrainCircuit, ListChecks,
 };
 
 const PLAN_BADGE: Record<string, string> = {

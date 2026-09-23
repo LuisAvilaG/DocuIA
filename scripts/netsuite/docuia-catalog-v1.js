@@ -133,11 +133,28 @@ define(["N/search", "N/record", "N/log"], (search, record, log) => {
   }
 
   function buildVendorSearch(opts) {
+    // Vendors assigned to the subsidiary, not only those whose primary
+    // subsidiary it is: groups often keep vendors on the parent and share them
+    // with each child through the multi-subsidiary relationship.
+    if (opts.subsidiaryId) {
+      try {
+        const shared = vendorSearch(opts, ["msesubsidiary.internalid", "anyof", opts.subsidiaryId]);
+        shared.runPaged({ pageSize: 5 });
+        return shared;
+      } catch (e) {
+        log.debug({ title: "vendor search: multi-subsidiary join unavailable", details: str(e && e.message) });
+      }
+      return vendorSearch(opts, ["subsidiary", "anyof", opts.subsidiaryId]);
+    }
+    return vendorSearch(opts, null);
+  }
+
+  function vendorSearch(opts, subsidiaryFilter) {
     const filters = [];
     if (!opts.includeInactive) filters.push(["isinactive", "is", "F"]);
-    if (opts.subsidiaryId) {
+    if (subsidiaryFilter) {
       if (filters.length) filters.push("AND");
-      filters.push(["subsidiary", "anyof", opts.subsidiaryId]);
+      filters.push(subsidiaryFilter);
     }
     return search.create({
       type: search.Type.VENDOR,

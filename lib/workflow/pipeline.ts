@@ -11,7 +11,7 @@ import { runApChecks } from "./ap-checks";
 import { erpExtras } from "./erp-extras";
 import type { CfdiData } from "./cfdi-parser";
 import { logWorkflow } from "./log";
-import { parseCfdi } from "./cfdi-parser";
+import { findPoReference, parseCfdi } from "./cfdi-parser";
 import { deliverWebhooks } from "@/lib/webhooks/deliver";
 import { getAllFeatures, isFeatureEnabled } from "@/lib/features";
 import { validateExtraction, type ExtractionValidationConfig } from "./validation";
@@ -209,10 +209,11 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
         invoice: {
           format:        "general",
           vendor:        cfdiData.emisorNombre || cfdiData.emisorRfc,
+          vendorRfc:     cfdiData.emisorRfc,
           invoiceNumber: cfdiData.folio || cfdiData.uuid.slice(0, 8),
           invoiceDate:   cfdiData.fecha ? cfdiData.fecha.slice(0, 10) : "",
           dueDate:       "",
-          purchaseOrder: "",
+          purchaseOrder: findPoReference(xmlText),
           currency:      cfdiData.moneda,
           subtotal:      cfdiData.subTotal,
           // Real transferred taxes (IVA), not the old total − subtotal which

@@ -59,6 +59,22 @@ function extractUUID(xml: string): string {
   return attr(tfd, "UUID");
 }
 
+/**
+ * Purchase-order number cited anywhere in the CFDI (CondicionesDePago, concept
+ * descriptions, Addenda…). Suppliers write it in different places, so the whole
+ * document is scanned for "OC/PO/Orden de compra" followed by a number.
+ */
+export function findPoReference(xmlText: string): string {
+  // Seals and certificates are long base64 strings that can contain "PO123…".
+  const text = xmlText
+    .replace(/\s(?:Sello|SelloCFD|SelloSAT|Certificado|NoCertificado|NoCertificadoSAT)="[^"]*"/gi, " ")
+    .replace(/&[a-z#0-9]+;/gi, " ");
+  const labeled = /(?:orden\s+de\s+compra|pedido|\bO\.?\s?C\.?|\bP\.?\s?O\.?)\s*(?:n[oº°.]*|#|:|-)?\s*([A-Z]{0,4}-?\d{3,12})\b/i.exec(text);
+  if (labeled) return labeled[1].toUpperCase();
+  const bare = /\b((?:PO|OC)-?\d{4,12})\b/i.exec(text);
+  return bare ? bare[1].toUpperCase() : "";
+}
+
 export function parseCfdi(xmlText: string): CfdiData {
   const comprobante = /<cfdi:Comprobante[^>]*/i.exec(xmlText)?.[0] ?? xmlText;
   const emisorTag   = extractTag(xmlText, "Emisor");

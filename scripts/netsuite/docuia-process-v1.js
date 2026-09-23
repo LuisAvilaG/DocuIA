@@ -154,18 +154,38 @@ define(["N/record", "N/search", "N/format", "N/log", "N/file", "N/encode"], (rec
     return rows && rows.length ? s(rows[0].getValue("internalid")) : null;
   }
 
+  // Fails with a clear message instead of NetSuite's tax-engine "entity: null".
+  function ensureVendor(rec, vendorId, subId) {
+    if (!vendorId || s(rec.getValue({ fieldId: "entity" })) === vendorId) return;
+    const err = new Error(
+      "El proveedor " + vendorId + " no está asignado a la subsidiaria " + (subId || "(sin subsidiaria)") +
+      " en el ERP. Asígnalo a esa subsidiaria en la ficha del proveedor o procesa el documento en la subsidiaria correcta."
+    );
+    err.name = "VENDOR_NOT_IN_SUBSIDIARY";
+    throw err;
+  }
+
   function applyHeader(rec, body, docNumber, docDate, warnings) {
     const customForm = n(body.customform);
     if (customForm !== null) trySet(rec, "customform", customForm);
 
+    // A bill transformed from a PO already carries the PO's vendor and
+    // subsidiary; re-setting them makes NetSuite re-source (and can clear) them.
+    const fromPo = Boolean(s(body.po_internal_id));
     const vendorId = s(body.vendor_internal_id);
-    if (vendorId) rec.setValue({ fieldId: "entity", value: vendorId });
+    const subId = s(body.subsidiary_internal_id);
+    if (!fromPo) {
+      // Vendor first so the form sources its defaults, then the subsidiary. If
+      // the vendor is not assigned to that subsidiary NetSuite silently clears
+      // the vendor, which later fails in the tax engine as "entity: null".
+      if (vendorId) rec.setValue({ fieldId: "entity", value: vendorId });
+      if (subId) trySet(rec, "subsidiary", subId);
+      if (vendorId && s(rec.getValue({ fieldId: "entity" })) !== vendorId) trySet(rec, "entity", vendorId);
+    }
+    ensureVendor(rec, vendorId, subId);
 
     rec.setValue({ fieldId: "tranid",   value: docNumber });
     rec.setValue({ fieldId: "trandate", value: docDate });
-
-    const subId = s(body.subsidiary_internal_id);
-    if (subId) trySet(rec, "subsidiary", subId);
 
     const locId = s(body.location_internal_id);
     if (locId) trySet(rec, "location", locId);
@@ -363,7 +383,9 @@ define(["N/record", "N/search", "N/format", "N/log", "N/file", "N/encode"], (rec
 
     if (dryRun) return { ok: true, dry_run: true, mode, would_create: "vendor_bill", preview: { vendor_internal_id: vendorId, invoice_number: invNumber, lines_count: lines.length, expense_lines_count: expenseLines.length }, warnings };
 
-    log.audit({ title: "docuia-process:saving", details: "vendor_bill mode=" + mode + " lines=" + lines.length + " expense=" + expenseLines.length + " warnings=" + j(warnings, 1000) });
+    // Line sourcing can also reset the header; check the vendor once more.
+    ensureVendor(rec, vendorId, subId);
+    log.audit({ title: "docuia-process:saving", details: "vendor_bill mode=" + mode + " entity=" + s(rec.getValue({ fieldId: "entity" })) + " subsidiary=" + s(rec.getValue({ fieldId: "subsidiary" })) + " lines=" + lines.length + " expense=" + expenseLines.length + " warnings=" + j(warnings, 1000) });
     const id = rec.save({ enableSourcing: true, ignoreMandatoryFields: false });
     const attachments = attachFiles(id, body, warnings);
     return { ok: true, dry_run: false, mode, vendor_bill_internal_id: String(id), attachments, warnings };

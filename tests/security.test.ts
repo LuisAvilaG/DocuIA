@@ -11,7 +11,7 @@ import { isPrivateIp, resolvePublicHttpsUrl, postPublicWebhook } from "../lib/we
 import { canAccessTenantArea } from "../lib/auth/permissions";
 import { accessPayloadSchema, refreshPayloadSchema } from "../lib/auth/token-payload";
 import { clientIp } from "../lib/security/request-ip";
-import { isSameOriginMutation, readBoundedBody, withApiSecurity } from "../lib/security/http";
+import { allowedOrigins, isSameOriginMutation, readBoundedBody, withApiSecurity } from "../lib/security/http";
 import { sanitizeContractHtml } from "../lib/security/html";
 import { safeReturnPath } from "../lib/security/return-path";
 import { isOrgWordTemplateKey } from "../lib/security/storage-key";
@@ -59,6 +59,11 @@ test("CSRF rejects other origins, same-site sibling domains, and originless ambi
   assert.equal(isSameOriginMutation(req({ cookie: "access_token=test" }), "https://app.example"), false);
   assert.equal(isSameOriginMutation(req({ origin: "https://app.example" }), "https://app.example"), true);
   assert.equal(isSameOriginMutation(req({ authorization: "Bearer test" }), "https://app.example"), true);
+  // Custom domain behind the proxy (TLS terminated upstream) is accepted; a foreign origin is not.
+  const proxied = new Request("http://0.0.0.0:3000/api/v1/auth/login", { method: "POST", headers: { origin: "https://docuia.com", host: "docuia.com", "x-forwarded-proto": "https" } });
+  assert.equal(isSameOriginMutation(proxied, allowedOrigins(proxied, "https://app.easypanel.host")), true);
+  const foreign = new Request("http://0.0.0.0:3000/api/v1/auth/login", { method: "POST", headers: { origin: "https://evil.example", host: "docuia.com", "x-forwarded-proto": "https" } });
+  assert.equal(isSameOriginMutation(foreign, allowedOrigins(foreign, "https://app.easypanel.host")), false);
   let invoked = false;
   const handler = withApiSecurity(async () => { invoked = true; return Response.json({ok:true}); });
   const res = await handler(new NextRequest(req({ origin: "https://evil.example" })));

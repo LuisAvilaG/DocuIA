@@ -238,7 +238,7 @@ export function PendingApprovalClient({ docId, vendor, numDoc, total, docType, l
           <div className="bg-amber-400/5 border border-amber-400/20 rounded-xl p-4 text-center">
             <p className="text-sm text-amber-400 font-medium">Pendiente de aprobación</p>
             <p className="text-xs text-muted-foreground mt-1">
-              Un administrador debe aprobar este documento antes de enviarlo a NetSuite.
+              Una persona con permiso de aprobación debe aprobar este documento antes de enviarlo a NetSuite.
             </p>
           </div>
         )}

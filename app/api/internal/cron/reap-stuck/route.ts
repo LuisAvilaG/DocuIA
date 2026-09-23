@@ -2,7 +2,8 @@ import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { historyDocuments } from "@/db/schema";
-import { and, inArray, lt } from "drizzle-orm";
+import { and, inArray, lt, or, eq, sql } from "drizzle-orm";
+import { PIPELINE_QUEUE } from "@/lib/queue";
 
 function cronAuth(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
@@ -16,6 +17,15 @@ function cronAuth(req: NextRequest): boolean {
 // With per-call timeouts (Gemini/NetSuite) no healthy document should ever sit
 // in these states this long, so the threshold is generous.
 const TRANSIENT_STATES = ["uploaded", "extracting", "processing"] as const;
+
+// "uploaded" documents may simply be waiting their turn in the queue; only
+// those without a live pg-boss job are really stranded.
+const noLiveJob = sql`NOT EXISTS (
+  SELECT 1 FROM pgboss.job j
+  WHERE j.name = ${PIPELINE_QUEUE}
+    AND j.state IN ('created', 'retry', 'active')
+    AND j.data->>'documentId' = ${historyDocuments.id}::text
+)`;
 
 async function handleGET(req: NextRequest) {
   if (!cronAuth(req)) {
@@ -36,6 +46,7 @@ async function handleGET(req: NextRequest) {
       .where(and(
         inArray(historyDocuments.status, [...TRANSIENT_STATES]),
         lt(historyDocuments.updatedAt, cutoff),
+        or(inArray(historyDocuments.status, ["extracting", "processing"]), and(eq(historyDocuments.status, "uploaded"), noLiveJob)),
       ));
 
     const reaped = (result as unknown as { rowCount?: number }).rowCount ?? 0;

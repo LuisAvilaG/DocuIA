@@ -45,6 +45,7 @@ function buildRestletBody(payload: Record<string, unknown>): Record<string, unkn
   const locationId = normalize(payload.location_internal_id || "");
   const currency = normalize(payload.currency_internal_id || "");
   const externalId = normalize(payload.external_id || "");
+  const dueDate = parseDateForNS(normalize(payload.due_date || ""));
 
   const lines = Array.isArray(payload.line_items)
     ? (payload.line_items as Record<string, unknown>[])
@@ -73,7 +74,7 @@ function buildRestletBody(payload: Record<string, unknown>): Record<string, unkn
     invoice_number: invoiceNumber,
     invoice_date: invoiceDate,
     external_id: externalId || null,
-    due_date: isPoType ? receiptDate || null : null,
+    due_date: isPoType ? receiptDate || null : dueDate || null,
     receipt_date: isPoType ? receiptDate || null : null,
     currency_internal_id: currency || null,
     memo: memo || null,
@@ -114,7 +115,8 @@ export async function processInNetSuite(
   const conn = await db.query.nsConnections.findFirst({
     where: and(
       eq(nsConnections.organizationId, organizationId),
-      eq(nsConnections.environment, env)
+      eq(nsConnections.environment, env),
+      eq(nsConnections.isActive, true),
     ),
   });
   if (!conn) throw new Error(`No NS connection for org ${organizationId} (${env})`);

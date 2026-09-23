@@ -14,3 +14,11 @@ export function canAccessTenantArea(role: string, access: TenantAccess = {}, sco
   if (role === "viewer") return permission === "read" && area !== "expenses";
   return role === "operator" && area !== "expenses";
 }
+
+export type ApprovalArea = "documents" | "contracts" | "expenses";
+
+/** Who may give the final approval that posts or closes a record. */
+export function canApprove(role: string, area: ApprovalArea): boolean {
+  void area;
+  return role === "admin";
+}

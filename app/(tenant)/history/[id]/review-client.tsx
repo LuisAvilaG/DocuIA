@@ -413,6 +413,8 @@ export function ReviewClient({
       });
       const data = await res.json();
       if (!res.ok) { setSubmitError(data.error ?? "Error al procesar en NetSuite"); return; }
+      // Approval workflow: the correction now waits for someone who can approve.
+      if (data.status === "pending_approval") { router.refresh(); return; }
       setSubmitResult({ netsuiteId: data.netsuiteId ?? null, recordUrl: data.recordUrl ?? null });
     } catch {
       setSubmitError("No se pudo conectar al servidor");

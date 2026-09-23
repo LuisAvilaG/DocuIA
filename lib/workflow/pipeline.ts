@@ -1,11 +1,12 @@
 import { randomUUID } from "crypto";
 import { db } from "@/lib/db";
-import { historyDocuments, exceptionQueue, organizations, usageDaily } from "@/db/schema";
+import { historyDocuments, exceptionQueue, organizations, subsidiaries, usageDaily } from "@/db/schema";
 import { and, eq, ne, sql } from "drizzle-orm";
 import { uploadFile } from "@/lib/storage/minio";
 import { extractFromFile } from "./extract";
 import { buildUiPayload } from "./match";
 import { processInNetSuite } from "./process-ns";
+import { buildNsPayload, draftFromUiPayload } from "./ns-payload";
 import { logWorkflow } from "./log";
 import { parseCfdi } from "./cfdi-parser";
 import { deliverWebhooks } from "@/lib/webhooks/deliver";
@@ -412,14 +413,24 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
 
     const customFormId = resolveCustomFormId(customForms, input.subsidiaryId, input.documentType);
 
+    // NetSuite needs its own subsidiary internal ID, not DocuIA's row id.
+    const sub = await db.query.subsidiaries.findFirst({
+      where: and(eq(subsidiaries.id, input.subsidiaryId), eq(subsidiaries.organizationId, input.organizationId)),
+      columns: { nsSubsidiaryId: true },
+    });
+    if (!sub) throw new Error(`Subsidiaria ${input.subsidiaryId} no encontrada para enviar a NetSuite`);
+
     const t3 = Date.now();
     const nsResult = await processInNetSuite(
       input.organizationId,
-      buildNsPayload(payload, input.subsidiaryId, input.documentType, {
+      buildNsPayload(draftFromUiPayload(payload), {
+        organizationId: input.organizationId,
+        documentId:     docId,
+        documentType:   input.documentType,
+        nsSubsidiaryId: sub.nsSubsidiaryId,
         dryRun,
-        customFormId: customFormId || undefined,
+        customFormId:   customFormId || undefined,
         poConfig,
-        externalId: `docuia:${input.organizationId}:${docId}`,
       })
     );
 
@@ -557,45 +568,6 @@ async function upsertUsageDaily(organizationId: string, delta: {
       updatedAt:       new Date(),
     },
   });
-}
-
-type UiPayload = Awaited<ReturnType<typeof buildUiPayload>>;
-
-function buildNsPayload(
-  payload:       UiPayload,
-  subsidiaryId:  string,
-  documentType:  string,
-  options: {
-    dryRun?:       boolean;
-    customFormId?: string;
-    externalId?:   string;
-    poConfig?:     { apply_to_po_lines?: boolean; set_unselected_po_lines_to_zero?: boolean; allow_additional_lines?: boolean };
-  } = {}
-): Record<string, unknown> {
-  const { dryRun = false, customFormId, externalId, poConfig = {} } = options;
-  return {
-    documentType,
-    dry_run:                     dryRun,
-    ...(customFormId ? { customform_id: customFormId } : {}),
-    ...(externalId ? { external_id: externalId } : {}),
-    subsidiary_internal_id:      subsidiaryId,
-    vendor_id:                   payload.document.vendor.selected_internal_id,
-    document_number:             payload.document.invoice_number,
-    date:                        payload.document.invoice_date,
-    due_date:                    payload.document.due_date,
-    currency_internal_id:        payload.document.currency,
-    apply_to_po_lines:           poConfig.apply_to_po_lines            ?? true,
-    set_unselected_po_lines_to_zero: poConfig.set_unselected_po_lines_to_zero ?? false,
-    allow_additional_lines:      poConfig.allow_additional_lines        ?? true,
-    line_items: payload.document.lines.map((l) => ({
-      internal_id:         l.selected_item_id,
-      item_document_name:  l.description,
-      quantity:            l.quantity,
-      rate:                l.rate,
-      amount:              l.amount,
-      unit:                l.selected_unit_id,
-    })),
-  };
 }
 
 function determineFailureStage(message: string): "extract" | "validate" | "process" {

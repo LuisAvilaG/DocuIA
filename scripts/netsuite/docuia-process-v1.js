@@ -339,6 +339,8 @@ define(["N/record", "N/search", "N/format", "N/log"], (record, search, format, l
       : record.create({ type: record.Type.VENDOR_BILL, isDynamic: true });
 
     applyHeader(rec, body, invNumber, invDate, warnings);
+    const billDueDate = parseDate(body.due_date);
+    if (billDueDate) trySet(rec, "duedate", billDueDate);
 
     if (lines.length) {
       if (mode === "standalone") {

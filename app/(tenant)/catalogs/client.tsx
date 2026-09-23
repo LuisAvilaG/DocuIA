@@ -4,10 +4,12 @@ import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { Search, Package, Users, MapPin, RefreshCw, Loader2, CheckCircle2, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SubsidiaryPicker } from "@/components/tenant/subsidiary-picker";
 import type { CatalogItem, CatalogVendor, CatalogLocation } from "./page";
 
 interface Props {
   subsidiaries: { id: string; name: string }[];
+  selectedSub: string;
   items: Record<string, CatalogItem[]>;
   vendors: Record<string, CatalogVendor[]>;
   locations: Record<string, CatalogLocation[]>;
@@ -22,9 +24,9 @@ const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
   { id: "locations", label: "Ubicaciones",  icon: MapPin },
 ];
 
-export function CatalogsClient({ subsidiaries, items, vendors, locations, isAdmin }: Props) {
+export function CatalogsClient({ subsidiaries, selectedSub, items, vendors, locations, isAdmin }: Props) {
   const router = useRouter();
-  const [selectedSub, setSelectedSub] = useState<string>(subsidiaries[0]?.id ?? "");
+  const setSelectedSub = (id: string) => { setSyncMsg(null); router.push(`/catalogs?sub=${encodeURIComponent(id)}`); };
   const [tab, setTab]     = useState<Tab>("items");
   const [search, setSearch] = useState("");
 
@@ -137,21 +139,9 @@ export function CatalogsClient({ subsidiaries, items, vendors, locations, isAdmi
 
       {/* Subsidiary selector */}
       {subsidiaries.length > 1 && (
-        <div className="border-b border-border px-6 py-2.5 flex items-center gap-2 shrink-0">
-          {subsidiaries.map(s => (
-            <button
-              key={s.id}
-              onClick={() => { setSelectedSub(s.id); setSearch(""); }}
-              className={cn(
-                "px-3 py-[5px] text-xs rounded-md font-medium transition-all duration-[120ms]",
-                selectedSub === s.id
-                  ? "bg-foreground/10 text-foreground"
-                  : "text-muted-foreground hover:text-foreground hover:bg-secondary"
-              )}
-            >
-              {s.name}
-            </button>
-          ))}
+        <div className="border-b border-border px-6 py-2.5 flex items-center gap-3 shrink-0">
+          <span className="text-xs text-muted-foreground">Subsidiaria</span>
+          <SubsidiaryPicker subsidiaries={subsidiaries} value={selectedSub} onChange={(id) => { setSelectedSub(id); setSearch(""); }} />
         </div>
       )}
 

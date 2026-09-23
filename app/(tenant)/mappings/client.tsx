@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { Search, GitMerge, CheckCircle2, Zap, User, ChevronDown, Plus, Pencil, Trash2, X, Save, Loader2, Database } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SubsidiaryPicker } from "@/components/tenant/subsidiary-picker";
 
 type Mapping = {
   id: number;
@@ -230,9 +231,8 @@ export function MappingsClient({ subsidiaries, mappings, canManage }: Props) {
           ))}
         </div>
         {subsidiaries.length > 1 && (
-          <div className="flex items-center gap-1.5 border-l border-border pl-3">
-            <button onClick={() => setSubFilter("all")} className={cn("px-3 py-[5px] text-xs rounded-md font-medium transition-all duration-[120ms]", subFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-secondary")}>Todas</button>
-            {subsidiaries.map(subsidiary => <button key={subsidiary.id} onClick={() => setSubFilter(subsidiary.id)} className={cn("px-3 py-[5px] text-xs rounded-md font-medium transition-all duration-[120ms]", subFilter === subsidiary.id ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-secondary")}>{subsidiary.name}</button>)}
+          <div className="border-l border-border pl-3">
+            <SubsidiaryPicker subsidiaries={subsidiaries} value={subFilter} onChange={setSubFilter} allLabel="Todas las subsidiarias" />
           </div>
         )}
       </div>

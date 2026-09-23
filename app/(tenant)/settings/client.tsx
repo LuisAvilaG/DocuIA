@@ -10,6 +10,7 @@ import {
   Key, ScrollText, FlaskConical, Receipt, AlertCircle, RefreshCw, KeyRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SubsidiariesTable } from "@/components/tenant/subsidiaries-table";
 import { NativeSelect } from "@/components/ui/form-select";
 import { useFeature } from "@/components/providers/feature-provider";
 
@@ -889,53 +890,14 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
 
         {/* ── Subsidiarias ───────────────────────────────────────── */}
         {tab === "subsidiaries" && (
-          <div className="max-w-2xl space-y-3">
-            {subsidiaries.length === 0 ? (
-              <div className="py-16 flex flex-col items-center justify-center text-center">
-                <p className="text-sm font-medium text-foreground">Sin subsidiarias configuradas</p>
-                <p className="text-xs text-muted-foreground mt-1">Contacta a soporte para agregar subsidiarias</p>
-              </div>
-            ) : (
-              subsidiaries.map(s => (
-                <div key={s.id} className="bg-card rounded-xl border border-border p-5">
-                  <div className="flex items-start justify-between mb-4">
-                    <div>
-                      <p className="text-sm font-semibold text-foreground">{s.name}</p>
-                      <p className="text-xs text-muted-foreground mt-0.5 font-mono">ID ERP: {s.nsSubsidiaryId}</p>
-                    </div>
-                    <span className={cn("text-[0.6875rem] font-medium px-2 py-0.5 rounded-sm", s.isActive ? "bg-success/10 text-success" : "bg-secondary text-muted-foreground")}>
-                      {s.isActive ? "Activa" : "Inactiva"}
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    {[{ label: "Moneda", value: s.currency }, { label: "Locale", value: s.locale }].map(({ label, value }) => (
-                      <div key={label}>
-                        <p className="text-[0.6875rem] font-medium text-muted-foreground uppercase tracking-[0.06em] mb-1">{label}</p>
-                        <p className="text-xs text-foreground">{value}</p>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="mt-3 pt-3 border-t border-border">
-                    <p className="text-[0.6875rem] text-muted-foreground mb-2">
-                      Credenciales de conexión al ERP — gestionadas por el administrador de DocuIA.
-                      Para actualizarlas, contacta a soporte.
-                    </p>
-                    <div className="grid grid-cols-3 gap-3">
-                      {["Consumer Key", "Consumer Secret", "Token ID"].map(label => (
-                        <div key={label}>
-                          <p className="text-[0.6875rem] font-medium text-muted-foreground uppercase tracking-[0.06em] mb-1">{label}</p>
-                          <p className="text-[0.6875rem] font-mono text-muted-foreground tracking-widest">••••••••••</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                  <p className="text-[0.6875rem] text-muted-foreground mt-3 pt-3 border-t border-border">
-                    Configurada el {longDate(s.createdAt)}
-                  </p>
-                </div>
-              ))
-            )}
-          </div>
+          subsidiaries.length === 0 ? (
+            <div className="py-16 flex flex-col items-center justify-center text-center">
+              <p className="text-sm font-medium text-foreground">Sin subsidiarias configuradas</p>
+              <p className="text-xs text-muted-foreground mt-1">Contacta a soporte para agregar subsidiarias</p>
+            </div>
+          ) : (
+            <SubsidiariesTable subsidiaries={subsidiaries} />
+          )
         )}
 
         {/* ── Equipo ─────────────────────────────────────────────── */}

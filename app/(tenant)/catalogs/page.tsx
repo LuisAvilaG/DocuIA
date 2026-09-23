@@ -3,7 +3,7 @@ import { getTenantSession } from "@/lib/auth/jwt";
 import { requireApAutomation } from "@/lib/products";
 import { db } from "@/lib/db";
 import { subsidiaries, catalogItems, catalogVendors, catalogLocations } from "@/db/schema";
-import { eq, inArray } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import { CatalogsClient } from "./client";
 
 export type CatalogItem = {
@@ -33,12 +33,14 @@ export type CatalogLocation = {
   isInactive: boolean;
 };
 
-export default async function CatalogsPage() {
+export default async function CatalogsPage({ searchParams }: { searchParams: Promise<{ sub?: string }> }) {
+  const { sub: requestedSub } = await searchParams;
   const session = await getTenantSession({ area: "documents" });
   if (!session) redirect("/login");
   await requireApAutomation(session.orgId);
 
   let subs: { id: string; name: string }[] = [];
+  let selectedSub = "";
   const items: Record<string, CatalogItem[]>     = {};
   const vendors: Record<string, CatalogVendor[]> = {};
   const locations: Record<string, CatalogLocation[]> = {};
@@ -47,10 +49,13 @@ export default async function CatalogsPage() {
     subs = await db
       .select({ id: subsidiaries.id, name: subsidiaries.name })
       .from(subsidiaries)
-      .where(eq(subsidiaries.organizationId, session.orgId));
+      .where(eq(subsidiaries.organizationId, session.orgId))
+      .orderBy(asc(subsidiaries.name));
 
-    if (subs.length > 0) {
-      const subIds = subs.map(s => s.id);
+    // Only the selected subsidiary is loaded: accounts can have dozens of them,
+    // and a shared row limit would leave most of them looking empty.
+    selectedSub = subs.find(s => s.id === requestedSub)?.id ?? subs[0]?.id ?? "";
+    if (selectedSub) {
 
       const [itemRows, vendorRows, locationRows] = await Promise.all([
         db
@@ -60,8 +65,9 @@ export default async function CatalogsPage() {
             name: catalogItems.name, type: catalogItems.type, unit: catalogItems.unit,
           })
           .from(catalogItems)
-          .where(inArray(catalogItems.subsidiaryId, subIds))
-          .limit(2000),
+          .where(eq(catalogItems.subsidiaryId, selectedSub))
+          .orderBy(asc(catalogItems.name))
+          .limit(5000),
 
         db
           .select({
@@ -71,8 +77,9 @@ export default async function CatalogsPage() {
             rfc: catalogVendors.rfc, isInactive: catalogVendors.isInactive,
           })
           .from(catalogVendors)
-          .where(inArray(catalogVendors.subsidiaryId, subIds))
-          .limit(2000),
+          .where(eq(catalogVendors.subsidiaryId, selectedSub))
+          .orderBy(asc(catalogVendors.name))
+          .limit(5000),
 
         db
           .select({
@@ -81,15 +88,14 @@ export default async function CatalogsPage() {
             fullName: catalogLocations.fullName, isInactive: catalogLocations.isInactive,
           })
           .from(catalogLocations)
-          .where(inArray(catalogLocations.subsidiaryId, subIds))
-          .limit(500),
+          .where(eq(catalogLocations.subsidiaryId, selectedSub))
+          .orderBy(asc(catalogLocations.name))
+          .limit(2000),
       ]);
 
-      for (const s of subs) {
-        items[s.id]     = itemRows.filter(r => r.subsidiaryId === s.id).map(({ subsidiaryId: _s, ...r }) => r);
-        vendors[s.id]   = vendorRows.filter(r => r.subsidiaryId === s.id).map(({ subsidiaryId: _s, ...r }) => r);
-        locations[s.id] = locationRows.filter(r => r.subsidiaryId === s.id).map(({ subsidiaryId: _s, ...r }) => r);
-      }
+      items[selectedSub]     = itemRows.map(({ subsidiaryId: _s, ...r }) => r);
+      vendors[selectedSub]   = vendorRows.map(({ subsidiaryId: _s, ...r }) => r);
+      locations[selectedSub] = locationRows.map(({ subsidiaryId: _s, ...r }) => r);
     }
   } catch (err) {
     console.error("[catalogs]", err);
@@ -98,6 +104,7 @@ export default async function CatalogsPage() {
   return (
     <CatalogsClient
       subsidiaries={subs}
+      selectedSub={selectedSub}
       items={items}
       vendors={vendors}
       locations={locations}

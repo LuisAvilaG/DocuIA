@@ -85,6 +85,7 @@ export interface SubsidiaryRow {
   name: string;
   nsSubsidiaryId: string;
   currency: string;
+  taxId: string | null;
   isActive: boolean;
   updatedAt: Date;
   itemCount: number;
@@ -409,19 +410,19 @@ export function ClientDetailContent({ org, features, subsidiaries }: Props) {
   // ── Subsidiaries local state ───────────────────────────────────────────
   const [subsList,        setSubsList]        = useState<SubsidiaryRow[]>(subsidiaries);
   const [editingSub,      setEditingSub]      = useState<string | null>(null);
-  const [editSubForm,     setEditSubForm]     = useState({ name: "", nsSubsidiaryId: "", currency: "", isActive: true });
+  const [editSubForm,     setEditSubForm]     = useState({ name: "", nsSubsidiaryId: "", currency: "", taxId: "", isActive: true });
   const [subSaving,       setSubSaving]       = useState(false);
   const [subError,        setSubError]        = useState<string | null>(null);
   const [pendingDeleteSub, setPendingDeleteSub] = useState<string | null>(null);
   const [subDeleteErr,    setSubDeleteErr]    = useState<string | null>(null);
   const [showAddSub,      setShowAddSub]      = useState(false);
-  const [addSubForm,      setAddSubForm]      = useState({ name: "", nsSubsidiaryId: "", currency: "MXN", locale: "es-MX" });
+  const [addSubForm,      setAddSubForm]      = useState({ name: "", nsSubsidiaryId: "", currency: "MXN", locale: "es-MX", taxId: "" });
   const [addSubSaving,    setAddSubSaving]    = useState(false);
   const [addSubError,     setAddSubError]     = useState<string | null>(null);
 
   function startEditSub(s: SubsidiaryRow) {
     setEditingSub(s.id);
-    setEditSubForm({ name: s.name, nsSubsidiaryId: s.nsSubsidiaryId, currency: s.currency, isActive: s.isActive });
+    setEditSubForm({ name: s.name, nsSubsidiaryId: s.nsSubsidiaryId, currency: s.currency, taxId: s.taxId ?? "", isActive: s.isActive });
     setSubError(null);
   }
 
@@ -436,7 +437,7 @@ export function ClientDetailContent({ org, features, subsidiaries }: Props) {
     const data = await res.json();
     setSubSaving(false);
     if (!res.ok) { setSubError(data.error ?? "Error al guardar"); return; }
-    setSubsList(prev => prev.map(s => s.id === subId ? { ...s, ...editSubForm } : s));
+    setSubsList(prev => prev.map(s => s.id === subId ? { ...s, ...editSubForm, taxId: data.subsidiary?.taxId ?? (editSubForm.taxId.trim().toUpperCase() || null) } : s));
     setEditingSub(null);
   }
 
@@ -469,7 +470,7 @@ export function ClientDetailContent({ org, features, subsidiaries }: Props) {
     setAddSubSaving(false);
     if (!res.ok) { setAddSubError(data.error ?? "Error al crear"); return; }
     setShowAddSub(false);
-    setAddSubForm({ name: "", nsSubsidiaryId: "", currency: "MXN", locale: "es-MX" });
+    setAddSubForm({ name: "", nsSubsidiaryId: "", currency: "MXN", locale: "es-MX", taxId: "" });
     const freshRes = await fetch(`/api/admin/clients/${org.id}/subsidiaries`);
     if (freshRes.ok) {
       const fresh = await freshRes.json();
@@ -791,6 +792,11 @@ export function ClientDetailContent({ org, features, subsidiaries }: Props) {
                     <Label className="text-xs">Locale</Label>
                     <Input value={addSubForm.locale} onChange={e => setAddSubForm(f => ({ ...f, locale: e.target.value }))} placeholder="es-MX" disabled={addSubSaving} />
                   </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">RFC</Label>
+                    <Input value={addSubForm.taxId} onChange={e => setAddSubForm(f => ({ ...f, taxId: e.target.value.toUpperCase() }))} placeholder="AAA010101AAA" maxLength={20} disabled={addSubSaving} />
+                    <p className="text-[0.6875rem] text-muted-foreground">Se compara con el receptor del CFDI en la validación fiscal.</p>
+                  </div>
                 </div>
                 {addSubError && <p className="text-xs text-destructive flex items-center gap-1"><AlertTriangle className="w-3 h-3" />{addSubError}</p>}
                 <div className="flex items-center gap-2">
@@ -829,6 +835,10 @@ export function ClientDetailContent({ org, features, subsidiaries }: Props) {
                             <Input value={editSubForm.currency} onChange={e => setEditSubForm(f => ({ ...f, currency: e.target.value.toUpperCase() }))} maxLength={3} disabled={subSaving} />
                           </div>
                           <div className="space-y-1.5">
+                            <Label className="text-xs">RFC</Label>
+                            <Input value={editSubForm.taxId} onChange={e => setEditSubForm(f => ({ ...f, taxId: e.target.value.toUpperCase() }))} placeholder="AAA010101AAA" maxLength={20} disabled={subSaving} />
+                          </div>
+                          <div className="space-y-1.5">
                             <Label className="text-xs">Estado</Label>
                             <NativeSelect
                               value={editSubForm.isActive ? "active" : "inactive"}
@@ -853,7 +863,7 @@ export function ClientDetailContent({ org, features, subsidiaries }: Props) {
                         <div className="flex items-start justify-between mb-3">
                           <div>
                             <p className="text-sm font-semibold text-foreground">{s.name}</p>
-                            <p className="text-[0.6875rem] text-muted-foreground font-mono mt-0.5">NS ID: {s.nsSubsidiaryId}</p>
+                            <p className="text-[0.6875rem] text-muted-foreground font-mono mt-0.5">ID ERP: {s.nsSubsidiaryId}{s.taxId ? ` · RFC: ${s.taxId}` : ""}</p>
                           </div>
                           <div className="flex items-center gap-2">
                             <span className="text-[0.6875rem] font-medium px-2 py-0.5 rounded-sm bg-secondary text-muted-foreground">{s.currency}</span>

@@ -97,7 +97,7 @@ function fmtCurrency(val: string | null, currency = "COP"): string {
 
 // ── Main Component ────────────────────────────────────────────────────
 
-export function AccountingExpenseDetail({ report }: { report: Report }) {
+export function AccountingExpenseDetail({ report, canDecide, canSync }: { report: Report; canDecide: boolean; canSync: boolean }) {
   const router = useRouter();
 
   const [approving,  setApproving]  = useState(false);
@@ -158,8 +158,11 @@ export function AccountingExpenseDetail({ report }: { report: Report }) {
     try {
       const res  = await fetch(`/api/v1/expenses/reports/${report.id}/sync`, { method: "POST" });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setSyncError(data.error ?? "Error al sincronizar");
+      // 207 = some lines failed: fetch treats it as ok, but the report is in
+      // "exception" and must show why.
+      if (!res.ok || res.status === 207 || data.ok === false) {
+        const errors = Array.isArray(data.errors) ? data.errors.join("\n") : "";
+        setSyncError(data.error ?? (errors || "Error al sincronizar"));
         setLocalStatus("exception");
         return;
       }
@@ -387,7 +390,7 @@ export function AccountingExpenseDetail({ report }: { report: Report }) {
         )}
 
         {/* submitted → Approve + Reject */}
-        {(localStatus === "submitted" || localStatus === "under_review") && (
+        {canDecide && (localStatus === "submitted" || localStatus === "under_review") && (
           <div className="flex gap-2">
             <Button
               onClick={handleApprove}
@@ -409,8 +412,14 @@ export function AccountingExpenseDetail({ report }: { report: Report }) {
           </div>
         )}
 
+        {!canSync && (localStatus === "approved" || localStatus === "exception") && (
+          <p className="text-center text-xs text-muted-foreground py-2">
+            Aprobado. Contabilidad se encarga de sincronizarlo con NetSuite.
+          </p>
+        )}
+
         {/* approved → Sync to NS */}
-        {localStatus === "approved" && (
+        {canSync && localStatus === "approved" && (
           <Button
             onClick={handleSync}
             disabled={syncing}
@@ -423,7 +432,7 @@ export function AccountingExpenseDetail({ report }: { report: Report }) {
         )}
 
         {/* exception → Retry sync */}
-        {localStatus === "exception" && (
+        {canSync && localStatus === "exception" && (
           <Button
             onClick={handleSync}
             disabled={syncing}

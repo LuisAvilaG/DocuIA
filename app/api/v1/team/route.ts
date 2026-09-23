@@ -1,4 +1,5 @@
 import { withApiSecurity } from "@/lib/security/http";
+import { isTenantRole } from "@/lib/auth/permissions";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
@@ -27,9 +28,7 @@ async function handlePOST(req: NextRequest) {
     }
 
     const normalized = email.toLowerCase().trim();
-    const safeRole   = (["admin", "operator", "viewer"] as const).includes(role as never)
-      ? (role as "admin" | "operator" | "viewer")
-      : "operator";
+    const safeRole   = isTenantRole(role) ? role : "operator";
 
     // Email is globally unique across the platform.
     const existing = await db.query.orgUsers.findFirst({

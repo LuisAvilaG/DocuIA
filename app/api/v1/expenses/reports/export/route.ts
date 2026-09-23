@@ -1,4 +1,5 @@
 import { withApiSecurity } from "@/lib/security/http";
+import { canSyncExpenses } from "@/lib/auth/permissions";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { isFeatureEnabled } from "@/lib/features";
@@ -35,7 +36,7 @@ function csvEscape(v: string | null | undefined): string {
 async function handleGET(req: NextRequest) {
   const session = await getTenantSession({ area: "expenses" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
-  if (session.role !== "admin") return NextResponse.json({ error: "Solo administradores" }, { status: 403 });
+  if (!canSyncExpenses(session.role)) return NextResponse.json({ error: "No tienes permiso para exportar informes" }, { status: 403 });
   if (!await isFeatureEnabled(session.orgId, "expense_management")) {
     return NextResponse.json({ error: "Módulo de gastos no activado" }, { status: 403 });
   }

@@ -4,6 +4,8 @@ import { db } from "@/lib/db";
 import { expenseReports } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import { AccountingExpenseDetail } from "./accounting-detail";
+import { canApprove, canReviewExpenses, canSyncExpenses } from "@/lib/auth/permissions";
+import { isFeatureEnabled } from "@/lib/features";
 
 export default async function AccountingExpenseDetailPage({
   params,
@@ -14,7 +16,7 @@ export default async function AccountingExpenseDetailPage({
 
   const session = await getTenantSession({ area: "expenses" });
   if (!session) redirect("/login");
-  if (session.role !== "admin") redirect("/dashboard");
+  if (!canReviewExpenses(session.role) || !await isFeatureEnabled(session.orgId, "expense_management")) redirect("/dashboard");
 
   const row = await db.query.expenseReports.findFirst({
     where: and(
@@ -82,5 +84,12 @@ export default async function AccountingExpenseDetailPage({
     })),
   };
 
-  return <AccountingExpenseDetail report={report} />;
+  return (
+    <AccountingExpenseDetail
+      report={report}
+      // Only admins may decide on their own report.
+      canDecide={canApprove(session.role, "expenses") && (row.submitterId !== session.sub || session.role === "admin")}
+      canSync={canSyncExpenses(session.role)}
+    />
+  );
 }

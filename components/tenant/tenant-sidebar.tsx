@@ -10,7 +10,8 @@ import {
 } from "lucide-react";
 import Image from "next/image";
 import { useFeatures } from "@/components/providers/feature-provider";
-import { PRODUCTS, PRODUCT_MODULES, PLATFORM_MODULES, type ProductKey, type NavModule } from "@/lib/products/registry";
+import { PRODUCTS, PRODUCT_AREA, PRODUCT_MODULES, PLATFORM_MODULES, type ProductKey, type NavModule } from "@/lib/products/registry";
+import { canAccessTenantArea, TENANT_ROLE_LABELS, isTenantRole } from "@/lib/auth/permissions";
 
 // lucide icon name → component (registry stores names as strings)
 const ICONS: Record<string, React.ElementType> = {
@@ -45,11 +46,12 @@ export function TenantSidebar({ orgName, plan, userEmail, userRole, activeProduc
 
   const active = new Set(activeProducts);
   const isVisible = (m: NavModule) =>
-    (!m.feature || features[m.feature]) && (!m.adminOnly || userRole === "admin");
+    (!m.feature || features[m.feature])
+    && (userRole === "admin" || (!m.adminOnly && (!m.roles || m.roles.includes(userRole))));
 
-  // One section per active product; hide products with no visible modules.
+  // One section per active product the role can use; hide empty sections.
   const sections = PRODUCTS
-    .filter((p) => active.has(p.key))
+    .filter((p) => active.has(p.key) && canAccessTenantArea(userRole, { area: PRODUCT_AREA[p.key as ProductKey] }))
     .map((p) => ({ name: p.name, items: PRODUCT_MODULES[p.key as ProductKey].filter(isVisible) }))
     .filter((s) => s.items.length > 0);
 
@@ -149,7 +151,7 @@ export function TenantSidebar({ orgName, plan, userEmail, userRole, activeProduc
           <User className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
           <div className="flex-1 min-w-0">
             <p className="text-[11px] font-medium text-foreground truncate">{userEmail}</p>
-            <p className="text-[10px] text-muted-foreground capitalize">{userRole}</p>
+            <p className="text-[10px] text-muted-foreground">{isTenantRole(userRole) ? TENANT_ROLE_LABELS[userRole] : userRole}</p>
           </div>
         </div>
         <button

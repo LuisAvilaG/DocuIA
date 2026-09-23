@@ -1,4 +1,5 @@
 import { withApiSecurity } from "@/lib/security/http";
+import { canApprove } from "@/lib/auth/permissions";
 import { isOrgWordTemplateKey } from "@/lib/security/storage-key";
 import { validateDocx } from "@/lib/security/docx";
 import { NextRequest, NextResponse } from "next/server";
@@ -16,7 +17,7 @@ import { getFeature, isFeatureEnabled } from "@/lib/features";
 async function handlePOST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getTenantSession({ area: "contracts", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
-  if (session.role !== "admin") return NextResponse.json({ error: "Solo administradores pueden generar documentos." }, { status: 403 });
+  if (!canApprove(session.role, "contracts")) return NextResponse.json({ error: "No tienes permiso para generar documentos." }, { status: 403 });
   if (!await isFeatureEnabled(session.orgId, "contract_document_generation")) {
     return NextResponse.json({ error: "La generación documental no está habilitada para este cliente." }, { status: 403 });
   }

@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { expenseReports } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import { ReportDetail } from "./report-detail";
+import { canReviewExpenses } from "@/lib/auth/permissions";
 
 export default async function ReportPage({ params }: { params: Promise<{ id: string }> }) {
   const session = await getTenantSession({ area: "expenses" });
@@ -30,7 +31,7 @@ export default async function ReportPage({ params }: { params: Promise<{ id: str
   });
 
   if (!report) notFound();
-  if (session.role !== "admin" && report.submitterId !== session.sub) notFound();
+  if (!canReviewExpenses(session.role) && report.submitterId !== session.sub) notFound();
 
   return <ReportDetail report={report as any} isAdmin={session.role === "admin"} />;
 }

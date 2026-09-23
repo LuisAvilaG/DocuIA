@@ -1,5 +1,6 @@
 "use client";
 
+import { TENANT_ROLES, TENANT_ROLE_LABELS, type TenantRole } from "@/lib/auth/permissions";
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -98,10 +99,7 @@ const ROLE_BADGE: Record<string, string> = {
   viewer:   "bg-secondary text-muted-foreground",
 };
 
-const ROLE_LABELS: Record<string, string> = {
-  admin: "Administrador", operator: "Operador", viewer: "Visor",
-  expense_submitter: "Colaborador Gastos",
-};
+const ROLE_LABELS: Record<string, string> = TENANT_ROLE_LABELS;
 
 const STATUS_BADGE: Record<string, string> = {
   trial:     "bg-warning/10 text-warning",
@@ -279,7 +277,7 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
   const [showInvite,    setShowInvite]    = useState(false);
   const [inviteEmail,   setInviteEmail]   = useState("");
   const [inviteName,    setInviteName]    = useState("");
-  const [inviteRole,    setInviteRole]    = useState<"admin" | "operator" | "viewer">("operator");
+  const [inviteRole,    setInviteRole]    = useState<TenantRole>("operator");
   const [inviteSaving,  setInviteSaving]  = useState(false);
   const [inviteError,   setInviteError]   = useState("");
   const [tempPassword,  setTempPassword]  = useState<string | null>(null);
@@ -1016,8 +1014,8 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
 
                         <div>
                           <label className="text-[0.6875rem] font-medium text-muted-foreground uppercase tracking-[0.06em] mb-1 block">Rol</label>
-                          <div className="flex gap-2">
-                            {(["operator", "viewer", "admin"] as const).map(r => (
+                          <div className="grid grid-cols-3 gap-2">
+                            {TENANT_ROLES.map(r => (
                               <button
                                 key={r}
                                 type="button"

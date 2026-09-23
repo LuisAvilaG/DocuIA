@@ -4,7 +4,7 @@ import { getTenantSession } from "@/lib/auth/jwt";
 import { isFeatureEnabled } from "@/lib/features";
 import { db } from "@/lib/db";
 import { expenseReports, expenseItems, orgUsers } from "@/db/schema";
-import { eq, and, sum } from "drizzle-orm";
+import { eq, and, inArray, ne, sum } from "drizzle-orm";
 import { sendEmail, buildExpenseSubmittedEmail } from "@/lib/email/send";
 import { syncReportToNetsuite } from "@/lib/expense/sync-to-netsuite";
 import { logAudit } from "@/lib/audit/log";
@@ -86,8 +86,14 @@ async function handlePOST(
     metadata:     { purpose: report.purpose },
   });
 
+  // Everyone who can approve expenses, except the submitter.
   const admins = await db.query.orgUsers.findMany({
-    where: and(eq(orgUsers.organizationId, session.orgId), eq(orgUsers.role, "admin")),
+    where: and(
+      eq(orgUsers.organizationId, session.orgId),
+      inArray(orgUsers.role, ["admin", "approver", "accountant"]),
+      eq(orgUsers.isActive, true),
+      ne(orgUsers.id, session.sub),
+    ),
     columns: { email: true },
   });
 

@@ -87,7 +87,15 @@ export interface NavModule {
   icon:       string;    // lucide icon name (mapped to a component in the sidebar)
   feature?:   string;    // only shown if this feature is enabled
   adminOnly?: boolean;   // only shown to org admins
+  roles?:     readonly string[]; // only shown to these roles (admin always sees it)
 }
+
+// Tenant permission area each product's section belongs to.
+export const PRODUCT_AREA: Record<ProductKey, "documents" | "expenses" | "contracts"> = {
+  ap_automation:         "documents",
+  expense_management:    "expenses",
+  contract_intelligence: "contracts",
+};
 
 export const PRODUCT_MODULES: Record<ProductKey, NavModule[]> = {
   ap_automation: [
@@ -100,13 +108,14 @@ export const PRODUCT_MODULES: Record<ProductKey, NavModule[]> = {
     { href: "/statistics",  label: "Estadísticas", icon: "BarChart3",     feature: "advanced_analytics" },
   ],
   expense_management: [
-    { href: "/accounting/expenses", label: "Gastos", icon: "Receipt", feature: "expense_management", adminOnly: true },
+    { href: "/accounting/expenses", label: "Gastos", icon: "Receipt", feature: "expense_management", roles: ["approver", "accountant"] },
+    { href: "/expenses",            label: "Mis gastos", icon: "FolderOpen", feature: "expense_management", roles: ["approver", "accountant"] },
   ],
   contract_intelligence: [
     { href: "/contracts/dashboard",  label: "Panel",         icon: "LayoutDashboard" },
     { href: "/cases",                label: "Casos",         icon: "ScrollText",      feature: "contract_ai_extraction" },
     { href: "/cases/history",        label: "Historial",     icon: "Clock",           feature: "contract_ai_extraction" },
-    { href: "/contracts/approvals",  label: "Aprobaciones",  icon: "ClipboardCheck",  feature: "contract_approval_workflow", adminOnly: true },
+    { href: "/contracts/approvals",  label: "Aprobaciones",  icon: "ClipboardCheck",  feature: "contract_approval_workflow", roles: ["approver"] },
     { href: "/contracts/metrics",    label: "Métricas",      icon: "BarChart3",       feature: "contract_metrics" },
     { href: "/contracts/quality",    label: "Calidad",       icon: "BrainCircuit",    feature: "contract_ai_extraction", adminOnly: true },
     { href: "/contracts/flow",       label: "Flujos",        icon: "Workflow",        feature: "contract_flow_builder", adminOnly: true },

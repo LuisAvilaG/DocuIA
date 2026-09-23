@@ -182,10 +182,11 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
   const [dryRunSaved,   setDryRunSaved]   = useState(false);
 
   // Sync from server after router.refresh() — only when not in the middle of saving
-  useEffect(() => {
+  const [prevInitialDryRun, setPrevInitialDryRun] = useState(initialDryRun);
+  if (initialDryRun !== prevInitialDryRun) {
+    setPrevInitialDryRun(initialDryRun);
     if (!dryRunSaving) setDryRun(initialDryRun);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialDryRun]);
+  }
 
   async function handleToggleDryRun() {
     const next = !dryRun;
@@ -411,9 +412,11 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
   const [keyCopied,      setKeyCopied]      = useState(false);
 
   // Limpiar la API Key revelada cuando el usuario sale del tab (WARN-06)
-  useEffect(() => {
+  const [prevTab, setPrevTab] = useState(tab);
+  if (tab !== prevTab) {
+    setPrevTab(tab);
     if (tab !== "api_keys") setRevealedKey(null);
-  }, [tab]);
+  }
 
   const loadApiKeys = useCallback(async () => {
     setApiKeysLoading(true);
@@ -432,7 +435,8 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
   }, []);
 
   useEffect(() => {
-    if (tab === "api_keys" && !apiKeysLoaded) loadApiKeys();
+    // Deferred so the loader's setState isn't called synchronously in the effect body.
+    if (tab === "api_keys" && !apiKeysLoaded) queueMicrotask(() => { void loadApiKeys(); });
   }, [tab, apiKeysLoaded, loadApiKeys]);
 
   async function handleCreateKey(e: React.FormEvent) {
@@ -495,7 +499,8 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
   }, [auditEntries.length]);
 
   useEffect(() => {
-    if (tab === "audit" && !auditLoaded) loadAudit(true);
+    // Deferred so the loader's setState isn't called synchronously in the effect body.
+    if (tab === "audit" && !auditLoaded) queueMicrotask(() => { void loadAudit(true); });
   }, [tab, auditLoaded, loadAudit]);
 
   // ── Expense catalog state ───────────────────────────────────────
@@ -605,7 +610,8 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
   }, []);
 
   useEffect(() => {
-    if (tab === "gastos" && !submittersLoaded && isAdmin) loadSubmitters();
+    // Deferred so the loader's setState isn't called synchronously in the effect body.
+    if (tab === "gastos" && !submittersLoaded && isAdmin) queueMicrotask(() => { void loadSubmitters(); });
   }, [tab, submittersLoaded, isAdmin, loadSubmitters]);
 
   async function handleResetPassword(userId: string) {
@@ -1532,7 +1538,7 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
                 ) : submitters.length === 0 ? (
                   <div className="py-10 flex flex-col items-center justify-center text-center">
                     <p className="text-sm font-medium text-foreground">Sin empleados sincronizados</p>
-                    <p className="text-xs text-muted-foreground mt-1">Usa el botón "Empleados" del sync para importarlos desde NetSuite.</p>
+                    <p className="text-xs text-muted-foreground mt-1">Usa el botón &quot;Empleados&quot; del sync para importarlos desde NetSuite.</p>
                   </div>
                 ) : (
                   <div className="overflow-auto max-h-72">

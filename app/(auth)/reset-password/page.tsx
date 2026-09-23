@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useState, useEffect, Suspense } from "react";
+import { useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Eye, EyeOff, Loader2, CheckCircle2, AlertTriangle } from "lucide-react";
@@ -18,9 +18,7 @@ function ResetPasswordForm() {
   const [success,   setSuccess]   = useState(false);
   const [error,     setError]     = useState("");
 
-  useEffect(() => {
-    if (!token) setError("Token inválido o expirado.");
-  }, [token]);
+  const tokenError = !token ? "Token inválido o expirado." : "";
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -109,7 +107,7 @@ function ResetPasswordForm() {
                 />
               </div>
 
-              {error && <p className="text-xs text-destructive px-1">{error}</p>}
+              {(error || tokenError) && <p className="text-xs text-destructive px-1">{error || tokenError}</p>}
 
               <button
                 type="submit"

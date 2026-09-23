@@ -208,7 +208,7 @@ export default function FeaturesPage() {
 
           {!loading && !error && visibleCount === 0 && (
             <div className="text-center py-20 text-muted-foreground">
-              <p className="text-sm">Sin resultados para "{search}"</p>
+              <p className="text-sm">Sin resultados para &quot;{search}&quot;</p>
             </div>
           )}
 

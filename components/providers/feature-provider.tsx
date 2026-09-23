@@ -14,9 +14,11 @@ export function FeatureProvider({
   const [features, setFeatures] = useState(initial);
 
   // Sync when server passes updated initial values (RSC re-render on navigation)
-  useEffect(() => {
+  const [prevInitial, setPrevInitial] = useState(initial);
+  if (initial !== prevInitial) {
+    setPrevInitial(initial);
     setFeatures(initial);
-  }, [initial]);
+  }
 
   // Re-fetch from API on mount so changes made by admin are visible without full reload
   useEffect(() => {

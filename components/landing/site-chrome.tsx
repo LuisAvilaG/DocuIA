@@ -138,7 +138,11 @@ export function SiteFooter() {
         <div>
           <h4>Plataforma</h4>
           <div className="fcol">
+            {/* Plain anchors on purpose: next/link skips the native hash jump
+                that the Lenis smooth scroll relies on to reach the section. */}
+            {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
             <a href="/#como">Cómo funciona</a>
+            {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
             <a href="/#seguridad">Seguridad</a>
             <a href="#" data-contact>Contáctanos</a>
             <a href="/login">Iniciar sesión</a>

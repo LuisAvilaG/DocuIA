@@ -8,6 +8,8 @@ import { contractCases, contractDocuments, contractExtractionLearnings, contract
 import { calculateContractRevalidation } from "@/lib/contracts/revalidate";
 import { isFeatureEnabled } from "@/lib/features";
 
+const CORRECTABLE: string[] = ["validated", "review"];
+
 async function handlePATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getTenantSession({ area: "contracts", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
@@ -33,6 +35,16 @@ async function handlePATCH(request: NextRequest, { params }: { params: Promise<{
   });
   if (!kase) return NextResponse.json({ error: "Documento no encontrado" }, { status: 404 });
   if (kase.status === "uploaded" || kase.status === "processing") return NextResponse.json({ error: "Espera a que termine la extracción antes de corregir." }, { status: 409 });
+  // A correction re-validates the case. On a decided case that would silently
+  // drop the decision, and on a failed one it would make a half-extracted case
+  // approvable, so those must be reopened or reprocessed first.
+  if (!CORRECTABLE.includes(kase.status)) {
+    return NextResponse.json({
+      error: kase.status === "failed"
+        ? "El procesamiento de este caso falló. Vuelve a procesarlo antes de corregir campos."
+        : "Este caso ya tiene una decisión. Reábrelo para corregir campos.",
+    }, { status: 409 });
+  }
 
   const values = { ...((document.extractedJson ?? {}) as Record<string, unknown>) };
   if (!(fieldKey in values)) return NextResponse.json({ error: "Este campo no pertenece a la extracción del documento." }, { status: 400 });
@@ -43,8 +55,20 @@ async function handlePATCH(request: NextRequest, { params }: { params: Promise<{
 
   // The document, optional tenant learning and refreshed verdict are one unit:
   // a migration/write failure must not leave a corrected field with stale rules.
+  let conflict = false;
   try {
     await db.transaction(async (tx) => {
+      // Lock the case and re-check what the recalculation was based on: a
+      // concurrent correction or decision must not be overwritten.
+      const [locked] = await tx.select({ status: contractCases.status }).from(contractCases)
+        .where(eq(contractCases.id, kase.id)).for("update");
+      const [current] = await tx.select({ extractedJson: contractDocuments.extractedJson }).from(contractDocuments)
+        .where(eq(contractDocuments.id, id));
+      if (!locked || !CORRECTABLE.includes(locked.status)
+        || JSON.stringify(current?.extractedJson ?? {}) !== JSON.stringify(document.extractedJson ?? {})) {
+        conflict = true;
+        return;
+      }
       await tx.update(contractDocuments).set({ extractedJson: values }).where(eq(contractDocuments.id, id));
       if (applyToFuture && document.detectedType) {
         const citations = (document.citationsJson ?? {}) as Record<string, unknown>;
@@ -82,6 +106,7 @@ async function handlePATCH(request: NextRequest, { params }: { params: Promise<{
         : "No se pudo guardar la corrección. No se aplicó ningún cambio.",
     }, { status: 500 });
   }
+  if (conflict) return NextResponse.json({ error: "El caso cambió mientras corregías. Recarga la página e inténtalo de nuevo." }, { status: 409 });
   await logAudit({
     orgId: session.orgId,
     userId: session.sub,

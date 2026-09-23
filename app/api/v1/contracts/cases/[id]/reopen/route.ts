@@ -1,6 +1,7 @@
 import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
+import { canApprove } from "@/lib/auth/permissions";
 import { db } from "@/lib/db";
 import { contractCases } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
@@ -11,7 +12,7 @@ import { isFeatureEnabled } from "@/lib/features";
 async function handlePOST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getTenantSession({ area: "contracts", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
-  if (session.role !== "admin") return NextResponse.json({ error: "Solo administradores pueden reabrir" }, { status: 403 });
+  if (!canApprove(session.role, "contracts")) return NextResponse.json({ error: "No tienes permiso para reabrir casos" }, { status: 403 });
   if (!await isFeatureEnabled(session.orgId, "contract_approval_workflow")) {
     return NextResponse.json({ error: "La aprobación de contratos no está habilitada para este cliente." }, { status: 403 });
   }
@@ -32,13 +33,14 @@ async function handlePOST(_req: NextRequest, { params }: { params: Promise<{ id:
   const outputHistory = outputKey
     ? [...((prev.outputHistory as unknown[]) ?? []), { outputKey, missing: missing ?? [], generatedAt: generatedAt ?? null }]
     : prev.outputHistory ?? [];
-  await db.update(contractCases).set({
+  const reopened = await db.update(contractCases).set({
     status: "validated",
     // A document produced before reopening is no longer the current output.
     // Keep an audit reference, but require a fresh approval and generation.
     resultJson: { ...resultWithoutCurrentOutput, decision: null, decisionHistory: decision, outputHistory },
     updatedAt: new Date(),
-  }).where(eq(contractCases.id, id));
+  }).where(and(eq(contractCases.id, id), eq(contractCases.status, kase.status))).returning({ id: contractCases.id });
+  if (!reopened.length) return NextResponse.json({ error: "El caso cambió mientras lo revisabas. Recarga la página." }, { status: 409 });
 
   await logAudit({ orgId: session.orgId, userId: session.sub, userEmail: session.email, action: "contract.reopened", resourceType: "contract_case", resourceId: id });
   return NextResponse.json({ ok: true, status: "validated" });

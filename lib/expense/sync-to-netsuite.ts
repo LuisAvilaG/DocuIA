@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { expenseReports, expenseItems, nsConnections, subsidiaries } from "@/db/schema";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray, lt, or } from "drizzle-orm";
 import { decryptField } from "@/lib/crypto/encrypt";
 import { buildOAuthHeader, buildRestApiUrl, NSCredentials } from "@/lib/netsuite/oauth";
 import { getExpenseManagementConfig } from "@/lib/expense/config";
@@ -194,6 +194,17 @@ export interface SyncToNSResult {
 
 // ── Main sync function ────────────────────────────────────────────────
 
+// A "syncing" report older than this was interrupted (deploy, crash) and may
+// be retried; the per-item nsRecordId / externalIds keep the retry idempotent.
+const STALE_SYNC_MS = 15 * 60_000;
+
+function syncableStatus() {
+  return or(
+    inArray(expenseReports.status, ["approved", "exception"]),
+    and(eq(expenseReports.status, "syncing"), lt(expenseReports.updatedAt, new Date(Date.now() - STALE_SYNC_MS))),
+  );
+}
+
 export async function syncReportToNetsuite(reportId: string, orgId: string): Promise<SyncToNSResult> {
 
   const expenseConfig = await getExpenseManagementConfig(orgId);
@@ -217,7 +228,8 @@ export async function syncReportToNetsuite(reportId: string, orgId: string): Pro
   if (!report) throw new Error("Informe no encontrado");
   // Allow re-syncing a report that landed in "exception" after a partial failure,
   // not just freshly-approved ones. "syncing"/"synced" are intentionally excluded.
-  if (report.status !== "approved" && report.status !== "exception") {
+  const staleSync = report.status === "syncing" && report.updatedAt < new Date(Date.now() - STALE_SYNC_MS);
+  if (report.status !== "approved" && report.status !== "exception" && !staleSync) {
     throw new Error(`El informe debe estar aprobado para sincronizar (estado actual: ${report.status})`);
   }
 
@@ -360,134 +372,149 @@ export async function syncReportToNetsuite(reportId: string, orgId: string): Pro
   // ═══════════════════════════════════════════════════════════════════
   // FASE C — CREACIÓN DE REGISTROS EN NS
   // ═══════════════════════════════════════════════════════════════════
-  await db.update(expenseReports)
+  // Claim the report: of two concurrent syncs (double click, submit + manual
+  // retry) only one reaches NetSuite.
+  const claimed = await db.update(expenseReports)
     .set({ status: "syncing", updatedAt: new Date() })
-    .where(eq(expenseReports.id, reportId));
+    .where(and(eq(expenseReports.id, reportId), syncableStatus()))
+    .returning({ id: expenseReports.id });
+  if (!claimed.length) throw new Error("El informe ya se está sincronizando o cambió de estado. Recarga la página.");
 
   const itemResults: SyncToNSResult["itemResults"] = [];
   const syncErrors: string[] = [];
-
-  // C1. Vendor Bills
-  for (const item of vendorBillItems) {
-    // Skip items already synced in a previous (partial) run — idempotency.
-    if (item.nsRecordId) {
-      itemResults.push({ itemId: item.id, nsRecordId: item.nsRecordId, error: null });
-      continue;
-    }
-    try {
-      const vendorNsId   = vendorMap.get(item.vendorNit!)!;
-      const invoiceDate  = item.invoiceDate
-        ? (item.invoiceDate as Date).toISOString().slice(0, 10)
-        : new Date().toISOString().slice(0, 10);
-
-      const nsId = await createNSVendorBill(creds, {
-        processScriptId: conn.processScriptId!,
-        processDeployId: conn.processDeployId!,
-        vendorNsId,
-        subsidiaryNsId,
-        invoiceNumber:   item.invoiceNumber ?? `DE-${item.id}`,
-        invoiceDate,
-        memo:            item.description ?? report.purpose,
-        externalId:      `docuia-exp:${reportId}:${item.id}`,
-        currency:        item.currency ?? null,
-        accountNsId:     item.category!.netsuiteAccountId!,
-        amount:          Number(item.total),
-        department:      item.department?.netsuiteId ?? null,
-        class:           item.class?.netsuiteId ?? null,
-        customFormId:    item.needsDocumentoEquivalente
-          ? expenseConfig.documentoEquivalenteFormId || null
-          : null,
-      });
-
-      await db.update(expenseItems)
-        .set({ nsRecordId: nsId || null, nsRecordType: "vendor_bill", syncError: null, updatedAt: new Date() })
-        .where(eq(expenseItems.id, item.id));
-
-      itemResults.push({ itemId: item.id, nsRecordId: nsId || null, error: null });
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      syncErrors.push(`Línea ${item.lineNumber}: ${msg}`);
-      await db.update(expenseItems)
-        .set({ syncError: msg, updatedAt: new Date() })
-        .where(eq(expenseItems.id, item.id));
-      itemResults.push({ itemId: item.id, nsRecordId: null, error: msg });
-    }
-  }
-
-  // C2. Expense Report (personal items — skip if VBs already failed)
   let nsExpenseReportId: string | null = report.netsuiteExpenseReportId ?? null;
 
-  // Skip if the Expense Report was already created in a previous run.
-  if (personalItems.length > 0 && syncErrors.length === 0 && !nsExpenseReportId) {
-    try {
-      const today = new Date().toISOString().slice(0, 10);
-
-      const lines: ExpenseLineForNS[] = personalItems.map(item => {
-        const dateStr = item.expenseDate
-          ? (item.expenseDate as Date).toISOString().slice(0, 10)
-          : item.invoiceDate
-          ? (item.invoiceDate as Date).toISOString().slice(0, 10)
-          : today;
-
-        const line: ExpenseLineForNS = {
-          expensedate: dateStr,
-          category:    { id: item.category!.netsuiteCategoryId },
-          amount:      Number(item.total),
-          memo:        item.description ?? item.vendorName ?? null,
-        };
-        if (item.department?.netsuiteId) line.department = { id: item.department.netsuiteId };
-        if (item.class?.netsuiteId)      line.class       = { id: item.class.netsuiteId };
-        return line;
-      });
-
-      nsExpenseReportId = await createNSExpenseReport(creds, {
-        employeeNsId:   report.submitter.netsuiteEmployeeId!,
-        subsidiaryNsId,
-        trandate:       today,
-        memo:           report.purpose,
-        externalId:     `docuia-exp:${reportId}`,
-        lines,
-      });
-
-      for (const item of personalItems) {
-        const deNote = item.needsDocumentoEquivalente
-          ? "Requiere creación manual de Documento Equivalente en NetSuite"
-          : null;
-        await db.update(expenseItems)
-          .set({ nsRecordId: nsExpenseReportId, syncError: deNote, updatedAt: new Date() })
-          .where(eq(expenseItems.id, item.id));
-        itemResults.push({ itemId: item.id, nsRecordId: nsExpenseReportId, error: deNote });
+  try {
+    // C1. Vendor Bills
+    for (const item of vendorBillItems) {
+      // Skip items already synced in a previous (partial) run — idempotency.
+      if (item.nsRecordId) {
+        itemResults.push({ itemId: item.id, nsRecordId: item.nsRecordId, error: null });
+        continue;
       }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      syncErrors.push(`Expense Report NS: ${msg}`);
-      for (const item of personalItems) {
+      try {
+        const vendorNsId   = vendorMap.get(item.vendorNit!)!;
+        const invoiceDate  = item.invoiceDate
+          ? (item.invoiceDate as Date).toISOString().slice(0, 10)
+          : new Date().toISOString().slice(0, 10);
+
+        const nsId = await createNSVendorBill(creds, {
+          processScriptId: conn.processScriptId!,
+          processDeployId: conn.processDeployId!,
+          vendorNsId,
+          subsidiaryNsId,
+          invoiceNumber:   item.invoiceNumber ?? `DE-${item.id}`,
+          invoiceDate,
+          memo:            item.description ?? report.purpose,
+          externalId:      `docuia-exp:${reportId}:${item.id}`,
+          currency:        item.currency ?? null,
+          accountNsId:     item.category!.netsuiteAccountId!,
+          amount:          Number(item.total),
+          department:      item.department?.netsuiteId ?? null,
+          class:           item.class?.netsuiteId ?? null,
+          customFormId:    item.needsDocumentoEquivalente
+            ? expenseConfig.documentoEquivalenteFormId || null
+            : null,
+        });
+
+        await db.update(expenseItems)
+          .set({ nsRecordId: nsId || null, nsRecordType: "vendor_bill", syncError: null, updatedAt: new Date() })
+          .where(eq(expenseItems.id, item.id));
+
+        itemResults.push({ itemId: item.id, nsRecordId: nsId || null, error: null });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        syncErrors.push(`Línea ${item.lineNumber}: ${msg}`);
         await db.update(expenseItems)
           .set({ syncError: msg, updatedAt: new Date() })
           .where(eq(expenseItems.id, item.id));
         itemResults.push({ itemId: item.id, nsRecordId: null, error: msg });
       }
     }
-  }
 
-  // ── 5. Finalizar estado del informe ───────────────────────────────
-  if (syncErrors.length === 0) {
+    // C2. Expense Report (personal items — skip if VBs already failed)
+
+    // Skip if the Expense Report was already created in a previous run.
+    if (personalItems.length > 0 && syncErrors.length === 0 && !nsExpenseReportId) {
+      try {
+        const today = new Date().toISOString().slice(0, 10);
+
+        const lines: ExpenseLineForNS[] = personalItems.map(item => {
+          const dateStr = item.expenseDate
+            ? (item.expenseDate as Date).toISOString().slice(0, 10)
+            : item.invoiceDate
+            ? (item.invoiceDate as Date).toISOString().slice(0, 10)
+            : today;
+
+          const line: ExpenseLineForNS = {
+            expensedate: dateStr,
+            category:    { id: item.category!.netsuiteCategoryId },
+            amount:      Number(item.total),
+            memo:        item.description ?? item.vendorName ?? null,
+          };
+          if (item.department?.netsuiteId) line.department = { id: item.department.netsuiteId };
+          if (item.class?.netsuiteId)      line.class       = { id: item.class.netsuiteId };
+          return line;
+        });
+
+        nsExpenseReportId = await createNSExpenseReport(creds, {
+          employeeNsId:   report.submitter.netsuiteEmployeeId!,
+          subsidiaryNsId,
+          trandate:       today,
+          memo:           report.purpose,
+          externalId:     `docuia-exp:${reportId}`,
+          lines,
+        });
+
+        for (const item of personalItems) {
+          const deNote = item.needsDocumentoEquivalente
+            ? "Requiere creación manual de Documento Equivalente en NetSuite"
+            : null;
+          await db.update(expenseItems)
+            .set({ nsRecordId: nsExpenseReportId, syncError: deNote, updatedAt: new Date() })
+            .where(eq(expenseItems.id, item.id));
+          itemResults.push({ itemId: item.id, nsRecordId: nsExpenseReportId, error: deNote });
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        syncErrors.push(`Expense Report NS: ${msg}`);
+        for (const item of personalItems) {
+          await db.update(expenseItems)
+            .set({ syncError: msg, updatedAt: new Date() })
+            .where(eq(expenseItems.id, item.id));
+          itemResults.push({ itemId: item.id, nsRecordId: null, error: msg });
+        }
+      }
+    }
+
+    // ── 5. Finalizar estado del informe ───────────────────────────────
+    if (syncErrors.length === 0) {
+      await db.update(expenseReports)
+        .set({
+          status:                  "synced",
+          netsuiteExpenseReportId: nsExpenseReportId,
+          syncError:               null,
+          updatedAt:               new Date(),
+        })
+        .where(eq(expenseReports.id, reportId));
+    } else {
+      await db.update(expenseReports)
+        .set({
+          status:    "exception",
+          syncError: syncErrors.join("\n"),
+          updatedAt: new Date(),
+        })
+        .where(eq(expenseReports.id, reportId));
+    }
+
+  } catch (err) {
+    // Never leave the report stuck in "syncing": an unexpected failure (DB,
+    // network) lands in "exception", which accounting can retry.
+    const msg = err instanceof Error ? err.message : String(err);
     await db.update(expenseReports)
-      .set({
-        status:                  "synced",
-        netsuiteExpenseReportId: nsExpenseReportId,
-        syncError:               null,
-        updatedAt:               new Date(),
-      })
-      .where(eq(expenseReports.id, reportId));
-  } else {
-    await db.update(expenseReports)
-      .set({
-        status:    "exception",
-        syncError: syncErrors.join("\n"),
-        updatedAt: new Date(),
-      })
-      .where(eq(expenseReports.id, reportId));
+      .set({ status: "exception", syncError: [...syncErrors, msg].join("\n"), updatedAt: new Date() })
+      .where(and(eq(expenseReports.id, reportId), eq(expenseReports.status, "syncing")));
+    throw err;
   }
 
   return {

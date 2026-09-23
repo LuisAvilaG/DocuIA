@@ -11,6 +11,8 @@ import {
 } from "lucide-react";
 import { ReviewClient } from "./review-client";
 import { PendingApprovalClient } from "./pending-approval-client";
+import { storedDraft } from "@/lib/workflow/ns-payload";
+import { canApprove } from "@/lib/auth/permissions";
 import { DocPreview } from "./doc-preview-lazy";
 import { isFeatureEnabled } from "@/lib/features";
 
@@ -107,24 +109,24 @@ export default async function HistoryDetailPage({
   }
 
   if (doc.status === "pending_approval") {
-    if (!doc.products) notFound();
-    const uiPayload = doc.products as Record<string, unknown>;
-    const docLines = (uiPayload as any)?.document?.lines ?? [];
+    // Same draft the approve endpoint will post, including reviewer edits.
+    const draft = storedDraft(doc.products);
+    if (!draft) notFound();
     return (
       <PendingApprovalClient
         docId={doc.id}
-        vendor={doc.vendor}
-        numDoc={doc.numDoc}
+        vendor={draft.vendorName ?? doc.vendor}
+        numDoc={draft.invoiceNumber ?? doc.numDoc}
         total={doc.total ? String(doc.total) : null}
         docType={doc.documentType}
-        isAdmin={session.role === "admin"}
-        lines={docLines.map((l: any) => ({
-          description:      l.description ?? "",
-          quantity:         l.quantity ?? null,
-          rate:             l.rate ?? null,
-          amount:           l.amount ?? null,
-          selected_item_id: l.selected_item_id ?? null,
-          selected_unit_id: l.selected_unit_id ?? null,
+        isAdmin={canApprove(session.role ?? "", "documents")}
+        lines={draft.lines.map((l) => ({
+          description:      l.item_document_name,
+          quantity:         l.quantity,
+          rate:             l.rate,
+          amount:           l.amount,
+          selected_item_id: l.internal_id,
+          selected_unit_id: l.unit,
         }))}
       />
     );

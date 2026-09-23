@@ -37,6 +37,9 @@ export async function getBoss(): Promise<PgBoss> {
     boss = b;
     return b;
   })();
+  // A failed boot (e.g. a DB blip at startup) must not be cached forever,
+  // or every later upload silently falls back to inline processing.
+  booting.catch(() => { booting = null; });
   return booting;
 }
 
@@ -59,14 +62,27 @@ export async function enqueuePipeline(job: PipelineJob): Promise<string | null> 
 // ── Worker ────────────────────────────────────────────────────────────
 let workerStarted = false;
 
+// Jobs processed in parallel per replica. A bulk upload of 20 documents at
+// ~1 min each would otherwise queue the last ones long enough to be reaped.
+function pipelineConcurrency(): number {
+  const n = Number(process.env.PIPELINE_CONCURRENCY);
+  return Number.isInteger(n) && n > 0 ? Math.min(n, 10) : 3;
+}
+
 export async function startPipelineWorker(): Promise<void> {
   if (workerStarted) return;
   workerStarted = true;
-  const b = await getBoss();
+  let b: PgBoss;
+  try {
+    b = await getBoss();
+  } catch (err) {
+    workerStarted = false;
+    throw err;
+  }
   // Handler receives a batch (array) of jobs. Process each; only THROW on
   // infrastructure failures (so pg-boss retries). runPipeline swallows its own
   // business errors and marks the document failed, so those don't retry.
-  await b.work<PipelineJob>(PIPELINE_QUEUE, async (jobs) => {
+  await b.work<PipelineJob>(PIPELINE_QUEUE, { localConcurrency: pipelineConcurrency() }, async (jobs) => {
     for (const job of jobs) {
       const d = job.data;
       const buffer = await getFileBuffer(d.storageKey); // throws → job retried

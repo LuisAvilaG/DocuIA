@@ -40,10 +40,13 @@ async function handlePOST(
   const approvalEnabled = await isFeatureEnabled(session.orgId, "expense_approval");
 
   if (!approvalEnabled) {
-    // Sin aprobación requerida: auto-aprobar y sincronizar directamente
-    await db.update(expenseReports)
+    // Sin aprobación requerida: auto-aprobar y sincronizar directamente.
+    // The status guard makes a double click submit (and sync) only once.
+    const claimed = await db.update(expenseReports)
       .set({ status: "approved", submittedAt: new Date(), approvedAt: new Date(), updatedAt: new Date() })
-      .where(eq(expenseReports.id, id));
+      .where(and(eq(expenseReports.id, id), eq(expenseReports.status, "draft")))
+      .returning({ id: expenseReports.id });
+    if (!claimed.length) return NextResponse.json({ error: "El informe cambió de estado mientras lo procesabas. Recarga la página." }, { status: 409 });
 
     await logAudit({
       orgId:        session.orgId,
@@ -55,14 +58,23 @@ async function handlePOST(
       metadata:     { purpose: report.purpose },
     });
 
-    const syncResult = await syncReportToNetsuite(id, session.orgId);
-    return NextResponse.json({ ok: true, autoSynced: true, syncResult });
+    // The report is approved at this point; a sync failure (e.g. NetSuite not
+    // configured) is reported to accounting, not as a failed submission.
+    try {
+      const syncResult = await syncReportToNetsuite(id, session.orgId);
+      return NextResponse.json({ ok: true, autoSynced: true, syncResult });
+    } catch (err) {
+      console.error("[expenses/submit] auto-sync failed", err);
+      return NextResponse.json({ ok: true, autoSynced: false, syncError: "El informe fue aprobado, pero no se pudo sincronizar con NetSuite. Contabilidad lo revisará." });
+    }
   }
 
   // Con aprobación: pasar a submitted y notificar admins
-  await db.update(expenseReports)
+  const submitted = await db.update(expenseReports)
     .set({ status: "submitted", submittedAt: new Date(), updatedAt: new Date() })
-    .where(eq(expenseReports.id, id));
+    .where(and(eq(expenseReports.id, id), eq(expenseReports.status, "draft")))
+    .returning({ id: expenseReports.id });
+  if (!submitted.length) return NextResponse.json({ error: "El informe cambió de estado mientras lo procesabas. Recarga la página." }, { status: 409 });
 
   await logAudit({
     orgId:        session.orgId,

@@ -1,10 +1,11 @@
 import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
+import { canApprove } from "@/lib/auth/permissions";
 import { isFeatureEnabled } from "@/lib/features";
 import { db } from "@/lib/db";
 import { expenseReports } from "@/db/schema";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { sendEmail, buildExpenseRejectedEmail } from "@/lib/email/send";
 import { logAudit } from "@/lib/audit/log";
 
@@ -13,7 +14,7 @@ type Params = { params: Promise<{ id: string }> };
 async function handlePOST(req: NextRequest, { params }: Params) {
   const session = await getTenantSession({ area: "expenses", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
-  if (session.role !== "admin") return NextResponse.json({ error: "Solo administradores pueden rechazar informes" }, { status: 403 });
+  if (!canApprove(session.role, "expenses")) return NextResponse.json({ error: "No tienes permiso para rechazar informes" }, { status: 403 });
   if (!await isFeatureEnabled(session.orgId, "expense_management")) {
     return NextResponse.json({ error: "Módulo de gastos no activado" }, { status: 403 });
   }
@@ -40,9 +41,11 @@ async function handlePOST(req: NextRequest, { params }: Params) {
     return NextResponse.json({ error: `No se puede rechazar un informe en estado "${report.status}"` }, { status: 409 });
   }
 
-  await db.update(expenseReports)
+  const rejected = await db.update(expenseReports)
     .set({ status: "rejected", rejectedReason: body.reason.trim(), updatedAt: new Date() })
-    .where(eq(expenseReports.id, id));
+    .where(and(eq(expenseReports.id, id), inArray(expenseReports.status, ["submitted", "under_review"])))
+    .returning({ id: expenseReports.id });
+  if (!rejected.length) return NextResponse.json({ error: "El informe cambió de estado mientras lo procesabas. Recarga la página." }, { status: 409 });
 
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
   await sendEmail({

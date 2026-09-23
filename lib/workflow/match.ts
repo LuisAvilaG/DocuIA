@@ -25,6 +25,7 @@ type VendorRow = {
   internal_id: string;
   name: string | null;
   entityid: string | null;
+  rfc: string | null;
 };
 
 const itemCache = new Map<string, { rows: ItemRow[]; ts: number }>();
@@ -179,6 +180,7 @@ async function getAllVendors(subsidiaryId: string): Promise<VendorRow[]> {
       internal_id: catalogVendors.internalId,
       name: catalogVendors.name,
       entityid: catalogVendors.entityid,
+      rfc: catalogVendors.rfc,
     })
     .from(catalogVendors)
     .where(
@@ -214,9 +216,10 @@ function tokenCoverage(queryTokens: string[], target: string): number {
   return hits / queryTokens.length;
 }
 
-export async function searchVendors(query: string, subsidiaryId: string, limit = 20): Promise<VendorOption[]> {
+export async function searchVendors(query: string, subsidiaryId: string, limit = 20, rfc?: string): Promise<VendorOption[]> {
   const term = normalize(query).slice(0, 250);
-  if (!term) return [];
+  const rfcNorm = (rfc ?? "").toUpperCase().replace(/[^A-Z0-9&Ñ]/g, "");
+  if (!term && !rfcNorm) return [];
 
   const rows = await getAllVendors(subsidiaryId);
   const tokens = vendorTokens(term);
@@ -228,6 +231,10 @@ export async function searchVendors(query: string, subsidiaryId: string, limit =
     const entityNorm = normalizeForLookup(row.entityid || "");
 
     let score = 0;
+    // The RFC identifies the vendor unambiguously: the CFDI issuer name often is
+    // the legal name, which differs from the vendor name in the ERP.
+    if (rfcNorm && (row.rfc ?? "").toUpperCase().replace(/[^A-Z0-9&Ñ]/g, "") === rfcNorm) score += 400;
+    if (!termNorm) return { internal_id: String(row.internal_id), name, entityid: String(row.entityid || ""), _score: score };
     if (nameNorm === termNorm || entityNorm === termNorm) score += 220;
     else if (nameNorm.includes(termNorm) || entityNorm.includes(termNorm)) score += 100;
     score += Math.round(
@@ -351,7 +358,7 @@ export async function buildUiPayload(
   const engine = normalize(options?.engine || "") || "gemini_file_primary";
   const parserVersion = normalize(options?.parserVersion || "") || "invoice-gemini-file-tiered-v1";
 
-  const vendors = await searchVendors(extracted.vendor, subsidiaryId, 20);
+  const vendors = await searchVendors(extracted.vendor, subsidiaryId, 20, extracted.vendorRfc);
   const selectedVendor = vendors[0] || null;
   const vendorForMemory = normalize(selectedVendor?.name || extracted.vendor);
 

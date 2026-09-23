@@ -17,6 +17,8 @@ export type ExtractedLine = {
 export type ExtractedInvoice = {
   format: "general" | "baldor" | "performance";
   vendor: string;
+  /** Issuer tax id (RFC) when known — exact vendor match for CFDI XML. */
+  vendorRfc?: string;
   invoiceNumber: string;
   invoiceDate: string;
   dueDate: string;

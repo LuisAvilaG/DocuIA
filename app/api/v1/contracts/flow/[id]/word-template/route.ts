@@ -1,4 +1,4 @@
-import { withApiSecurity } from "@/lib/security/http";
+import { contentDisposition, withApiSecurity } from "@/lib/security/http";
 import { isOrgWordTemplateKey } from "@/lib/security/storage-key";
 import { validateDocx } from "@/lib/security/docx";
 import { randomUUID } from "crypto";
@@ -72,7 +72,7 @@ async function handleGET(req: NextRequest, { params }: { params: Promise<{ id: s
   try {
     const nodeStream = await getFileStream(template.storageKey);
     const webStream = Readable.toWeb(nodeStream) as unknown as ReadableStream<Uint8Array>;
-    return new NextResponse(webStream, { headers: { "Content-Type": WORD_MIME, "Content-Disposition": `inline; filename="${template.originalName.replace(/[\r\n"]/g, "")}"`, "Cache-Control": "private, max-age=3600" } });
+    return new NextResponse(webStream, { headers: { "Content-Type": WORD_MIME, "Content-Disposition": contentDisposition("inline", template.originalName), "Cache-Control": "private, max-age=3600" } });
   } catch {
     return NextResponse.json({ error: "No se pudo leer la plantilla Word guardada." }, { status: 500 });
   }

@@ -29,9 +29,15 @@ function asList(v: unknown): string[] {
   if (v === null || v === undefined || v === "") return [];
   return [String(v)];
 }
+// With several documents of one type, validations, calculations and generated
+// output all read the first one that actually has the field.
 function firstValue(docsByType: DocsByType, ref: Ref): unknown {
-  const d = (docsByType[ref.docType] ?? [])[0];
+  const docs = docsByType[ref.docType] ?? [];
+  const d = docs.find((doc) => hasValue(doc.values[ref.field])) ?? docs[0];
   return d ? d.values[ref.field] : undefined;
+}
+function hasValue(v: unknown): boolean {
+  return Array.isArray(v) ? v.length > 0 : v !== null && v !== undefined && String(v).trim() !== "";
 }
 // Tolerant name match: order-insensitive, ignores missing second names, OCR noise.
 export function namesMatch(a: string, b: string): boolean {
@@ -212,7 +218,9 @@ function runDate(r: Extract<ValidationRule, { kind: "date_rule" }>, docs: DocsBy
   if (!d) return [unk(r.field, "sin fecha", "No se pudo leer una fecha.")];
   const checks: Finding["checks"] = [];
   if (r.notExpired) {
-    const ok = d.getTime() >= now.getTime();
+    // A document is valid through its whole expiry day.
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const ok = d.getTime() >= today.getTime();
     checks.push({ label: "No vencida", ok });
     if (!ok) return [fail(r.field, "vencida", `La fecha ${d.toLocaleDateString("es-MX")} ya venció.`, checks)];
   }

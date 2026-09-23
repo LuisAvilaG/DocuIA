@@ -93,8 +93,10 @@ function resolveReference(
   if (ref.type === "number") return ref.value;
   if (ref.type === "fixed") return fixed.get(ref.key) ?? null;
   if (ref.type === "item") return toNumber(item?.[ref.key]);
+  // Same document choice as validations: the first one that has the field.
   const documents = docsByType[ref.docType] ?? [];
-  const raw = documents.at(-1)?.values[ref.field];
+  const present = (v: unknown) => Array.isArray(v) ? v.length > 0 : v !== null && v !== undefined && String(v).trim() !== "";
+  const raw = (documents.find((document) => present(document.values[ref.field])) ?? documents[0])?.values[ref.field];
   return toNumber(Array.isArray(raw) ? raw[0] : raw);
 }
 

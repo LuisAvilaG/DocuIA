@@ -38,16 +38,52 @@ function encodeXml(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 }
 
-type TextPart = { open: string; text: string; close: string };
+// A text run (<w:t>) or a tab/line break, which the preview shows as
+// whitespace: selections that cross one must still match.
+type TextPart = { open: string; text: string; close: string; breakTag?: string };
+
+// <w:t/> (empty, self-closing) must not be read as an opening tag.
+const TEXT_OR_BREAK = /(<w:t\b(?![^>]*\/>)[^>]*>)([\s\S]*?)(<\/w:t>)|<w:(?:tab|br|cr)\b[^>]*\/>/g;
+
+// Anchor occurrences as [from, to) in `whole`. Exact first; otherwise compare
+// with whitespace runs collapsed, because the template preview (where the
+// anchor was selected) collapses tabs, breaks and repeated spaces.
+function findOccurrences(whole: string, anchor: string): Array<[number, number]> {
+  const exact: Array<[number, number]> = [];
+  for (let at = whole.indexOf(anchor); at >= 0; at = whole.indexOf(anchor, at + anchor.length)) exact.push([at, at + anchor.length]);
+  if (exact.length) return exact;
+
+  const target = anchor.replace(/\s+/g, " ").trim();
+  if (!target) return [];
+  let collapsed = "";
+  const origin: number[] = []; // collapsed index → original index
+  for (let i = 0; i < whole.length; i++) {
+    if (/\s/.test(whole[i])) {
+      if (collapsed.endsWith(" ")) continue;
+      collapsed += " ";
+    } else {
+      collapsed += whole[i];
+    }
+    origin.push(i);
+  }
+  const found: Array<[number, number]> = [];
+  for (let at = collapsed.indexOf(target); at >= 0; at = collapsed.indexOf(target, at + target.length)) {
+    found.push([origin[at], origin[at + target.length - 1] + 1]);
+  }
+  return found;
+}
 
 function replaceInParagraph(paragraph: string, anchor: string, replacement: string): string {
   if (!anchor) return paragraph;
-  const token = /(<w:t\b[^>]*>)([\s\S]*?)(<\/w:t>)/g;
   const parts: TextPart[] = [];
-  let match: RegExpExecArray | null;
-  while ((match = token.exec(paragraph))) parts.push({ open: match[1], text: decodeXml(match[2]), close: match[3] });
+  for (const match of paragraph.matchAll(TEXT_OR_BREAK)) {
+    parts.push(match[1]
+      ? { open: match[1], text: decodeXml(match[2]), close: match[3] }
+      : { open: "", text: /<w:tab\b/.test(match[0]) ? "\t" : "\n", close: "", breakTag: match[0] });
+  }
   const whole = parts.map((part) => part.text).join("");
-  if (!whole.includes(anchor)) return paragraph;
+  const occurrences = findOccurrences(whole, anchor);
+  if (!occurrences.length) return paragraph;
 
   let cursor = 0;
   const rewritten = parts.map((part) => {
@@ -59,42 +95,36 @@ function replaceInParagraph(paragraph: string, anchor: string, replacement: stri
   // A label may appear in more than one part of a document. Replacing all
   // occurrences is deliberate: headers and signature tables normally need
   // the same value. Within one paragraph, preserve the style of the first run.
-  const occurrences: number[] = [];
-  let from = whole.indexOf(anchor);
-  while (from >= 0) {
-    occurrences.push(from);
-    from = whole.indexOf(anchor, from + anchor.length);
-  }
-
   // Work from the end so a longer replacement never shifts the positions of
   // an earlier occurrence in this paragraph.
-  for (const occurrence of occurrences.reverse()) {
-    const from = occurrence;
-    const to = from + anchor.length;
+  for (const [from, to] of occurrences.reverse()) {
+    const overlaps = (part: (typeof rewritten)[number]) => Math.max(from, part.start) < Math.min(to, part.end);
+    // The value goes into the first text run of the selection; tabs/breaks
+    // inside the selection are removed with the rest of the anchor.
+    const host = rewritten.find((part) => !part.breakTag && overlaps(part));
+    if (!host) continue;
     for (const part of rewritten) {
-      const overlapStart = Math.max(from, part.start);
-      const overlapEnd = Math.min(to, part.end);
-      if (overlapStart >= overlapEnd) continue;
-      const localStart = overlapStart - part.start;
-      const localEnd = overlapEnd - part.start;
-      const beginsHere = from >= part.start && from < part.end;
-      part.text = part.text.slice(0, localStart) + (beginsHere ? replacement : "") + part.text.slice(localEnd);
+      if (!overlaps(part)) continue;
+      const localStart = Math.max(from, part.start) - part.start;
+      const localEnd = Math.min(to, part.end) - part.start;
+      part.text = part.text.slice(0, localStart) + (part === host ? replacement : "") + part.text.slice(localEnd);
     }
   }
 
   let i = 0;
-  return paragraph.replace(token, () => {
+  return paragraph.replace(TEXT_OR_BREAK, () => {
     const part = rewritten[i++];
+    if (part.breakTag) return part.text ? part.breakTag : "";
     return `${part.open}${encodeXml(part.text)}${part.close}`;
   });
 }
 
 function replaceTextInXml(xml: string, anchor: string, replacement: string): string {
-  return xml.replace(/<w:p\b[\s\S]*?<\/w:p>/g, (paragraph) => replaceInParagraph(paragraph, anchor, replacement));
+  return xml.replace(/<w:p\b(?![^>]*\/>)[^>]*>[\s\S]*?<\/w:p>/g, (paragraph) => replaceInParagraph(paragraph, anchor, replacement));
 }
 
 function visibleText(xml: string): string {
-  return [...xml.matchAll(/<w:t\b[^>]*>([\s\S]*?)<\/w:t>/g)].map((match) => decodeXml(match[1])).join("");
+  return [...xml.matchAll(/<w:t\b(?![^>]*\/>)[^>]*>([\s\S]*?)<\/w:t>/g)].map((match) => decodeXml(match[1])).join("");
 }
 
 function printableCell(value: unknown): string {
@@ -123,8 +153,12 @@ function printableMapping(value: unknown, format: WordTemplateMapping["format"])
  */
 function repeatTableRows(xml: string, repeat: WordTableRepeat, data: Record<string, unknown>): string {
   const input = data[repeat.fieldKey];
-  const rows = Array.isArray(input)
-    ? input.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+  // A list of plain values (e.g. asegurados: ["A", "B"]) repeats too; each
+  // value is available as {{item}} or {{value}} in the row.
+  const rows: Record<string, unknown>[] = Array.isArray(input)
+    ? input
+      .filter((item) => item !== null && item !== undefined && item !== "")
+      .map((item) => typeof item === "object" ? item as Record<string, unknown> : { item, value: item })
     : [];
 
   return xml.replace(/<w:tr\b[\s\S]*?<\/w:tr>/g, (tableRow) => {
@@ -133,15 +167,16 @@ function repeatTableRows(xml: string, repeat: WordTableRepeat, data: Record<stri
 
     return rows.map((item, index) => {
       let copy = replaceTextInXml(tableRow, repeat.rowAnchorText, "");
-      const tokens = [...new Set([...visibleText(copy).matchAll(/\{\{\s*(?:item\.)?([\w.-]+)\s*\}\}/g)].map((match) => match[1]))];
-      for (const token of tokens) {
+      // Replace each placeholder exactly as written, so "{{ amparo }}" with
+      // spaces is filled like "{{amparo}}".
+      const placeholders = new Map([...visibleText(copy).matchAll(/\{\{\s*(?:item\.)?([\w.-]+)\s*\}\}/g)].map((match) => [match[0], match[1]]));
+      for (const [placeholder, token] of placeholders) {
         // Tokens that are not properties of an item may be ordinary case
         // fields (for example {{valor_contrato}}). Leave them for the normal
         // template mapping pass that runs after table expansion.
         if (token !== "index" && !(token in item)) continue;
         const replacement = token === "index" ? String(index + 1) : printableCell(item[token]);
-        copy = replaceTextInXml(copy, `{{${token}}}`, replacement);
-        copy = replaceTextInXml(copy, `{{item.${token}}}`, replacement);
+        copy = replaceTextInXml(copy, placeholder, replacement);
       }
       return copy;
     }).join("");

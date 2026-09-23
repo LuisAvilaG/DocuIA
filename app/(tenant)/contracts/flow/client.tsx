@@ -648,6 +648,9 @@ function FlowBuilder({ flowId }: { flowId: string }) {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [name, setName] = useState("Flujo de contratos");
+  // Version loaded from the server; saving sends it back so a concurrent edit
+  // by another admin is reported instead of silently overwritten.
+  const versionRef = useRef<number | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [docEditorOpen, setDocEditorOpen] = useState(false);
   const [wordTemplateOpen, setWordTemplateOpen] = useState(false);
@@ -667,7 +670,7 @@ function FlowBuilder({ flowId }: { flowId: string }) {
     (async () => {
       try {
         const d = await fetch(`/api/v1/contracts/flow/${flowId}`).then((r) => r.json());
-        if (d.flow) { setName(d.flow.name ?? "Flujo"); setGraph(d.flow.graph ?? { nodes: [], edges: [] }); }
+        if (d.flow) { setName(d.flow.name ?? "Flujo"); setGraph(d.flow.graph ?? { nodes: [], edges: [] }); versionRef.current = d.flow.version ?? null; }
       } finally { setLoading(false); }
     })();
   }, [flowId, setGraph]);
@@ -732,8 +735,9 @@ function FlowBuilder({ flowId }: { flowId: string }) {
       edges: edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
     };
     try {
-      const res = await fetch(`/api/v1/contracts/flow/${flowId}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, graph }) });
+      const res = await fetch(`/api/v1/contracts/flow/${flowId}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, graph, version: versionRef.current }) });
       const d = await res.json();
+      if (res.ok && typeof d.version === "number") versionRef.current = d.version;
       setMsg(res.ok ? { ok: true, text: `Guardado (v${d.version ?? 1})` } : { ok: false, text: d.error ?? "Error al guardar" });
     } catch { setMsg({ ok: false, text: "Sin conexión" }); }
     finally { setSaving(false); }

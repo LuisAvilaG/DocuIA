@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, parse } from "node:path";
 import { promisify } from "node:util";
+import { pathToFileURL } from "node:url";
 import { validateDocx } from "@/lib/security/docx";
 
 const execFileAsync = promisify(execFile);
@@ -30,7 +31,8 @@ export async function convertWordToPdf(word: Buffer, originalName: string): Prom
       "--nologo",
       "--nodefault",
       "--nofirststartwizard",
-      `-env:UserInstallation=file://${profileDir}`,
+      // A proper file URL (file:///C:/...) also on Windows development machines.
+      `-env:UserInstallation=${pathToFileURL(profileDir).href}`,
       "--convert-to",
       "pdf:writer_pdf_Export",
       "--outdir",

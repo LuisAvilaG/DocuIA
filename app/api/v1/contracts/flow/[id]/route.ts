@@ -36,7 +36,7 @@ async function handleGET(_req: NextRequest, { params }: { params: Promise<{ id: 
   });
 }
 
-interface PutBody { name?: string; graph?: unknown }
+interface PutBody { name?: string; graph?: unknown; version?: unknown }
 
 async function handlePUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getTenantSession({ area: "contracts", permission: "write" });
@@ -61,11 +61,16 @@ async function handlePUT(req: NextRequest, { params }: { params: Promise<{ id: s
   const refErr = validateFlowReferences(parsed.data);
   if (refErr) return NextResponse.json({ error: refErr }, { status: 400 });
 
+  const stale = NextResponse.json({ error: "Otra persona guardó este flujo mientras lo editabas. Recarga la página para ver sus cambios antes de guardar." }, { status: 409 });
+  if (typeof body?.version === "number" && body.version !== existing.version) return stale;
+
   const name = body?.name?.trim() || "Flujo de contratos";
   try {
-    await db.update(contractFlows)
+    const saved = await db.update(contractFlows)
       .set({ name, graphJson: parsed.data, version: existing.version + 1, updatedAt: new Date() })
-      .where(eq(contractFlows.id, id));
+      .where(and(eq(contractFlows.id, id), eq(contractFlows.version, existing.version)))
+      .returning({ id: contractFlows.id });
+    if (!saved.length) return stale;
     return NextResponse.json({ ok: true, id, version: existing.version + 1 });
   } catch (err) {
     console.error("[contracts/flow PUT]", err);

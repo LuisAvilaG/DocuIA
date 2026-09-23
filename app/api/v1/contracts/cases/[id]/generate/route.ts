@@ -9,7 +9,7 @@ import { contractAiAnalysisResults, contractCases, contractDocuments, contractVa
 import { and, eq } from "drizzle-orm";
 import { getFileBuffer, uploadFile } from "@/lib/storage/minio";
 import { renderTemplate, renderPdf, renderDocPdf, renderHtmlPdf, defaultTemplate, assembleCaseData } from "@/lib/contracts/generate";
-import { loadContractPlan } from "@/lib/contracts/plan";
+import { loadCasePlan } from "@/lib/contracts/plan";
 import { fillWordTemplate } from "@/lib/contracts/word-template";
 import { logAudit } from "@/lib/audit/log";
 import { getFeature, isFeatureEnabled } from "@/lib/features";
@@ -43,7 +43,7 @@ async function handlePOST(_req: NextRequest, { params }: { params: Promise<{ id:
       db.query.contractDocuments.findMany({ where: eq(contractDocuments.caseId, id), columns: { detectedType: true, extractedJson: true } }),
       db.query.contractValidations.findMany({ where: eq(contractValidations.caseId, id), columns: { subject: true, status: true, reason: true } }),
       db.query.contractAiAnalysisResults.findMany({ where: eq(contractAiAnalysisResults.caseId, id), columns: { ruleName: true, summary: true, itemsJson: true } }),
-      loadContractPlan(session.orgId, kase.flowId),
+      loadCasePlan(kase),
     ]);
 
     const extractedData = assembleCaseData(docs, validations, analyses);

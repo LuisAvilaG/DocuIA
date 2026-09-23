@@ -15,6 +15,11 @@ ARG NEXT_PUBLIC_APP_URL
 ARG NEXT_PUBLIC_APP_NAME=DocuIA
 ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL
 ENV NEXT_PUBLIC_APP_NAME=$NEXT_PUBLIC_APP_NAME
+# Keep the build within a small VPS: capped heap, one static-generation worker
+# and no type-check here (CI type-checks every push to master).
+ENV NODE_OPTIONS=--max-old-space-size=1536
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV DOCKER_BUILD=1
 # Next produces a self-contained server under .next/standalone (output: "standalone").
 RUN npm run build
 

@@ -75,7 +75,7 @@ async function handlePATCH(req: NextRequest, { params }: Params) {
   try {
     if (!await ownedMapping(id, auth.session.orgId)) return NextResponse.json({ error: "Mapeo no encontrado" }, { status: 404 });
     const input = parseInput(await req.json() as MappingInput);
-    if (!input) return NextResponse.json({ error: "Completa subsidiaria, proveedor, ítem del documento e ítem de NetSuite" }, { status: 400 });
+    if (!input) return NextResponse.json({ error: "Completa subsidiaria, proveedor, ítem del documento e ítem del ERP" }, { status: 400 });
 
     const subsidiary = await db.query.subsidiaries.findFirst({
       where: and(eq(subsidiaries.id, input.subsidiaryId), eq(subsidiaries.organizationId, auth.session.orgId)),

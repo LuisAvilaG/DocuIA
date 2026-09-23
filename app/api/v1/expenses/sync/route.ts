@@ -43,7 +43,7 @@ async function handlePOST(req: NextRequest) {
   const creds = await resolveNsCreds(session.orgId);
   if (!creds) {
     return NextResponse.json(
-      { error: "No hay conexión NetSuite activa. Contacta al administrador de DocuIA." },
+      { error: "No hay conexión activa con el ERP. Contacta al administrador de DocuIA." },
       { status: 422 },
     );
   }

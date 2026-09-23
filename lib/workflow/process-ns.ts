@@ -124,7 +124,7 @@ export async function processInNetSuite(
       eq(nsConnections.isActive, true),
     ),
   });
-  if (!conn) throw new Error(`No NS connection for org ${organizationId} (${env})`);
+  if (!conn) throw new Error(`No hay conexión activa con el ERP (${env})`);
   if (!conn.processScriptId || !conn.processDeployId) {
     throw new Error("Process script not configured for this organization");
   }
@@ -142,7 +142,7 @@ export async function processInNetSuite(
   const result = await processDocument(creds, conn.processScriptId, conn.processDeployId, restletBody);
 
   if (!result.ok) {
-    throw new Error(result.error || "NetSuite process restlet returned error");
+    throw new Error(result.error || "El script de proceso del ERP devolvió un error");
   }
 
   const nsData = result.data as Record<string, unknown>;
@@ -157,7 +157,7 @@ export async function processInNetSuite(
 
   if (!isProcessReply) {
     throw new Error(
-      "NetSuite devolvió una respuesta inesperada del script de proceso. " +
+      "El ERP devolvió una respuesta inesperada del script de proceso. " +
       "Verifica que el Process Script ID apunte a docuia-process-v1 y no al catálogo."
     );
   }

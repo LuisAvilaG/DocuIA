@@ -86,7 +86,7 @@ export function AccountingExpenseList({ reports }: { reports: ReportRow[] }) {
         <div>
           <h1 className="text-lg font-semibold text-foreground">Informes de gastos</h1>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Revisa, aprueba y sincroniza informes a NetSuite
+            Revisa, aprueba y sincroniza informes con el ERP
           </p>
         </div>
         <a

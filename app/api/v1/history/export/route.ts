@@ -42,7 +42,7 @@ async function handleGET() {
   if (!enabled) return NextResponse.json({ error: "Feature no disponible" }, { status: 403 });
 
   try {
-    const headers = ["ID", "Tipo", "Proveedor", "Num. Doc", "Total", "Estado", "NS Doc ID", "Creado", "Actualizado"];
+    const headers = ["ID", "Tipo", "Proveedor", "Num. Doc", "Total", "Estado", "ID ERP", "Creado", "Actualizado"];
     const orgId = session.orgId;
     const BATCH = 2000;
     const encoder = new TextEncoder();

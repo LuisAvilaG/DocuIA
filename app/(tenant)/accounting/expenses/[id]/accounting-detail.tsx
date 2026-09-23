@@ -251,7 +251,7 @@ export function AccountingExpenseDetail({ report, canDecide, canSync }: { report
           <div className="mt-3 p-3 rounded-lg bg-success/10 border border-success/20 flex items-center gap-2">
             <BadgeCheck className="w-4 h-4 text-success shrink-0" />
             <div>
-              <p className="text-xs text-success font-medium">Sincronizado en NetSuite</p>
+              <p className="text-xs text-success font-medium">Sincronizado en el ERP</p>
               <p className="text-[0.6875rem] text-success/70">
                 ID: {report.netsuiteExpenseReportId}
               </p>
@@ -425,7 +425,7 @@ export function AccountingExpenseDetail({ report, canDecide, canSync }: { report
 
         {!canSync && (localStatus === "approved" || localStatus === "exception") && (
           <p className="text-center text-xs text-muted-foreground py-2">
-            Aprobado. Contabilidad se encarga de sincronizarlo con NetSuite.
+            Aprobado. Contabilidad se encarga de sincronizarlo con el ERP.
           </p>
         )}
 
@@ -438,7 +438,7 @@ export function AccountingExpenseDetail({ report, canDecide, canSync }: { report
           >
             {syncing
               ? <><Loader2 className="w-4 h-4 animate-spin mr-2" /> Sincronizando…</>
-              : <><RefreshCw className="w-4 h-4 mr-2" /> Sincronizar a NetSuite</>}
+              : <><RefreshCw className="w-4 h-4 mr-2" /> Sincronizar con el ERP</>}
           </Button>
         )}
 
@@ -459,7 +459,7 @@ export function AccountingExpenseDetail({ report, canDecide, canSync }: { report
         {localStatus === "syncing" && (
           <div className="flex items-center justify-center gap-2 py-2.5 text-sm text-primary">
             <Loader2 className="w-4 h-4 animate-spin" />
-            Sincronizando con NetSuite…
+            Sincronizando con el ERP…
           </div>
         )}
 
@@ -469,7 +469,7 @@ export function AccountingExpenseDetail({ report, canDecide, canSync }: { report
             <BadgeCheck className="w-4 h-4" />
             {report.netsuiteExpenseReportId
               ? `Sincronizado · NS ${report.netsuiteExpenseReportId}`
-              : "Sincronizado en NetSuite"}
+              : "Sincronizado en el ERP"}
           </div>
         )}
 

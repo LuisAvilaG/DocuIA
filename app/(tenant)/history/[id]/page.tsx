@@ -12,10 +12,13 @@ import {
 } from "lucide-react";
 import { ReviewClient } from "./review-client";
 import { PendingApprovalClient } from "./pending-approval-client";
+import { AwaitingReceiptClient } from "./awaiting-receipt-client";
+import { getFeature } from "@/lib/features";
 import { storedDraft } from "@/lib/workflow/ns-payload";
 import { canApprove } from "@/lib/auth/permissions";
 import { DocPreview } from "./doc-preview-lazy";
 import { isFeatureEnabled } from "@/lib/features";
+import type { ApChecks } from "@/lib/workflow/ap-checks";
 
 import { DOC_STATUS } from "@/lib/status-config";
 
@@ -90,7 +93,15 @@ export default async function HistoryDetailPage({
   }
 
   const storageEnabled = await isFeatureEnabled(session.orgId, "document_storage");
-  const poProcessingEnabled = await isFeatureEnabled(session.orgId, "po_processing");
+  const [poProcessingEnabled, poMatchingEnabled, approvalWorkflow] = await Promise.all([
+    isFeatureEnabled(session.orgId, "po_processing"),
+    isFeatureEnabled(session.orgId, "po_matching"),
+    isFeatureEnabled(session.orgId, "approval_workflow"),
+  ]);
+  const apChecks = doc.products && typeof doc.products === "object" && !Array.isArray(doc.products)
+    ? ((doc.products as { ap_checks?: ApChecks }).ap_checks ?? null)
+    : null;
+  const isApprover = canApprove(session.role ?? "", "documents");
   const fileExt = doc.storageKey ? (doc.storageKey.split(".").pop() ?? "").toLowerCase() : "";
   const showDocViewer = storageEnabled && Boolean(doc.storageKey) && Boolean(fileExt);
 
@@ -105,7 +116,12 @@ export default async function HistoryDetailPage({
         subsidiaryId={doc.subsidiaryId}
         storageKey={doc.storageKey ?? null}
         fileExt={ext}
-        poProcessingEnabled={poProcessingEnabled && doc.documentType === "invoice"}
+        poProcessingEnabled={poProcessingEnabled && doc.documentType !== "purchase_order"}
+        poMatchingEnabled={poMatchingEnabled && doc.documentType !== "purchase_order"}
+        apChecks={apChecks}
+        statusReason={doc.errorMessage ?? null}
+        canApprove={isApprover}
+        approvalWorkflow={approvalWorkflow}
         payload={doc.products as unknown as Parameters<typeof ReviewClient>[0]["payload"]}
       />
     );
@@ -122,7 +138,9 @@ export default async function HistoryDetailPage({
         numDoc={draft.invoiceNumber ?? doc.numDoc}
         total={doc.total ? String(doc.total) : null}
         docType={doc.documentType}
-        isAdmin={canApprove(session.role ?? "", "documents")}
+        isAdmin={isApprover}
+        reason={doc.errorMessage ?? null}
+        apChecks={apChecks}
         lines={draft.lines.map((l) => ({
           description:      l.item_document_name,
           quantity:         l.quantity,
@@ -131,6 +149,26 @@ export default async function HistoryDetailPage({
           selected_item_id: l.internal_id,
           selected_unit_id: l.unit,
         }))}
+      />
+    );
+  }
+
+  if (doc.status === "awaiting_receipt") {
+    const threeWay = await getFeature(session.orgId, "three_way_match");
+    const draft = storedDraft(doc.products);
+    return (
+      <AwaitingReceiptClient
+        docId={doc.id}
+        numDoc={draft?.invoiceNumber ?? doc.numDoc}
+        vendor={draft?.vendorName ?? doc.vendor}
+        total={doc.total ? String(doc.total) : null}
+        reason={doc.errorMessage ?? null}
+        apChecks={apChecks}
+        awaitingSince={doc.awaitingSince?.toISOString() ?? null}
+        nextCheckAt={doc.nextReceiptCheckAt?.toISOString() ?? null}
+        recheckHours={Math.max(1, Number(threeWay.config.recheck_hours) || 2)}
+        maxWaitDays={Math.max(1, Number(threeWay.config.max_wait_days) || 15)}
+        onTimeout={threeWay.config.on_timeout === "exception" ? "exception" : "manual_review"}
       />
     );
   }

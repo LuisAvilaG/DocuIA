@@ -1,17 +1,21 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
   CheckCircle2, AlertTriangle, Loader2, ChevronLeft,
-  Building2, FileText, Package, MapPin, Sparkles,
+  Building2, Sparkles,
   ChevronDown, ChevronUp, Search, X, Eye, EyeOff,
-  Trash2, Plus, ExternalLink, XCircle,
+  Trash2, Plus, ExternalLink, AlertCircle,
 } from "lucide-react";
 import type { BBox } from "@/lib/workflow/types";
+import type { ApChecks } from "@/lib/workflow/ap-checks";
+import type { PoComparison, PoOutcome, PoSuggestion } from "@/lib/workflow/po-match";
+import type { EffectiveVendorRule } from "@/lib/workflow/vendor-rules";
 import { DocPreview } from "./doc-preview-lazy";
 import { SelectMenu } from "@/components/ui/select-menu";
+import { Badge, Card, FiscalPanel, PoComparisonCard, PoPicker } from "./ap-panels";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -58,6 +62,7 @@ interface ReviewPayload {
     invoice_date: string;
     due_date: string | null;
     currency: string;
+    purchase_order?: string | null;
     totals: { subtotal: string | null; tax: string; total: string };
     lines: MatchedLine[];
   };
@@ -107,6 +112,11 @@ export function ReviewClient({
   storageKey,
   fileExt,
   poProcessingEnabled = false,
+  poMatchingEnabled = false,
+  apChecks = null,
+  statusReason = null,
+  canApprove = false,
+  approvalWorkflow = false,
   payload,
 }: {
   docId: number;
@@ -114,6 +124,12 @@ export function ReviewClient({
   storageKey: string | null;
   fileExt: string;
   poProcessingEnabled?: boolean;
+  /** po_matching feature: suggestions, invoice ↔ PO comparison and receipt checks. */
+  poMatchingEnabled?: boolean;
+  apChecks?: ApChecks | null;
+  statusReason?: string | null;
+  canApprove?: boolean;
+  approvalWorkflow?: boolean;
   payload: ReviewPayload;
 }) {
   const router = useRouter();
@@ -125,10 +141,20 @@ export function ReviewClient({
     return found?.name ?? doc.vendor.name ?? "";
   });
   const [locationId, setLocationId] = useState("");
-  const [poId, setPoId] = useState("");
-  const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrderOption[]>([]);
+  const initialPo = apChecks?.po ?? null;
+  const poEnabled = poMatchingEnabled || poProcessingEnabled;
+  const [poId, setPoId] = useState(initialPo?.selectedPoId ?? "");
+  const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrderOption[]>(initialPo?.openPurchaseOrders ?? []);
+  const [poSuggestions, setPoSuggestions] = useState<PoSuggestion[]>(initialPo?.suggestions ?? []);
+  const [vendorRule, setVendorRule] = useState<EffectiveVendorRule | null>(apChecks?.vendorRule ?? null);
+  const [requireReceipt, setRequireReceipt] = useState(initialPo?.requireReceipt ?? false);
+  const [tolerance, setTolerance] = useState<{ price: number; qty: number; totalType: string; total: number } | null>(null);
   const [purchaseOrdersLoading, setPurchaseOrdersLoading] = useState(false);
-  const [purchaseOrdersError, setPurchaseOrdersError] = useState("");
+  const [purchaseOrdersError, setPurchaseOrdersError] = useState(initialPo?.error ?? "");
+  const [comparison, setComparison] = useState<PoComparison | null>(initialPo?.comparison ?? null);
+  const [outcome, setOutcome] = useState<PoOutcome | null>(initialPo?.outcome ?? null);
+  const [compareLoading, setCompareLoading] = useState(false);
+  const [compareError, setCompareError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [submitResult, setSubmitResult] = useState<{ netsuiteId: string | null; recordUrl: string | null } | null>(null);
@@ -162,7 +188,7 @@ export function ReviewClient({
   const [previewOpen, setPreviewOpen] = useState(false);
 
   // Resizable preview panel
-  const [previewWidth, setPreviewWidth] = useState(720);
+  const [previewWidth, setPreviewWidth] = useState(560);
   const isDragging    = useRef(false);
   const dragStartX    = useRef(0);
   const dragStartWidth = useRef(0);
@@ -177,7 +203,7 @@ export function ReviewClient({
   useEffect(() => {
     function onMouseMove(e: MouseEvent) {
       if (!isDragging.current) return;
-      const delta = dragStartX.current - e.clientX;
+      const delta = e.clientX - dragStartX.current;
       const next  = Math.min(1200, Math.max(240, dragStartWidth.current + delta));
       setPreviewWidth(next);
     }
@@ -253,31 +279,47 @@ export function ReviewClient({
     setVendorName(name);
     setPoId("");
     setPurchaseOrders([]);
+    setPoSuggestions([]);
+    setComparison(null);
+    setOutcome(null);
     setPurchaseOrdersError("");
     setVendorSearchOpen(false);
     setVendorCandidatesOpen(false);
   }
 
+  // Open POs of the vendor on screen (and, with po_matching, the suggestions
+  // and the vendor's rule). Runs on load too, so the list is always current.
   useEffect(() => {
-    if (!poProcessingEnabled || !vendorId) return;
+    if (!poEnabled || !vendorId) return;
     let cancelled = false;
-    // Deferred to a microtask so setState is not called synchronously in the effect body.
     void Promise.resolve().then(() => {
       setPurchaseOrdersLoading(true);
       setPurchaseOrdersError("");
     });
-    void fetch(`/api/v1/catalog/open-purchase-orders?subsidiaryId=${encodeURIComponent(subsidiaryId)}&vendorId=${encodeURIComponent(vendorId)}`)
+    const url = poMatchingEnabled
+      ? `/api/v1/workflow/${docId}/po-match?vendorId=${encodeURIComponent(vendorId)}`
+      : `/api/v1/catalog/open-purchase-orders?subsidiaryId=${encodeURIComponent(subsidiaryId)}&vendorId=${encodeURIComponent(vendorId)}`;
+    void fetch(url)
       .then(async res => {
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error ?? "No se pudieron cargar las POs abiertas");
-        if (!cancelled) setPurchaseOrders(data.purchaseOrders ?? []);
+        if (!res.ok) throw new Error(data.error ?? "No se pudieron cargar las OC abiertas");
+        if (cancelled) return;
+        if (poMatchingEnabled) {
+          setPurchaseOrders(data.openPurchaseOrders ?? []);
+          setPoSuggestions(data.suggestions ?? []);
+          setVendorRule(data.vendorRule ?? null);
+          setRequireReceipt(Boolean(data.requireReceipt));
+          setTolerance(data.tolerance ?? null);
+        } else {
+          setPurchaseOrders(data.purchaseOrders ?? []);
+        }
       })
       .catch(err => {
-        if (!cancelled) setPurchaseOrdersError(err instanceof Error ? err.message : "No se pudieron cargar las POs abiertas");
+        if (!cancelled) setPurchaseOrdersError(err instanceof Error ? err.message : "No se pudieron cargar las OC abiertas");
       })
       .finally(() => { if (!cancelled) setPurchaseOrdersLoading(false); });
     return () => { cancelled = true; };
-  }, [poProcessingEnabled, subsidiaryId, vendorId]);
+  }, [poEnabled, poMatchingEnabled, docId, subsidiaryId, vendorId]);
 
   // Prefill when search dialog opens (adjusted during render)
   const [prevSearchIdx, setPrevSearchIdx] = useState(searchIdx);
@@ -419,13 +461,59 @@ export function ReviewClient({
     ]);
   }
 
+  // ── Invoice ↔ PO comparison ───────────────────────────────────────────────
+
+  const validLines = useMemo(() => lines.filter(l => l.confirmed_item_id), [lines]);
+  const lineItems = useMemo(() => validLines.map(l => ({
+    internal_id:        l.confirmed_item_id,
+    item_document_name: l.description,
+    quantity:           l.quantity,
+    rate:               l.rate,
+    amount:             l.amount,
+    unit:               l.confirmed_unit_id,
+  })), [validLines]);
+  const compareKey = poMatchingEnabled && poId ? JSON.stringify([poId, vendorId, lineItems]) : "";
+  const lastCompareKey = useRef(initialPo?.comparison && initialPo.selectedPoId === poId ? JSON.stringify([poId, vendorId, lineItems]) : "");
+
+  useEffect(() => {
+    if (!compareKey || compareKey === lastCompareKey.current) return;
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      setCompareLoading(true);
+      setCompareError("");
+      try {
+        const res = await fetch(`/api/v1/workflow/${docId}/po-match`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ po_internal_id: poId, vendor_internal_id: vendorId, line_items: lineItems }),
+        });
+        const data = await res.json();
+        if (cancelled) return;
+        if (!res.ok) { setCompareError(data.error ?? "No se pudo comparar con la OC"); setComparison(null); setOutcome(null); return; }
+        lastCompareKey.current = compareKey;
+        setComparison(data.comparison ?? null);
+        setOutcome(data.outcome ?? null);
+      } catch {
+        if (!cancelled) setCompareError("No se pudo conectar con el servidor");
+      } finally {
+        if (!cancelled) setCompareLoading(false);
+      }
+    }, 500);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [compareKey, docId, poId, vendorId, lineItems]);
+
+  function choosePo(id: string) {
+    setPoId(id);
+    if (!id) { setComparison(null); setOutcome(null); setCompareError(""); }
+  }
+
   // ── Submit ────────────────────────────────────────────────────────────────
 
-  async function handleApprove() {
+  async function handleApprove(opts: { requestApproval?: boolean } = {}) {
     setSubmitError("");
-    if (!vendorId) { setSubmitError("Selecciona un proveedor de NetSuite antes de aprobar."); return; }
-    const validLines = lines.filter(l => l.confirmed_item_id);
-    if (!validLines.length) { setSubmitError("Asigna al menos un ítem de NetSuite para poder aprobar."); return; }
+    if (!vendorId) { setSubmitError("Selecciona un proveedor del ERP antes de aprobar."); return; }
+    if (!validLines.length) { setSubmitError("Asigna al menos un ítem del ERP para poder aprobar."); return; }
+    const current = comparison && comparison.poInternalId === poId ? comparison : null;
     setSubmitting(true);
     try {
       const res = await fetch(`/api/v1/workflow/${docId}/approve`, {
@@ -440,20 +528,17 @@ export function ReviewClient({
           currency:             doc.currency,
           location_internal_id: locationId || null,
           po_internal_id:       poId || null,
-          line_items: validLines.map(l => ({
-            internal_id:        l.confirmed_item_id,
-            item_document_name: l.description,
-            quantity:           l.quantity,
-            rate:               l.rate,
-            amount:             l.amount,
-            unit:               l.confirmed_unit_id,
+          request_approval:     opts.requestApproval === true,
+          line_items: lineItems.map((l, i) => ({
+            ...l,
+            po_line: current?.lines.find(c => c.index === i)?.poLine ?? null,
           })),
         }),
       });
       const data = await res.json();
-      if (!res.ok) { setSubmitError(data.error ?? "Error al procesar en NetSuite"); return; }
-      // Approval workflow: the correction now waits for someone who can approve.
-      if (data.status === "pending_approval") { router.refresh(); return; }
+      if (!res.ok) { setSubmitError(data.error ?? "Error al procesar en el ERP"); return; }
+      // Parked for an approver or for the goods receipt: the page shows the new state.
+      if (data.status === "pending_approval" || data.status === "awaiting_receipt") { router.refresh(); return; }
       setSubmitResult({ netsuiteId: data.netsuiteId ?? null, recordUrl: data.recordUrl ?? null });
     } catch {
       setSubmitError("No se pudo conectar al servidor");
@@ -466,6 +551,47 @@ export function ReviewClient({
   const missingCount  = lines.length - assignedCount;
   const overallPct    = Math.round(payload.confidence.overall * 100);
   const activeBbox    = activeLine !== null ? lines[activeLine]?.bbox : undefined;
+
+  // ── Action bar: what happens when the reviewer sends the document ─────────
+  type ActionButton = { label: string; run: () => void; disabled?: boolean };
+  const liveOutcome = poMatchingEnabled && poId && comparison?.poInternalId === poId ? outcome : null;
+  const parksForApproval = approvalWorkflow && !canApprove;
+  const sendLabel = parksForApproval ? "Enviar a aprobación" : "Aprobar y enviar al ERP";
+  const ruleName = vendorRule?.ruleId ? vendorRule.ruleLabel.replace(/^(Categoría|Proveedor): /, "") : null;
+  const action: { tone: "none" | "warn" | "err"; message: React.ReactNode; primary: ActionButton; secondary?: ActionButton } = (() => {
+    const send = () => { void handleApprove(); };
+    const toApprover = () => { void handleApprove({ requestApproval: true }); };
+    if (poMatchingEnabled && vendorRule?.poRequirement === "required" && !poId) {
+      return { tone: "err", message: "Este proveedor exige orden de compra: elige una para continuar.", primary: { label: sendLabel, run: send, disabled: true } };
+    }
+    if (poMatchingEnabled && poId && compareLoading) {
+      return { tone: "none", message: "Comparando con la OC…", primary: { label: sendLabel, run: send, disabled: true } };
+    }
+    switch (liveOutcome?.kind) {
+      case "await_receipt":
+        return {
+          tone: "err",
+          message: <>No se puede enviar aún: {liveOutcome.reason}.{ruleName && <> La regla <strong>{ruleName}</strong> exige entrada de almacén.</>} Al esperar, se revisa automáticamente hasta que llegue.</>,
+          primary: { label: "Esperar recepción", run: send },
+          secondary: { label: "Enviar a aprobación", run: toApprover },
+        };
+      case "needs_approval":
+      case "blocked":
+        return canApprove
+          ? { tone: "warn", message: <>Fuera de tolerancia: {liveOutcome.reason}. Como aprobador puedes enviarla de todos modos.</>, primary: { label: "Aprobar y enviar al ERP", run: send } }
+          : { tone: "warn", message: <>Fuera de tolerancia: {liveOutcome.reason}. Un aprobador debe autorizarla.</>, primary: { label: "Enviar a aprobación", run: send } };
+      case "needs_review":
+        return { tone: "warn", message: <>{liveOutcome.reason}. Revisa las líneas antes de enviar.</>, primary: { label: sendLabel, run: send } };
+      default:
+        return {
+          tone: "none",
+          message: liveOutcome?.kind === "ok"
+            ? <span className="text-success font-medium">La factura cuadra con la OC.</span>
+            : parksForApproval ? "Al enviarla, un aprobador la revisará antes de crearla en el ERP." : "Verifica proveedor, OC y líneas antes de enviar.",
+          primary: { label: missingCount > 0 ? `${sendLabel} (${missingCount} sin ítem)` : sendLabel, run: send },
+        };
+    }
+  })();
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -487,7 +613,7 @@ export function ReviewClient({
                 <CheckCircle2 className="w-4 h-4 text-emerald-500" />
               </div>
               <div className="flex-1">
-                <p className="text-sm font-semibold text-foreground">Documento enviado a NetSuite</p>
+                <p className="text-sm font-semibold text-foreground">Documento enviado al ERP</p>
                 <p className="text-xs text-muted-foreground mt-0.5">La transacción fue creada exitosamente</p>
               </div>
             </div>
@@ -496,7 +622,7 @@ export function ReviewClient({
             <div className="px-5 py-4 space-y-3">
               {submitResult.netsuiteId && (
                 <div className="flex items-center justify-between gap-3 py-2 border-b border-border/60">
-                  <span className="text-xs text-muted-foreground">ID NetSuite</span>
+                  <span className="text-xs text-muted-foreground">ID en el ERP</span>
                   <span className="text-xs font-mono font-semibold text-foreground bg-secondary px-2 py-0.5 rounded">
                     {submitResult.netsuiteId}
                   </span>
@@ -522,7 +648,7 @@ export function ReviewClient({
                   className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-border text-xs font-medium text-foreground hover:bg-secondary transition-colors"
                 >
                   <ExternalLink className="w-3.5 h-3.5" />
-                  Ver en NetSuite
+                  Ver en el ERP
                 </a>
               )}
               <button
@@ -723,51 +849,30 @@ export function ReviewClient({
         <div className="h-14 border-b border-border px-6 flex items-center gap-3 shrink-0 bg-card">
           <button
             onClick={() => router.back()}
+            aria-label="Volver"
             className="w-7 h-7 flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
           >
             <ChevronLeft className="w-4 h-4" />
           </button>
-
-          <div className="flex-1 flex items-center gap-2.5">
-            <div
-              className="w-7 h-7 rounded-lg flex items-center justify-center border shrink-0"
-              style={{ backgroundColor: "oklch(0.96 0.04 85)", borderColor: "oklch(0.62 0.16 85 / 0.25)" }}
-            >
-              <FileText className="w-3.5 h-3.5" style={{ color: "oklch(0.58 0.16 85)" }} />
-            </div>
-            <div>
-              <h1 className="text-sm font-semibold text-foreground leading-tight">Revisión de extracción</h1>
-              <p className="text-[11px] text-muted-foreground">
-                Documento #{docId} · Verifica antes de enviar a NetSuite
-              </p>
-            </div>
+          <div className="min-w-0">
+            <h1 className="text-sm font-semibold text-foreground leading-tight truncate">
+              {doc.invoice_number ? `Factura ${doc.invoice_number}` : "Revisión de extracción"}
+            </h1>
+            <p className="text-[11px] text-muted-foreground">Documento #{docId} · Verifica antes de enviar al ERP</p>
           </div>
-
-          {/* Confidence badge */}
-          <div
-            className={cn(
-              "flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border shrink-0",
-              overallPct >= 80
-                ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20"
-                : overallPct >= 60
-                ? "border-amber-400/25"
-                : "bg-red-500/10 text-red-600 border-red-500/20"
-            )}
-            style={overallPct >= 60 && overallPct < 80
-              ? { backgroundColor: "oklch(0.96 0.04 85)", color: "oklch(0.50 0.14 80)", borderColor: "oklch(0.62 0.16 85 / 0.25)" }
-              : undefined}
-          >
+          <Badge tone="warn">En revisión</Badge>
+          {vendorRule && <Badge tone="info" className="hidden md:inline-flex">Regla: {vendorRule.ruleLabel.replace(/^(Categoría|Proveedor): /, "")}</Badge>}
+          <span className="ml-auto hidden sm:flex items-center gap-1.5 text-xs text-muted-foreground">
             <Sparkles className="w-3 h-3" />
-            {overallPct}% confianza
-          </div>
-
-          {/* Document preview toggle — always visible */}
+            Confianza de extracción
+            <strong className={cn("tabular-nums", overallPct >= 80 ? "text-success" : overallPct >= 60 ? "text-warning" : "text-destructive")}>{overallPct}%</strong>
+          </span>
           <button
             onClick={() => storageKey ? setPreviewOpen(p => !p) : undefined}
             disabled={!storageKey}
             title={!storageKey ? "El archivo no fue guardado. Activa la función de almacenamiento de documentos." : undefined}
             className={cn(
-              "flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border transition-all",
+              "flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border transition-all shrink-0",
               previewOpen && storageKey
                 ? "bg-primary text-primary-foreground border-primary/50"
                 : storageKey
@@ -783,250 +888,160 @@ export function ReviewClient({
         {/* Body */}
         <div className="flex-1 flex overflow-hidden">
 
-          {/* ── Left sidebar ─────────────────────────────────────────────── */}
-          <aside
-            className="shrink-0 border-r border-border bg-card overflow-y-auto flex flex-col transition-all"
-            style={{ width: previewOpen ? "220px" : "272px" }}
-          >
-            <div className="flex-1 p-4 space-y-4">
+          {/* ── Document preview panel (left) ─────────────────────────────── */}
+          {previewOpen && storageKey && (
+            <div className="shrink-0 flex flex-col overflow-hidden border-r border-border" style={{ width: previewWidth }}>
+              <DocPreview docId={docId} activeBbox={activeBbox} fileExt={fileExt} />
+            </div>
+          )}
+          {previewOpen && storageKey && (
+            <div
+              onMouseDown={handleDragStart}
+              className="shrink-0 w-1 bg-border hover:bg-primary/40 cursor-col-resize transition-colors active:bg-primary/60"
+              style={{ touchAction: "none" }}
+            />
+          )}
 
-              {/* Vendor */}
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground flex items-center gap-1.5 mb-2">
-                  <Building2 className="w-3 h-3" />
-                  Proveedor
-                </p>
+          {/* ── Review column ─────────────────────────────────────────────── */}
+          <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
+            <div className="flex-1 overflow-y-auto">
+              <div className="p-5 flex flex-col gap-3.5 max-w-[1180px]">
 
-                {/* Selected vendor chip */}
-                <div className="relative mb-1.5">
-                  {vendorId ? (
-                    <div
-                      className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-xs"
-                      style={{ backgroundColor: "oklch(0.97 0.02 182)", borderColor: "oklch(0.48 0.15 182 / 0.25)" }}
-                    >
-                      <CheckCircle2 className="w-3 h-3 text-primary shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <span className="font-semibold text-foreground block truncate leading-tight">{vendorName || vendorId}</span>
-                      </div>
-                      {/* Other candidates button */}
+                {statusReason && (
+                  <div className="flex items-start gap-2 rounded-lg border border-warning/25 bg-warning/5 px-3.5 py-2.5 text-xs text-foreground">
+                    <AlertTriangle className="w-3.5 h-3.5 mt-px shrink-0 text-warning" />
+                    <span><span className="font-semibold">Motivo de la revisión:</span> {statusReason}</span>
+                  </div>
+                )}
+
+                {/* Summary strip */}
+                <Card className="px-4 py-3.5 flex flex-wrap items-start gap-x-7 gap-y-3">
+                  <div className="relative min-w-[200px] flex-1">
+                    <span className="block text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-muted-foreground mb-1">Proveedor</span>
+                    <div className="flex items-center gap-2">
+                      {vendorId ? (
+                        <span className="flex items-center gap-1.5 min-w-0 text-[0.8125rem] font-semibold text-foreground">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-primary shrink-0" />
+                          <span className="truncate">{vendorName || vendorId}</span>
+                        </span>
+                      ) : (
+                        <span className="flex items-center gap-1.5 text-[0.8125rem] text-warning">
+                          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                          {doc.vendor.name ? `Sin coincidencia para “${doc.vendor.name}”` : "Sin proveedor seleccionado"}
+                        </span>
+                      )}
                       {doc.vendor.options.filter(v => v.internal_id !== vendorId).length > 0 && (
                         <button
                           onClick={() => setVendorCandidatesOpen(o => !o)}
-                          className="flex items-center gap-0.5 text-[11px] font-semibold text-primary hover:text-primary/75 transition-colors shrink-0"
+                          className="flex items-center gap-0.5 text-[11px] font-semibold text-primary hover:text-primary/75 shrink-0"
+                          aria-label="Otras sugerencias de proveedor"
                         >
                           {vendorCandidatesOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
                           {doc.vendor.options.filter(v => v.internal_id !== vendorId).length}
                         </button>
                       )}
+                      <button onClick={() => setVendorSearchOpen(true)} className="flex items-center gap-1 text-[11px] font-semibold text-primary hover:underline shrink-0">
+                        <Search className="w-3 h-3" />{vendorId ? "Cambiar" : "Buscar"}
+                      </button>
                     </div>
-                  ) : (
-                    <div
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-dashed text-xs"
-                      style={{ borderColor: "oklch(0.62 0.16 85 / 0.4)", backgroundColor: "oklch(0.97 0.015 85 / 0.6)" }}
-                    >
-                      <AlertTriangle className="w-3 h-3 shrink-0" style={{ color: "oklch(0.58 0.16 85)" }} />
-                      <span className="text-muted-foreground">Sin proveedor seleccionado</span>
-                    </div>
-                  )}
-
-                  {/* Candidates dropdown */}
-                  {vendorCandidatesOpen && doc.vendor.options.filter(v => v.internal_id !== vendorId).length > 0 && (
-                    <div
-                      className="absolute top-full left-0 right-0 mt-1 z-30 bg-card border border-border rounded-xl overflow-hidden"
-                      style={{ boxShadow: "0 8px 32px oklch(0.18 0.015 258 / 0.12), 0 2px 8px oklch(0.18 0.015 258 / 0.06)" }}
-                    >
-                      <div className="px-3 py-1.5 border-b border-border/60 bg-secondary/40">
-                        <p className="text-[10px] font-semibold uppercase tracking-[0.07em] text-muted-foreground">Otras sugerencias</p>
+                    {vendorCandidatesOpen && doc.vendor.options.filter(v => v.internal_id !== vendorId).length > 0 && (
+                      <div
+                        className="absolute top-full left-0 w-72 mt-1 z-30 bg-card border border-border rounded-xl overflow-hidden"
+                        style={{ boxShadow: "0 8px 32px oklch(0.18 0.015 258 / 0.12), 0 2px 8px oklch(0.18 0.015 258 / 0.06)" }}
+                      >
+                        <div className="px-3 py-1.5 border-b border-border/60 bg-secondary/40">
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.07em] text-muted-foreground">Otras sugerencias</p>
+                        </div>
+                        {doc.vendor.options.filter(v => v.internal_id !== vendorId).map(v => (
+                          <button
+                            key={v.internal_id}
+                            onClick={() => selectVendor(v.internal_id, v.name)}
+                            className="w-full flex items-start gap-2 px-3 py-2 hover:bg-secondary/50 transition-colors text-left border-b border-border/40 last:border-0"
+                          >
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-medium text-foreground truncate">{v.name}</p>
+                              {v.entityid && v.entityid !== v.name && <p className="text-[10px] font-mono text-muted-foreground">{v.entityid}</p>}
+                            </div>
+                          </button>
+                        ))}
                       </div>
-                      {doc.vendor.options.filter(v => v.internal_id !== vendorId).map(v => (
-                        <button
-                          key={v.internal_id}
-                          onClick={() => selectVendor(v.internal_id, v.name)}
-                          className="w-full flex items-start gap-2 px-3 py-2 hover:bg-secondary/50 transition-colors text-left border-b border-border/40 last:border-0"
-                        >
-                          <div className="flex-1 min-w-0">
-                            <p className="text-xs font-medium text-foreground truncate">{v.name}</p>
-                            {v.entityid && v.entityid !== v.name && (
-                              <p className="text-[10px] font-mono text-muted-foreground">{v.entityid}</p>
-                            )}
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {/* Vendor search button — always visible */}
-                <button
-                  onClick={() => setVendorSearchOpen(true)}
-                  className="w-full flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-secondary hover:border-border/80 transition-all"
-                >
-                  <Search className="w-3 h-3" />
-                  Buscar proveedor
-                </button>
-              </div>
-
-              <div className="h-px bg-border" />
-
-              {/* Document header */}
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground flex items-center gap-1.5 mb-2.5">
-                  <FileText className="w-3 h-3" />
-                  Encabezado
-                </p>
-                <div className="space-y-1.5">
-                  {[
-                    { label: "Núm. doc.", value: doc.invoice_number },
-                    { label: "Fecha",     value: doc.invoice_date },
-                    { label: "Vence",     value: doc.due_date },
-                    { label: "Moneda",    value: doc.currency },
-                  ].filter(r => r.value).map(({ label, value }) => (
-                    <div key={label} className="flex items-baseline justify-between gap-2">
-                      <span className="text-[11px] text-muted-foreground shrink-0">{label}</span>
-                      <span className="text-[11px] font-medium text-foreground truncate text-right">{value}</span>
-                    </div>
-                  ))}
-
-                  <div className="h-px bg-border/60 my-1" />
-
-                  {doc.totals.subtotal && (
-                    <div className="flex items-baseline justify-between gap-2">
-                      <span className="text-[11px] text-muted-foreground">Subtotal</span>
-                      <span className="text-[11px] text-foreground tabular-nums">${fmt(Number(doc.totals.subtotal))}</span>
-                    </div>
-                  )}
-                  <div className="flex items-baseline justify-between gap-2">
-                    <span className="text-[11px] text-muted-foreground">IVA</span>
-                    <span className="text-[11px] text-foreground tabular-nums">${fmt(Number(doc.totals.tax))}</span>
-                  </div>
-                  <div className="flex items-baseline justify-between gap-2">
-                    <span className="text-[11px] font-semibold text-foreground">Total</span>
-                    <span className="text-sm font-semibold text-foreground tabular-nums">${fmt(Number(doc.totals.total))}</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Location */}
-              {payload.catalogs.locations.length > 0 && (
-                <>
-                  <div className="h-px bg-border" />
-                  <div>
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground flex items-center gap-1.5 mb-2">
-                      <MapPin className="w-3 h-3" />
-                      Ubicación
-                      <span className="normal-case font-normal text-muted-foreground/50">(opcional)</span>
-                    </p>
-                    <SelectMenu
-                      value={locationId}
-                      onChange={setLocationId}
-                      ariaLabel="Ubicación"
-                      placeholder="— Sin ubicación —"
-                      options={[
-                        { value: "", label: "— Sin ubicación —" },
-                        ...payload.catalogs.locations.map(loc => ({
-                          value: loc.internal_id,
-                          label: loc.name,
-                        })),
-                      ]}
-                    />
-                  </div>
-                </>
-              )}
-
-              {poProcessingEnabled && (
-                <>
-                  <div className="h-px bg-border" />
-                  <div>
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground flex items-center gap-1.5 mb-2">
-                      <Package className="w-3 h-3" />
-                      Orden de compra
-                    </p>
-                    {!vendorId ? (
-                      <p className="text-xs text-muted-foreground">Selecciona un proveedor para consultar sus POs abiertas.</p>
-                    ) : purchaseOrdersLoading ? (
-                      <p className="flex items-center gap-1.5 text-xs text-muted-foreground"><Loader2 className="w-3 h-3 animate-spin" /> Consultando POs abiertas...</p>
-                    ) : purchaseOrdersError ? (
-                      <p className="text-xs text-destructive">{purchaseOrdersError}</p>
-                    ) : (
-                      <>
-                        <SelectMenu
-                          value={poId}
-                          onChange={setPoId}
-                          ariaLabel="Orden de compra abierta"
-                          placeholder="— Sin PO, factura independiente —"
-                          options={[
-                            { value: "", label: "— Sin PO, factura independiente —" },
-                            ...purchaseOrders.map(po => ({
-                              value: po.internal_id,
-                              label: `${po.tranid || `PO #${po.internal_id}`} · ${po.total || "Sin total"} ${po.currency}`,
-                              hint: [po.date, po.status].filter(Boolean).join(" · ") || undefined,
-                            })),
-                          ]}
-                        />
-                        {purchaseOrders.length === 0 && (
-                          <p className="mt-1.5 text-[11px] text-muted-foreground">Este proveedor no tiene POs abiertas en esta subsidiaria.</p>
-                        )}
-                      </>
                     )}
                   </div>
-                </>
-              )}
-            </div>
-          </aside>
+                  {[
+                    { label: "Fecha", value: doc.invoice_date },
+                    { label: "Vence", value: doc.due_date },
+                    { label: "Total", value: `$${fmt(Number(doc.totals.total))} ${doc.currency}` },
+                    { label: "OC en la factura", value: doc.purchase_order },
+                  ].filter(r => r.value).map(({ label, value }) => (
+                    <div key={label}>
+                      <span className="block text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-muted-foreground mb-1">{label}</span>
+                      <span className="text-[0.8125rem] font-semibold text-foreground tabular-nums">{value}</span>
+                    </div>
+                  ))}
+                  {payload.catalogs.locations.length > 0 && (
+                    <div className="w-52">
+                      <span className="block text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-muted-foreground mb-1">Ubicación</span>
+                      <SelectMenu
+                        value={locationId}
+                        onChange={setLocationId}
+                        ariaLabel="Ubicación"
+                        placeholder="— Sin ubicación —"
+                        options={[
+                          { value: "", label: "— Sin ubicación —" },
+                          ...payload.catalogs.locations.map(loc => ({ value: loc.internal_id, label: loc.name })),
+                        ]}
+                      />
+                    </div>
+                  )}
+                </Card>
 
-          {/* ── Lines panel ──────────────────────────────────────────────── */}
-          <div
-            className="flex-1 flex flex-col overflow-hidden"
-          >
-            {/* Action bar */}
-            <div className="border-b border-border px-5 py-2.5 flex items-center justify-between shrink-0 bg-background/90 backdrop-blur-sm">
-              <div className="flex items-center gap-3 text-xs">
-                <span className="text-muted-foreground">
-                  <span className="font-medium text-foreground">{lines.length}</span> línea{lines.length !== 1 ? "s" : ""}
-                </span>
-                <span className="flex items-center gap-1 font-medium text-emerald-600">
-                  <CheckCircle2 className="w-3 h-3" />
-                  {assignedCount} asignada{assignedCount !== 1 ? "s" : ""}
-                </span>
-                {missingCount > 0 && (
-                  <span className="flex items-center gap-1 font-medium" style={{ color: "oklch(0.50 0.14 80)" }}>
-                    <AlertTriangle className="w-3 h-3" />
-                    {missingCount} sin ítem
-                  </span>
+                {apChecks?.fiscal && <FiscalPanel fiscal={apChecks.fiscal} />}
+
+                {poEnabled && (
+                  vendorId ? (
+                    <PoPicker
+                      requirement={poMatchingEnabled ? vendorRule?.poRequirement ?? null : null}
+                      vendorName={vendorName}
+                      openPOs={purchaseOrders}
+                      suggestions={poMatchingEnabled ? poSuggestions : []}
+                      selectedId={poId}
+                      onSelect={choosePo}
+                      loading={purchaseOrdersLoading}
+                      error={purchaseOrdersError || null}
+                      invoiceTotal={Number(doc.totals.total) || 0}
+                      toleranceLabel={tolerance ? (tolerance.totalType === "percent" ? `${tolerance.total}%` : tolerance.totalType === "amount" ? `$${fmt(tolerance.total)}` : "0") : null}
+                      disabled={submitting}
+                    />
+                  ) : (
+                    <Card className="p-4 text-xs text-muted-foreground">Selecciona el proveedor para consultar sus órdenes de compra abiertas.</Card>
+                  )
                 )}
-              </div>
 
-              <div className="flex items-center gap-2.5">
-                <button
-                  onClick={() => router.back()}
-                  className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  Cancelar
-                </button>
-                <button
-                  onClick={handleApprove}
-                  disabled={submitting || !vendorId}
-                  className="flex items-center gap-1.5 text-xs font-semibold px-3.5 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-                >
-                  {submitting
-                    ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    : <CheckCircle2 className="w-3.5 h-3.5" />
-                  }
-                  {submitting ? "Enviando…" : missingCount > 0 ? `Aprobar (${missingCount} sin ítem)` : "Aprobar y enviar"}
-                </button>
-              </div>
-            </div>
+                {poMatchingEnabled && poId && compareError && (
+                  <p className="rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{compareError}</p>
+                )}
+                {poMatchingEnabled && poId && comparison && comparison.poInternalId === poId && (
+                  <PoComparisonCard
+                    comparison={comparison}
+                    itemCodes={Object.fromEntries(validLines.map((l, i) => [i, getDisplayCode(l) ?? getDisplayName(l)]))}
+                    tolerance={tolerance}
+                    requireReceipt={requireReceipt}
+                    loading={compareLoading}
+                  />
+                )}
+                {poMatchingEnabled && poId && !comparison && compareLoading && (
+                  <Card className="p-4 flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="w-3.5 h-3.5 animate-spin" />Comparando la factura con la OC…</Card>
+                )}
 
-            {/* Column header */}
-            <div className="sticky top-0 z-10 px-5 py-1.5 border-b border-border/60 bg-background/80 backdrop-blur-sm shrink-0">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground flex items-center gap-1.5">
-                <Package className="w-3 h-3" />
-                Líneas del documento
-              </span>
-            </div>
-
-            {/* Lines list */}
-            <div className="flex-1 overflow-y-auto divide-y divide-border/60">
+                {/* Lines */}
+                <Card className="overflow-hidden">
+                  <div className="px-4 py-3 border-b border-border flex flex-wrap items-center gap-3 text-xs">
+                    <h2 className="text-sm font-semibold text-foreground mr-1">Líneas del documento</h2>
+                    <span className="text-muted-foreground"><span className="font-medium text-foreground">{lines.length}</span> línea{lines.length !== 1 ? "s" : ""}</span>
+                    <span className="flex items-center gap-1 font-medium text-success"><CheckCircle2 className="w-3 h-3" />{assignedCount} con ítem del ERP</span>
+                    {missingCount > 0 && <span className="flex items-center gap-1 font-medium text-warning"><AlertTriangle className="w-3 h-3" />{missingCount} sin ítem</span>}
+                  </div>
+                  <div className="divide-y divide-border/60">
               {lines.map((line, idx) => {
                 const candidateItem   = getCandidateItem(line);
                 const displayName     = getDisplayName(line);
@@ -1232,64 +1247,49 @@ export function ReviewClient({
                   Agregar línea
                 </button>
               </div>
+                  </div>
+                  {missingCount > 0 && (
+                    <div className="mx-4 mb-4 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/5 px-3.5 py-2.5 text-xs font-medium text-warning">
+                      <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                      {missingCount} línea{missingCount !== 1 ? "s" : ""} sin ítem asignado: se omitirán al enviar al ERP. Asigna los ítems o elimina esas líneas antes de aprobar.
+                    </div>
+                  )}
+                </Card>
+                <div className="h-2" />
+              </div>
+            </div>
 
-              {/* Submit error */}
-              {submitError && (
-                <div
-                  className="mx-5 mt-3 flex items-start gap-2 px-3.5 py-2.5 rounded-xl border text-xs"
-                  style={{
-                    backgroundColor: "oklch(0.96 0.04 25)",
-                    borderColor:     "oklch(0.50 0.20 25 / 0.2)",
-                    color:           "oklch(0.50 0.20 25)",
-                  }}
-                >
-                  <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                  {submitError}
-                </div>
+            {/* ── Action bar ──────────────────────────────────────────────── */}
+            <div className={cn(
+              "shrink-0 border-t px-5 py-3 flex flex-wrap items-center gap-3",
+              action.tone === "err" ? "bg-destructive/5 border-destructive/20" : action.tone === "warn" ? "bg-warning/5 border-warning/25" : "bg-card border-border",
+            )}>
+              {action.tone !== "none" && (
+                <AlertCircle className={cn("w-4 h-4 shrink-0", action.tone === "err" ? "text-destructive" : "text-warning")} aria-hidden="true" />
               )}
-
-              {missingCount > 0 && !submitError && (
-                <div
-                  className="mx-5 mt-3 mb-3 flex items-start gap-2.5 px-3.5 py-2.5 rounded-xl border"
-                  style={{
-                    backgroundColor: "oklch(0.97 0.06 85 / 0.6)",
-                    borderColor:     "oklch(0.62 0.16 85 / 0.35)",
-                    color:           "oklch(0.45 0.14 85)",
-                  }}
+              <p className="flex-1 min-w-[240px] text-[0.8125rem] text-foreground">
+                {submitError ? <span className="text-destructive">{submitError}</span> : action.message}
+              </p>
+              <button onClick={() => router.back()} disabled={submitting} className="text-xs text-muted-foreground hover:text-foreground px-2">Cancelar</button>
+              {action.secondary && (
+                <button
+                  onClick={action.secondary.run}
+                  disabled={submitting || !vendorId}
+                  className="h-10 px-4 rounded-lg border border-border bg-card text-[0.8125rem] font-semibold text-foreground hover:bg-secondary disabled:opacity-50"
                 >
-                  <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                  <span className="text-xs font-medium">
-                    {missingCount} línea{missingCount !== 1 ? "s" : ""} sin ítem asignado — se omitirán al enviar a NetSuite. Asigna los ítems o elimina esas líneas antes de aprobar.
-                  </span>
-                </div>
+                  {action.secondary.label}
+                </button>
               )}
-
-              <div className="h-6" />
+              <button
+                onClick={action.primary.run}
+                disabled={submitting || !vendorId || action.primary.disabled}
+                className="h-10 px-4 inline-flex items-center gap-2 rounded-lg bg-primary text-primary-foreground text-[0.8125rem] font-semibold hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {submitting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                {submitting ? "Enviando…" : action.primary.label}
+              </button>
             </div>
           </div>
-
-          {/* ── Drag handle ──────────────────────────────────────────────── */}
-          {previewOpen && storageKey && (
-            <div
-              onMouseDown={handleDragStart}
-              className="shrink-0 w-1 bg-border hover:bg-primary/40 cursor-col-resize transition-colors active:bg-primary/60"
-              style={{ touchAction: "none" }}
-            />
-          )}
-
-          {/* ── Document preview panel ────────────────────────────────────── */}
-          {previewOpen && storageKey && (
-            <div
-              className="shrink-0 flex flex-col overflow-hidden"
-              style={{ width: previewWidth }}
-            >
-              <DocPreview
-                docId={docId}
-                activeBbox={activeBbox}
-                fileExt={fileExt}
-              />
-            </div>
-          )}
         </div>
       </div>
     </>

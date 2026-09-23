@@ -7,6 +7,8 @@ import { cn } from "@/lib/utils";
 import {
   ChevronLeft, CheckCircle2, XCircle, Loader2, ShieldCheck, ExternalLink,
 } from "lucide-react";
+import type { ApChecks } from "@/lib/workflow/ap-checks";
+import { FiscalPanel, PoComparisonCard } from "./ap-panels";
 
 interface Line {
   description: string;
@@ -25,13 +27,15 @@ interface Props {
   docType:  string;
   lines:    Line[];
   isAdmin:  boolean;
+  reason?:  string | null;
+  apChecks?: ApChecks | null;
 }
 
 const DOC_LABELS: Record<string, string> = {
   invoice: "Factura", purchase_order: "Orden de compra", xml_cfdi: "CFDI XML",
 };
 
-export function PendingApprovalClient({ docId, vendor, numDoc, total, docType, lines, isAdmin }: Props) {
+export function PendingApprovalClient({ docId, vendor, numDoc, total, docType, lines, isAdmin, reason = null, apChecks = null }: Props) {
   const router  = useRouter();
   const [loading,  setLoading]  = useState(false);
   const [error,    setError]    = useState("");
@@ -48,6 +52,8 @@ export function PendingApprovalClient({ docId, vendor, numDoc, total, docType, l
       });
       const data = await res.json();
       if (!res.ok) { setError(data.error ?? "Error al aprobar"); return; }
+      // Still waiting for goods: the page switches to the receipt view.
+      if (data.status === "awaiting_receipt" || data.status === "pending_approval") { router.refresh(); return; }
       setResult({ netsuiteId: data.netsuiteId ?? null, recordUrl: data.recordUrl ?? null });
     } catch {
       setError("No se pudo conectar con el servidor");
@@ -73,14 +79,14 @@ export function PendingApprovalClient({ docId, vendor, numDoc, total, docType, l
               <CheckCircle2 className="w-4 h-4 text-emerald-500" />
             </div>
             <div className="flex-1">
-              <p className="text-sm font-semibold text-foreground">Documento aprobado y enviado a NetSuite</p>
+              <p className="text-sm font-semibold text-foreground">Documento aprobado y enviado al ERP</p>
               <p className="text-xs text-muted-foreground mt-0.5">La transacción fue creada exitosamente</p>
             </div>
           </div>
           <div className="px-5 py-4 space-y-3">
             {result.netsuiteId && (
               <div className="flex items-center justify-between gap-3 py-2 border-b border-border/60">
-                <span className="text-xs text-muted-foreground">ID NetSuite</span>
+                <span className="text-xs text-muted-foreground">ID en el ERP</span>
                 <span className="text-xs font-mono font-semibold text-foreground bg-secondary px-2 py-0.5 rounded">
                   {result.netsuiteId}
                 </span>
@@ -104,7 +110,7 @@ export function PendingApprovalClient({ docId, vendor, numDoc, total, docType, l
                 className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-border text-xs font-medium text-foreground hover:bg-secondary transition-colors"
               >
                 <ExternalLink className="w-3.5 h-3.5" />
-                Ver en NetSuite
+                Ver en el ERP
               </a>
             )}
             <button
@@ -135,7 +141,13 @@ export function PendingApprovalClient({ docId, vendor, numDoc, total, docType, l
         </span>
       </div>
 
-      <div className="flex-1 p-6 max-w-2xl mx-auto w-full space-y-5">
+      <div className="flex-1 p-6 max-w-5xl mx-auto w-full space-y-5">
+
+        {reason && (
+          <div className="rounded-xl border border-warning/25 bg-warning/5 px-4 py-3 text-xs text-foreground">
+            <span className="font-semibold">Motivo de la aprobación:</span> {reason}
+          </div>
+        )}
 
         {/* Summary */}
         <div className="bg-card border border-border rounded-xl p-5 space-y-3">
@@ -160,8 +172,11 @@ export function PendingApprovalClient({ docId, vendor, numDoc, total, docType, l
           </div>
         </div>
 
+        {apChecks?.fiscal && <FiscalPanel fiscal={apChecks.fiscal} />}
+        {apChecks?.po?.comparison && <PoComparisonCard comparison={apChecks.po.comparison} requireReceipt={apChecks.po.requireReceipt} />}
+
         {/* Lines */}
-        {lines.length > 0 && (
+        {lines.length > 0 && !apChecks?.po?.comparison && (
           <div className="bg-card border border-border rounded-xl overflow-hidden">
             <div className="px-4 py-3 border-b border-border">
               <h2 className="text-sm font-medium text-foreground">Líneas ({lines.length})</h2>
@@ -169,7 +184,7 @@ export function PendingApprovalClient({ docId, vendor, numDoc, total, docType, l
             <table className="w-full text-xs">
               <thead>
                 <tr className="border-b border-border bg-secondary/30">
-                  {["Descripción", "Cant.", "P. Unit.", "Total", "Item NS"].map(h => (
+                  {["Descripción", "Cant.", "P. Unit.", "Total", "Ítem ERP"].map(h => (
                     <th key={h} className="px-3 py-2.5 text-left font-medium text-muted-foreground whitespace-nowrap">
                       {h}
                     </th>
@@ -212,7 +227,7 @@ export function PendingApprovalClient({ docId, vendor, numDoc, total, docType, l
           <div className="bg-card border border-border rounded-xl p-5 space-y-3">
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <ShieldCheck className="w-3.5 h-3.5" />
-              El documento fue procesado correctamente y está listo para enviarse a NetSuite.
+              {reason ? "Revisa el motivo: como aprobador puedes enviarla al ERP aunque esté fuera de tolerancia." : "El documento fue procesado correctamente y está listo para enviarse al ERP."}
             </div>
             {error && (
               <div className="flex items-center gap-2 text-xs text-red-400 bg-red-400/10 border border-red-400/20 rounded-lg px-3 py-2">
@@ -229,8 +244,8 @@ export function PendingApprovalClient({ docId, vendor, numDoc, total, docType, l
               )}
             >
               {loading
-                ? <><Loader2 className="w-4 h-4 animate-spin" /> Enviando a NetSuite...</>
-                : <><CheckCircle2 className="w-4 h-4" /> Aprobar y enviar a NetSuite</>
+                ? <><Loader2 className="w-4 h-4 animate-spin" /> Enviando al ERP...</>
+                : <><CheckCircle2 className="w-4 h-4" /> Aprobar y enviar al ERP</>
               }
             </button>
           </div>
@@ -238,7 +253,7 @@ export function PendingApprovalClient({ docId, vendor, numDoc, total, docType, l
           <div className="bg-amber-400/5 border border-amber-400/20 rounded-xl p-4 text-center">
             <p className="text-sm text-amber-400 font-medium">Pendiente de aprobación</p>
             <p className="text-xs text-muted-foreground mt-1">
-              Una persona con permiso de aprobación debe aprobar este documento antes de enviarlo a NetSuite.
+              Una persona con permiso de aprobación debe aprobar este documento antes de enviarlo al ERP.
             </p>
           </div>
         )}

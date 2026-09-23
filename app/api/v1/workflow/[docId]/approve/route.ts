@@ -58,8 +58,11 @@ async function handlePOST(req: NextRequest, { params }: Params) {
   const flags = await loadFeatureFlags(session.orgId);
 
   let draft: NsDraft;
+  let requestApproval = false;
   if (from === "review") {
-    const parsed = draftFromReviewBody(await req.json().catch(() => null));
+    const body = await req.json().catch(() => null);
+    requestApproval = Boolean(body && typeof body === "object" && (body as { request_approval?: unknown }).request_approval === true);
+    const parsed = draftFromReviewBody(body);
     if (typeof parsed === "string") return NextResponse.json({ error: parsed }, { status: 400 });
     draft = parsed;
   } else {
@@ -106,6 +109,9 @@ async function handlePOST(req: NextRequest, { params }: Params) {
       ? NextResponse.json({ ok: true, status, reason })
       : NextResponse.json({ error: CONFLICT }, { status: 409 });
   };
+
+  // The reviewer explicitly hands the document to an approver.
+  if (requestApproval) return park("pending_approval", "Enviada a aprobación por el revisor");
 
   // Check the (possibly edited) draft against its PO before posting it.
   const previous = storedChecks(doc.products);

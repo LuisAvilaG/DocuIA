@@ -154,6 +154,23 @@ define(["N/record", "N/search", "N/format", "N/log", "N/file", "N/encode"], (rec
     return rows && rows.length ? s(rows[0].getValue("internalid")) : null;
   }
 
+  // Localizations hang custom segments on the location (e.g. DRT region, zone
+  // and consumption center) and their tax engines read them from the
+  // transaction, as the UI does when you pick a location. Copies every custom
+  // segment the location has onto the header; unknown ones are skipped.
+  function copyLocationSegments(rec, locId, warnings) {
+    try {
+      const loc = record.load({ type: record.Type.LOCATION, id: locId });
+      loc.getFields().filter((f) => /^cseg/i.test(f)).forEach((f) => {
+        const v = loc.getValue({ fieldId: f });
+        if (v === null || v === undefined || v === "") return;
+        if (!trySet(rec, f, v)) warnings.push({ code: "SEGMENT_NOT_SET", field: f });
+      });
+    } catch (e) {
+      warnings.push({ code: "LOCATION_SEGMENTS_UNAVAILABLE", message: s(e && e.message) });
+    }
+  }
+
   // Fails with a clear message instead of NetSuite's tax-engine "entity: null".
   function ensureVendor(rec, vendorId, subId) {
     if (!vendorId || s(rec.getValue({ fieldId: "entity" })) === vendorId) return;
@@ -188,7 +205,10 @@ define(["N/record", "N/search", "N/format", "N/log", "N/file", "N/encode"], (rec
     rec.setValue({ fieldId: "trandate", value: docDate });
 
     const locId = s(body.location_internal_id);
-    if (locId) trySet(rec, "location", locId);
+    if (locId) {
+      trySet(rec, "location", locId);
+      copyLocationSegments(rec, locId, warnings);
+    }
 
     const currency = s(body.currency_internal_id);
     if (currency) {

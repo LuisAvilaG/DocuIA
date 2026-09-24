@@ -76,6 +76,9 @@ async function post(body: Record<string, unknown>) {
 }
 
 async function main() {
+  // No secrets here: only which account/script/deploy is being called.
+  console.log(`Cuenta ${creds.accountId} · script ${process.env.NS_PROCESS_SCRIPT} · deploy ${process.env.NS_PROCESS_DEPLOY}
+`);
   const results: unknown[] = [];
   for (let i = 0; i < variants.length; i++) {
     const v = variants[i];

@@ -171,6 +171,25 @@ define(["N/record", "N/search", "N/format", "N/log", "N/file", "N/encode"], (rec
     }
   }
 
+  // Opens the record already on its form and vendor, like the UI does. Setting
+  // the custom form afterwards re-initializes the record, and SuiteTax can keep
+  // a tax context without the vendor ("entity: null" on save).
+  function createWithDefaults(type, body, warnings) {
+    const defaults = {};
+    const customForm = n(body.customform);
+    if (customForm !== null) defaults.customform = customForm;
+    const vendorId = s(body.vendor_internal_id);
+    if (vendorId) defaults.entity = vendorId;
+    if (Object.keys(defaults).length) {
+      try {
+        return record.create({ type, isDynamic: true, defaultValues: defaults });
+      } catch (e) {
+        warnings.push({ code: "DEFAULT_VALUES_NOT_ACCEPTED", message: s(e && e.message) });
+      }
+    }
+    return record.create({ type, isDynamic: true });
+  }
+
   // Fails with a clear message instead of NetSuite's tax-engine "entity: null".
   function ensureVendor(rec, vendorId, subId) {
     if (!vendorId || s(rec.getValue({ fieldId: "entity" })) === vendorId) return;
@@ -183,8 +202,10 @@ define(["N/record", "N/search", "N/format", "N/log", "N/file", "N/encode"], (rec
   }
 
   function applyHeader(rec, body, docNumber, docDate, warnings) {
+    // Only when the record is not already on that form: switching forms
+    // re-initializes the record (see createWithDefaults).
     const customForm = n(body.customform);
-    if (customForm !== null) trySet(rec, "customform", customForm);
+    if (customForm !== null && s(rec.getValue({ fieldId: "customform" })) !== String(customForm)) trySet(rec, "customform", customForm);
 
     // Same order as the UI (and the account-specific scripts that work in
     // localized accounts): vendor, subsidiary, vendor again if the subsidiary
@@ -376,7 +397,7 @@ define(["N/record", "N/search", "N/format", "N/log", "N/file", "N/encode"], (rec
     const mode = poId ? "transform" : "standalone";
     const rec  = poId
       ? record.transform({ fromType: record.Type.PURCHASE_ORDER, fromId: poId, toType: record.Type.VENDOR_BILL, isDynamic: true })
-      : record.create({ type: record.Type.VENDOR_BILL, isDynamic: true });
+      : createWithDefaults(record.Type.VENDOR_BILL, body, warnings);
 
     applyHeader(rec, body, invNumber, invDate, warnings);
     const billDueDate = parseDate(body.due_date);

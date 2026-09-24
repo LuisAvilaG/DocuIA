@@ -54,3 +54,5 @@ skills-lock.json
 /tmp/
 /screenshots/
 demo-scan.json
+.env.netsuite
+probe-result.json

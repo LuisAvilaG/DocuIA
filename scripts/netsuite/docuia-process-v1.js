@@ -186,29 +186,24 @@ define(["N/record", "N/search", "N/format", "N/log", "N/file", "N/encode"], (rec
     const customForm = n(body.customform);
     if (customForm !== null) trySet(rec, "customform", customForm);
 
-    // A bill transformed from a PO already carries the PO's vendor and
-    // subsidiary; re-setting them makes NetSuite re-source (and can clear) them.
-    const fromPo = Boolean(s(body.po_internal_id));
+    // Same order as the UI (and the account-specific scripts that work in
+    // localized accounts): vendor, subsidiary, vendor again if the subsidiary
+    // cleared it, the location's segments and location, then number and date.
     const vendorId = s(body.vendor_internal_id);
     const subId = s(body.subsidiary_internal_id);
-    if (!fromPo) {
-      // Vendor first so the form sources its defaults, then the subsidiary. If
-      // the vendor is not assigned to that subsidiary NetSuite silently clears
-      // the vendor, which later fails in the tax engine as "entity: null".
-      if (vendorId) rec.setValue({ fieldId: "entity", value: vendorId });
-      if (subId) trySet(rec, "subsidiary", subId);
-      if (vendorId && s(rec.getValue({ fieldId: "entity" })) !== vendorId) trySet(rec, "entity", vendorId);
-    }
+    if (vendorId) rec.setValue({ fieldId: "entity", value: vendorId });
+    if (subId) trySet(rec, "subsidiary", subId);
+    if (vendorId && s(rec.getValue({ fieldId: "entity" })) !== vendorId) trySet(rec, "entity", vendorId);
     ensureVendor(rec, vendorId, subId);
-
-    rec.setValue({ fieldId: "tranid",   value: docNumber });
-    rec.setValue({ fieldId: "trandate", value: docDate });
 
     const locId = s(body.location_internal_id);
     if (locId) {
-      trySet(rec, "location", locId);
       copyLocationSegments(rec, locId, warnings);
+      trySet(rec, "location", locId);
     }
+
+    rec.setValue({ fieldId: "tranid",   value: docNumber });
+    rec.setValue({ fieldId: "trandate", value: docDate });
 
     const currency = s(body.currency_internal_id);
     if (currency) {
@@ -236,10 +231,12 @@ define(["N/record", "N/search", "N/format", "N/log", "N/file", "N/encode"], (rec
         continue;
       }
       rec.selectNewLine({ sublistId: "item" });
-      rec.setCurrentSublistValue({ sublistId: "item", fieldId: "item", value: itemId });
-
+      // Location before the item: the item triggers line sourcing and tax
+      // calculation, which in SuiteTax / localized accounts need the location.
       const loc = s(ln.location);
-      if (loc) tryCurrent(rec, "item", "location", loc);
+      if (loc) rec.setCurrentSublistValue({ sublistId: "item", fieldId: "location", value: loc });
+      rec.setCurrentSublistValue({ sublistId: "item", fieldId: "item", value: itemId });
+      if (loc && s(rec.getCurrentSublistValue({ sublistId: "item", fieldId: "location" })) !== loc) tryCurrent(rec, "item", "location", loc);
       setUnit(rec, s(ln.unit), warnings, itemId);
 
       const qty = n(ln.quantity);

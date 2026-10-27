@@ -5,10 +5,11 @@ import { join } from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
 import { PDFDocument } from "pdf-lib";
 import { db } from "../lib/db";
-import { contractArchiveDocuments, contractArchivePages, contractArchiveReferences, contractCases } from "../db/schema";
+import { contractArchiveDocuments, contractArchivePages, contractArchiveReferences, contractCases, contractDocuments } from "../db/schema";
 import { eq } from "drizzle-orm";
 import { CONTRACT_CHUNK_BYTES, createUploadSession, putUploadPart, finishUpload, createCaseFromUploads } from "../lib/contracts/uploads";
-import { registerUploadedArchiveDocument, indexArchiveDocument } from "../lib/contracts/archive";
+import { registerArchiveDocument, registerUploadedArchiveDocument, indexArchiveDocument, removeArchiveDocument } from "../lib/contracts/archive";
+import { getFileSize } from "../lib/storage/minio";
 
 if (!process.env.DATABASE_URL?.includes("docuia_qa_reference") || process.env.MINIO_BUCKET !== "docuia-qa-reference") {
   throw new Error("Esta prueba solo puede ejecutarse en la base y bucket de QA aislados.");
@@ -49,10 +50,34 @@ async function main() {
   assert.equal(refs.length, 3);
   assert.equal(refs.filter((ref) => !!ref.targetDocumentId).length, 2);
   assert.equal(refs.filter((ref) => ref.status === "missing").length, 1);
+  assert.equal(await removeArchiveDocument(ids[0], randomUUID()), "not_found");
+  await db.update(contractArchiveDocuments).set({ status: "processing" }).where(eq(contractArchiveDocuments.id, ids[1]));
+  assert.equal(await removeArchiveDocument(ids[1], orgId), "processing");
+  await db.update(contractArchiveDocuments).set({ status: "ready" }).where(eq(contractArchiveDocuments.id, ids[1]));
+  assert.equal(await removeArchiveDocument(ids[0], orgId), "removed");
+  assert.equal(await removeArchiveDocument(ids[0], orgId), "not_found");
+  await indexArchiveDocument(ids[0]); // A queued retry cannot restore a removed document.
+  assert.equal((await db.query.contractArchiveDocuments.findFirst({ where: eq(contractArchiveDocuments.id, ids[0]) }))?.status, "removed");
+  const afterRemoval = await db.query.contractArchiveReferences.findMany({ where: eq(contractArchiveReferences.sourceDocumentId, latest.id) });
+  assert.equal(afterRemoval.filter((ref) => !!ref.targetDocumentId).length, 1);
+  assert.equal(afterRemoval.find((ref) => ref.rawCode === "CARTA-001-2026")?.status, "missing");
+  const replacementUpload = await uploadFixture(names[0]);
+  const replacementId = await registerUploadedArchiveDocument({ organizationId: orgId, createdBy: userId, uploadId: replacementUpload });
+  await indexArchiveDocument(replacementId);
+  const afterReplacement = await db.query.contractArchiveReferences.findMany({ where: eq(contractArchiveReferences.sourceDocumentId, latest.id) });
+  assert.equal(afterReplacement.find((ref) => ref.rawCode === "CARTA-001-2026")?.targetDocumentId, replacementId);
+
   const caseUploadId = await uploadFixture(names[2]);
   const caseId = await createCaseFromUploads({ organizationId: orgId, createdBy: userId, title: "QA trazabilidad", uploadIds: [caseUploadId] });
   const kase = await db.query.contractCases.findFirst({ where: eq(contractCases.id, caseId) });
   assert.equal(kase?.status, "uploaded");
+  const caseDocument = await db.query.contractDocuments.findFirst({ where: eq(contractDocuments.caseId, caseId) });
+  assert.ok(caseDocument);
+  const caseArchiveId = await registerArchiveDocument({ organizationId: orgId, storageKey: caseDocument.storageKey, originalName: caseDocument.originalName ?? names[2], mimeType: caseDocument.mimeType ?? "text/plain", caseDocumentId: caseDocument.id });
+  await indexArchiveDocument(caseArchiveId);
+  assert.equal(await removeArchiveDocument(caseArchiveId, orgId), "removed");
+  assert.equal((await db.query.contractCases.findFirst({ where: eq(contractCases.id, caseId) }))?.status, "uploaded");
+  assert.ok(await getFileSize(caseDocument.storageKey) > 0);
   if (process.env.PDF_QA === "1") {
     const fixtureMb = Number(process.env.PDF_QA_MB || 21);
     if (!Number.isInteger(fixtureMb) || fixtureMb < 21 || fixtureMb > 149) throw new Error("PDF_QA_MB debe estar entre 21 y 149");
@@ -78,7 +103,7 @@ async function main() {
     assert.ok(pdfPages.some((page) => page.pageNumber === 3 && page.text.includes("INFORME-003-2026")));
     console.log(`QA PDF grande OK: ${(bytes.length / 1048576).toFixed(1)} MB, ${Math.ceil(bytes.length / CONTRACT_CHUNK_BYTES)} partes, 3 páginas indexadas (incluida referencia final).`);
   }
-  console.log(`QA integración OK: ${ids.length} documentos, ${refs.length} referencias, 1 caso cargado por partes.`);
+  console.log(`QA integración OK: ${ids.length} documentos, ${refs.length} referencias, retiro y recarga sin perder el caso.`);
 }
 
 main().catch((error) => { console.error(error); process.exitCode = 1; });

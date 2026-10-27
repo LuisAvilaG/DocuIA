@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, eq, ne } from "drizzle-orm";
+import { and, eq, ne, or } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { contractArchiveDocuments, contractArchivePages, contractArchiveReferences, contractLargeUploads } from "@/db/schema";
 import { getFileSize } from "@/lib/storage/minio";
@@ -57,6 +57,8 @@ async function assessRelevance(sourceContext: string, targetText: string): Promi
 export async function reconcileReference(referenceId: string): Promise<void> {
   const reference = await db.query.contractArchiveReferences.findFirst({ where: eq(contractArchiveReferences.id, referenceId) });
   if (!reference || reference.reviewedAt) return;
+  const source = await db.query.contractArchiveDocuments.findFirst({ where: and(eq(contractArchiveDocuments.id, reference.sourceDocumentId), eq(contractArchiveDocuments.organizationId, reference.organizationId)) });
+  if (!source || source.status === "removed") return;
   const candidates = await db.query.contractArchiveDocuments.findMany({ where: and(eq(contractArchiveDocuments.organizationId, reference.organizationId), eq(contractArchiveDocuments.normalizedCode, reference.normalizedCode), eq(contractArchiveDocuments.status, "ready"), ne(contractArchiveDocuments.id, reference.sourceDocumentId)), limit: 3 });
   if (candidates.length === 0) {
     await db.update(contractArchiveReferences).set({ targetDocumentId: null, status: "missing", assessment: null, reason: "Aún no se encuentra el documento citado en el archivo.", updatedAt: new Date() }).where(eq(contractArchiveReferences.id, referenceId));
@@ -75,8 +77,11 @@ export async function reconcileReference(referenceId: string): Promise<void> {
 export async function indexArchiveDocument(documentId: string): Promise<void> {
   const doc = await db.query.contractArchiveDocuments.findFirst({ where: eq(contractArchiveDocuments.id, documentId) });
   if (!doc) throw new Error("Documento de archivo no encontrado");
-  if (doc.status === "ready") return;
-  await db.update(contractArchiveDocuments).set({ status: "processing", errorMessage: null, updatedAt: new Date() }).where(eq(contractArchiveDocuments.id, documentId));
+  if (doc.status === "ready" || doc.status === "removed") return;
+  const claimed = await db.update(contractArchiveDocuments).set({ status: "processing", errorMessage: null, updatedAt: new Date() })
+    .where(and(eq(contractArchiveDocuments.id, documentId), ne(contractArchiveDocuments.status, "removed"), ne(contractArchiveDocuments.status, "ready")))
+    .returning({ id: contractArchiveDocuments.id });
+  if (claimed.length === 0) return;
   try {
     const prior = await db.query.contractArchivePages.findMany({ where: eq(contractArchivePages.documentId, documentId), columns: { pageNumber: true } });
     const done = new Set(prior.map((page) => page.pageNumber));
@@ -108,4 +113,37 @@ export async function indexArchiveDocument(documentId: string): Promise<void> {
     await db.update(contractArchiveDocuments).set({ status: "failed", errorMessage: error instanceof Error ? error.message.slice(0, 1000) : "No se pudo indexar", updatedAt: new Date() }).where(eq(contractArchiveDocuments.id, documentId));
     throw error;
   }
+}
+
+/** Removes a document from search without deleting case evidence or MinIO data. */
+export async function removeArchiveDocument(documentId: string, organizationId: string): Promise<"removed" | "not_found" | "processing"> {
+  const result = await db.transaction(async (tx) => {
+    const document = await tx.query.contractArchiveDocuments.findFirst({ where: and(eq(contractArchiveDocuments.id, documentId), eq(contractArchiveDocuments.organizationId, organizationId)) });
+    if (!document || document.status === "removed") return { status: "not_found" as const, sourceIds: [] as string[], referenceIds: [] as string[] };
+    if (document.status === "processing") return { status: "processing" as const, sourceIds: [] as string[], referenceIds: [] as string[] };
+    const removed = await tx.update(contractArchiveDocuments).set({ status: "removed", updatedAt: new Date() })
+      .where(and(eq(contractArchiveDocuments.id, documentId), eq(contractArchiveDocuments.organizationId, organizationId), ne(contractArchiveDocuments.status, "processing"), ne(contractArchiveDocuments.status, "removed")))
+      .returning({ id: contractArchiveDocuments.id });
+    if (removed.length === 0) return { status: "processing" as const, sourceIds: [] as string[], referenceIds: [] as string[] };
+
+    const affected = await tx.query.contractArchiveReferences.findMany({
+      where: and(eq(contractArchiveReferences.organizationId, organizationId), document.normalizedCode
+        ? or(eq(contractArchiveReferences.targetDocumentId, documentId), eq(contractArchiveReferences.normalizedCode, document.normalizedCode))
+        : eq(contractArchiveReferences.targetDocumentId, documentId)),
+      columns: { id: true, sourceDocumentId: true },
+    });
+    await tx.update(contractArchiveReferences).set({ targetDocumentId: null, status: "missing", assessment: null, reason: "El documento de origen se retiró del Archivo.", reviewedBy: null, reviewedAt: null, updatedAt: new Date() })
+      .where(and(eq(contractArchiveReferences.organizationId, organizationId), eq(contractArchiveReferences.targetDocumentId, documentId), ne(contractArchiveReferences.status, "rejected")));
+    await tx.update(contractArchiveReferences).set({ targetDocumentId: null, updatedAt: new Date() })
+      .where(and(eq(contractArchiveReferences.organizationId, organizationId), eq(contractArchiveReferences.targetDocumentId, documentId), eq(contractArchiveReferences.status, "rejected")));
+    return { status: "removed" as const, sourceIds: [documentId, ...affected.map((reference) => reference.sourceDocumentId)], referenceIds: affected.map((reference) => reference.id) };
+  });
+  if (result.status !== "removed") return result.status;
+  for (const referenceId of result.referenceIds) {
+    try { await reconcileReference(referenceId); }
+    catch (error) { console.error("[contracts/archive] reference refresh failed", error); }
+  }
+  try { await syncArchiveCases(result.sourceIds); }
+  catch (error) { console.error("[contracts/archive] case refresh failed", error); }
+  return "removed";
 }

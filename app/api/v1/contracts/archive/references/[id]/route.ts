@@ -17,16 +17,18 @@ async function handlePATCH(req: NextRequest, context: { params: Promise<{ id: st
   const { id } = await context.params;
   const reference = await db.query.contractArchiveReferences.findFirst({ where: and(eq(contractArchiveReferences.id, id), eq(contractArchiveReferences.organizationId, session.orgId)) });
   if (!reference) return NextResponse.json({ error: "No encontrado" }, { status: 404 });
+  const source = await db.query.contractArchiveDocuments.findFirst({ where: and(eq(contractArchiveDocuments.id, reference.sourceDocumentId), eq(contractArchiveDocuments.organizationId, session.orgId)) });
+  if (!source || source.status === "removed") return NextResponse.json({ error: "Documento no disponible" }, { status: 404 });
   const body = await req.json() as { status?: unknown; targetDocumentId?: unknown; targetCode?: unknown; note?: unknown };
   if (body.status !== "confirmed" && body.status !== "rejected") return NextResponse.json({ error: "Estado inválido" }, { status: 400 });
   let targetDocumentId = reference.targetDocumentId;
   if (typeof body.targetDocumentId === "string") {
     const target = await db.query.contractArchiveDocuments.findFirst({ where: and(eq(contractArchiveDocuments.id, body.targetDocumentId), eq(contractArchiveDocuments.organizationId, session.orgId)) });
-    if (!target || target.id === reference.sourceDocumentId) return NextResponse.json({ error: "Documento destino inválido" }, { status: 400 });
+    if (!target || target.status !== "ready" || target.id === reference.sourceDocumentId) return NextResponse.json({ error: "Documento destino inválido" }, { status: 400 });
     targetDocumentId = target.id;
   }
   if (typeof body.targetCode === "string" && body.targetCode.trim()) {
-    const candidates = await db.query.contractArchiveDocuments.findMany({ where: and(eq(contractArchiveDocuments.organizationId, session.orgId), eq(contractArchiveDocuments.normalizedCode, normalizeReferenceCode(body.targetCode))), limit: 2 });
+    const candidates = await db.query.contractArchiveDocuments.findMany({ where: and(eq(contractArchiveDocuments.organizationId, session.orgId), eq(contractArchiveDocuments.normalizedCode, normalizeReferenceCode(body.targetCode)), eq(contractArchiveDocuments.status, "ready")), limit: 2 });
     if (candidates.length !== 1 || candidates[0].id === reference.sourceDocumentId) return NextResponse.json({ error: "El código no identifica un único documento origen" }, { status: 400 });
     targetDocumentId = candidates[0].id;
   }

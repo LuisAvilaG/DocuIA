@@ -95,7 +95,7 @@ async function handleGET(req: NextRequest) {
         .orderBy(sql`count(*) desc`)
         .limit(5);
 
-      const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "https://app.docuia.com";
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://app.docuia.com";
 
       const vendorRows = topVendors
         .map(v => `<tr>

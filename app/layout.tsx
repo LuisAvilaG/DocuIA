@@ -10,7 +10,7 @@ const jakartaSans = Plus_Jakarta_Sans({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL ?? "https://docuia.com"),
+  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || "https://docuia.com"),
   title: "DocuIA — Facturas, gastos y contratos procesados con IA",
   description:
     "Plataforma de procesamiento inteligente de documentos: extrae con IA, valida con algoritmos y sincroniza con tu ERP.",

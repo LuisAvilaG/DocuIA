@@ -47,7 +47,7 @@ async function handlePOST(req: NextRequest, { params }: Params) {
     .returning({ id: expenseReports.id });
   if (!rejected.length) return NextResponse.json({ error: "El informe cambió de estado mientras lo procesabas. Recarga la página." }, { status: 409 });
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
   await sendEmail({
     to:      report.submitter.email,
     subject: "Tu informe de gastos fue rechazado",

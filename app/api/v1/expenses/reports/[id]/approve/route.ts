@@ -56,7 +56,7 @@ async function handlePOST(req: NextRequest, { params }: Params) {
     ? `$${Number(totalRow.total).toLocaleString("es-CO", { maximumFractionDigits: 0 })}`
     : "—";
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
   await sendEmail({
     to:      report.submitter.email,
     subject: "Tu informe de gastos fue aprobado",

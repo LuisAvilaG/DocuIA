@@ -6,6 +6,7 @@ import Link from "next/link";
 import { Upload, Loader2, FileText, ArrowRight, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CONTRACT_CASE_STATUS, contractStatusLabel } from "@/lib/contracts/status";
+import { uploadContractFile } from "@/lib/contracts/upload-client";
 
 interface CaseRow { id: string; title: string | null; status: string; createdAt: string; updatedAt: string; flowName: string }
 interface FlowOption {
@@ -21,6 +22,7 @@ export function ContractsClient({ cases }: { cases: CaseRow[] }) {
   const [title, setTitle] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<string | null>(null);
   const [flows, setFlows] = useState<FlowOption[]>([]);
   const [flowId, setFlowId] = useState<string>("");
   const [flowPickerOpen, setFlowPickerOpen] = useState(false);
@@ -46,19 +48,22 @@ export function ContractsClient({ cases }: { cases: CaseRow[] }) {
   async function submit() {
     if (!files || files.length === 0) { setError("Selecciona al menos un documento"); return; }
     setBusy(true); setError(null);
+    const uploadIds: string[] = [];
     try {
-      const fd = new FormData();
-      if (title) fd.append("title", title);
-      if (flowId) fd.append("flowId", flowId);
-      for (const f of Array.from(files)) fd.append("files", f);
-      const res = await fetch("/api/v1/contracts/cases", { method: "POST", body: fd });
+      if (files.length > 10) throw new Error("Máximo 10 documentos por caso");
+      for (const [index, file] of Array.from(files).entries()) {
+        uploadIds.push(await uploadContractFile(file, (fraction) => setUploadProgress(`Cargando ${index + 1} de ${files.length}: ${Math.round(fraction * 100)} %`)));
+      }
+      setUploadProgress("Iniciando análisis…");
+      const res = await fetch("/api/v1/contracts/cases", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title, flowId, uploadIds }) });
       const data = await res.json();
       if (!res.ok) { setError(data.error ?? "Error al crear el caso"); return; }
       setFiles(null); setTitle("");
       router.refresh();
-    } catch {
-      setError("No se pudo conectar con el servidor");
-    } finally { setBusy(false); }
+    } catch (cause) {
+      await Promise.all(uploadIds.map((id) => fetch(`/api/v1/contracts/uploads/${id}`, { method: "DELETE" }).catch(() => undefined)));
+      setError(cause instanceof Error ? cause.message : "No se pudo conectar con el servidor");
+    } finally { setBusy(false); setUploadProgress(null); }
   }
 
   const selectedFlow = flows.find((flow) => flow.id === flowId) ?? null;
@@ -125,6 +130,8 @@ export function ContractsClient({ cases }: { cases: CaseRow[] }) {
             className="block w-full text-xs text-muted-foreground file:mr-3 file:rounded-md file:border-0 file:bg-secondary file:px-3 file:py-1.5 file:text-xs file:text-foreground"
           />
           {error && <p className="text-xs text-destructive">{error}</p>}
+          {uploadProgress && <p className="text-xs text-primary" role="status">{uploadProgress}</p>}
+          <p className="text-[11px] text-muted-foreground">PDF hasta 150 MB; el análisis de documentos extensos continúa en segundo plano.</p>
           <button onClick={submit} disabled={busy}
             className="inline-flex items-center gap-2 rounded-lg bg-primary text-primary-foreground px-4 py-2 text-xs font-medium disabled:opacity-60">
             {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}

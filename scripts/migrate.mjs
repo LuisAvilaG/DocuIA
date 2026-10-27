@@ -21,6 +21,13 @@ const pool = new pg.Pool({
 try {
   const db = drizzle(pool);
   await migrate(db, { migrationsFolder: "./db/migrations" });
+  // Seed newly introduced product controls after migrations commit. PostgreSQL
+  // cannot use an enum value in the same transaction where ALTER TYPE added it
+  // (fresh installs apply all migration files together).
+  await pool.query(`INSERT INTO features (id, name, description, category, feature_type, default_enabled, plan_required, is_beta, sort_order, product_key) VALUES
+    ('contract_reference_archive', 'Archivo y rastreo de referencias', 'Indexa cartas e informes, enlaza referencias y coteja pertinencia.', 'contracts', 'boolean', true, 'growth', false, 117, 'contract_intelligence'),
+    ('contract_large_documents', 'Documentos extensos en casos', 'Permite PDFs de hasta 150 MB procesados por páginas.', 'contracts', 'boolean', true, 'growth', false, 118, 'contract_intelligence')
+    ON CONFLICT (id) DO NOTHING`);
   console.log("[migrate] base de datos al día");
 } catch (err) {
   console.error("[migrate] falló:", err instanceof Error ? err.message : err);

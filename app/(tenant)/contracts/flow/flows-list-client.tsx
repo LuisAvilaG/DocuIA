@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Loader2, Plus, Trash2, Copy, Pencil, Workflow, X, Power } from "lucide-react";
+import { referenceDemoGraph } from "@/lib/contracts/reference-demo";
 
 interface FlowRow { id: string; name: string; version: number; isActive: boolean; updatedAt: string }
 
@@ -17,11 +18,17 @@ export function ContractFlowsListClient() {
   const [pendingDelete, setPendingDelete] = useState<FlowRow | null>(null);
 
   async function load() {
-    const d = await fetch("/api/v1/contracts/flow").then((r) => r.json());
+    const response = await fetch("/api/v1/contracts/flow");
+    const d = await response.json();
+    if (!response.ok) throw new Error(d.error ?? "No se pudieron cargar los flujos");
     setFlows(d.flows ?? []); setMaxFlows(d.maxFlows ?? 1);
   }
   useEffect(() => {
-    (async () => { try { await load(); } finally { setLoading(false); } })();
+    (async () => {
+      try { await load(); }
+      catch (cause) { setErr(cause instanceof Error ? cause.message : "No se pudieron cargar los flujos"); }
+      finally { setLoading(false); }
+    })();
   }, []);
 
   const atLimit = flows.length >= maxFlows;
@@ -32,6 +39,17 @@ export function ContractFlowsListClient() {
     const d = await res.json(); setBusy(false);
     if (!res.ok) { setErr(d.error ?? "No se pudo crear"); return; }
     router.push(`/contracts/flow/${d.id}`);
+  }
+
+  async function createReferenceDemo() {
+    setBusy(true); setErr(null);
+    try {
+      const res = await fetch("/api/v1/contracts/flow", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "Demo · Rastreo de correspondencia", graph: referenceDemoGraph() }) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "No se pudo crear el flujo de demo");
+      router.push(`/contracts/flow/${data.id}`);
+    } catch (cause) { setErr(cause instanceof Error ? cause.message : "No se pudo crear el flujo de demo"); }
+    finally { setBusy(false); }
   }
 
   async function duplicate(f: FlowRow) {
@@ -86,6 +104,8 @@ export function ContractFlowsListClient() {
         </div>
 
         {err && <p className="text-xs text-destructive">{err}</p>}
+
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3"><div><p className="text-xs font-semibold">Demo · Rastreo de correspondencia</p><p className="mt-0.5 text-[11px] text-muted-foreground">Entrada → extracción → búsqueda de referencias → informe. Se crea como borrador para que lo revises antes de activarlo.</p></div><button type="button" onClick={createReferenceDemo} disabled={busy || atLimit} className="rounded-md border border-primary/30 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/5 disabled:opacity-50">Crear flujo de demo</button></div>
 
         {flows.length === 0 ? (
           <div className="bg-card border border-border rounded-xl p-10 text-center">

@@ -4,12 +4,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { isProductActive } from "@/lib/products";
 import { db } from "@/lib/db";
-import { contractCases, contractFlows } from "@/db/schema";
+import { contractCases, contractDocuments, contractFlows } from "@/db/schema";
 import { and, eq, desc } from "drizzle-orm";
 import { createContractCase, type CaseFileInput } from "@/lib/contracts/pipeline";
 import { enqueueContractCase } from "@/lib/queue";
 import { isFeatureEnabled } from "@/lib/features";
 import { logAudit } from "@/lib/audit/log";
+import { createCaseFromUploads } from "@/lib/contracts/uploads";
 
 const ALLOWED = new Set(["application/pdf", "image/jpeg", "image/png", "image/webp", "image/tiff", "text/plain", "text/xml", "application/xml"]);
 const MAX_FILE = 20 * 1024 * 1024;
@@ -56,6 +57,22 @@ async function handlePOST(req: NextRequest) {
   }
 
   try {
+    if (req.headers.get("content-type")?.includes("application/json")) {
+      const payload = await req.json() as { title?: unknown; flowId?: unknown; uploadIds?: unknown };
+      const title = typeof payload.title === "string" ? payload.title.slice(0, 255) : undefined;
+      const flowId = typeof payload.flowId === "string" ? payload.flowId : undefined;
+      if (flowId) {
+        const flow = await db.query.contractFlows.findFirst({ where: and(eq(contractFlows.id, flowId), eq(contractFlows.organizationId, session.orgId)), columns: { isActive: true } });
+        if (!flow?.isActive) return NextResponse.json({ error: "El flujo seleccionado no está activo" }, { status: 400 });
+      }
+      if (!Array.isArray(payload.uploadIds) || !payload.uploadIds.every((id) => typeof id === "string")) return NextResponse.json({ error: "Archivos inválidos" }, { status: 400 });
+      const caseId = await createCaseFromUploads({ organizationId: session.orgId, createdBy: session.sub, title, flowId, uploadIds: payload.uploadIds });
+      await logAudit({ orgId: session.orgId, userId: session.sub, userEmail: session.email, action: "contract.case_created", resourceType: "contract_case", resourceId: caseId, metadata: { flowId: flowId ?? null, uploadIds: payload.uploadIds } });
+      const uploadedDocuments = await db.query.contractDocuments.findMany({ where: eq(contractDocuments.caseId, caseId), columns: { originalName: true } });
+      await logAudit({ orgId: session.orgId, userId: session.sub, userEmail: session.email, action: "contract.documents_uploaded", resourceType: "contract_case", resourceId: caseId, metadata: { files: uploadedDocuments.map((document) => document.originalName) } });
+      await enqueueContractCase(caseId);
+      return NextResponse.json({ ok: true, status: "queued", caseId }, { status: 201 });
+    }
     const form = await req.formData();
     const title = String(form.get("title") ?? "") || undefined;
     const flowId = String(form.get("flowId") ?? "") || undefined;
@@ -104,7 +121,7 @@ async function handlePOST(req: NextRequest) {
     return NextResponse.json({ ok: true, status: "queued", caseId }, { status: 201 });
   } catch (err) {
     console.error("[contracts/cases POST]", err);
-    return NextResponse.json({ error: "Error interno" }, { status: 500 });
+    return NextResponse.json({ error: err instanceof Error ? err.message : "Error interno" }, { status: 400 });
   }
 }
 

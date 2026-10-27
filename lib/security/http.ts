@@ -111,15 +111,17 @@ export function withApiSecurity<T extends unknown[]>(handler: (req: NextRequest,
       }
       // Public auth/contact have tighter dedicated limits inside their handlers.
       if (!publicAuth && path !== "/api/v1/contact" && !path.startsWith("/api/internal/")) {
-        const expensive = /\/(upload|ocr|generate|improve|sync|word-template)$/.test(path) || (mutation && path === "/api/v1/contracts/cases") || (path.endsWith("/output") && req.nextUrl.searchParams.get("format") === "pdf");
-        const rl = await rateLimit(`api:${expensive ? "cost" : mutation ? "write" : "read"}:${principal}`, { max: expensive ? 40 : mutation ? 120 : 600, windowSec: 60 });
+        const expensive = /\/(upload|ocr|generate|improve|sync|word-template)$/.test(path) || path.startsWith("/api/v1/contracts/uploads/") || (mutation && path === "/api/v1/contracts/cases") || (path.endsWith("/output") && req.nextUrl.searchParams.get("format") === "pdf");
+        const uploadPart = /^\/api\/v1\/contracts\/uploads\/[^/]+\/parts\/\d+$/.test(path) && req.method === "PUT";
+        const rl = await rateLimit(`api:${uploadPart ? "chunk" : expensive ? "cost" : mutation ? "write" : "read"}:${principal}`, { max: uploadPart ? 240 : expensive ? 40 : mutation ? 120 : 600, windowSec: 60 });
         if (!rl.ok) return NextResponse.json({ error: "Demasiadas solicitudes" }, { status: 429, headers: { "Retry-After": String(rl.retryAfterSec ?? 60) } });
       }
       let bounded = req;
       if (mutation && req.body) {
         const multipart = req.headers.get("content-type")?.startsWith("multipart/form-data");
-        const limit = publicAuth || path === "/api/v1/contact" ? 16_384 : multipart ? (path === "/api/v1/contracts/cases" ? 60 : path === "/api/v1/workflow/upload" ? 42 : 21) * 1024 * 1024 : 2 * 1024 * 1024;
-        const body = await readBoundedBody(req, limit);
+        const uploadPart = /^\/api\/v1\/contracts\/uploads\/[^/]+\/parts\/\d+$/.test(path) && req.method === "PUT";
+        const limit = publicAuth || path === "/api/v1/contact" ? 16_384 : uploadPart ? 9 * 1024 * 1024 : multipart ? (path === "/api/v1/contracts/cases" ? 60 : path === "/api/v1/workflow/upload" ? 42 : 21) * 1024 * 1024 : 2 * 1024 * 1024;
+        const body = await readBoundedBody(req, limit, uploadPart ? 120_000 : 30_000);
         // Next can supply a Request from a different realm; copying explicitly
         // avoids losing its method when instanceof Request is false.
         bounded = new NextRequest(req.url, { method: req.method, headers: req.headers, signal: req.signal, body: body as BodyInit });

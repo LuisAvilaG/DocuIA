@@ -25,13 +25,14 @@ function genInitialHtml(data: Record<string, unknown>): string {
 }
 
 // ── Node kinds ────────────────────────────────────────────────────────
-type Kind = "intake" | "extract" | "calculate" | "validate" | "generate" | "note";
+type Kind = "intake" | "extract" | "calculate" | "validate" | "reference_lookup" | "generate" | "note";
 
 const KIND_META: Record<Kind, { title: string; hint: string; Icon: typeof FileInput; hasIn: boolean; hasOut: boolean }> = {
   intake:   { title: "Entrada",    hint: "Qué documento entra",       Icon: FileInput,   hasIn: false, hasOut: true },
   extract:  { title: "Extracción", hint: "Qué datos saca la IA",       Icon: ListChecks,  hasIn: true,  hasOut: true },
   calculate:{ title: "Cálculo",    hint: "Valor derivado con fórmula", Icon: Calculator,   hasIn: true,  hasOut: true },
   validate: { title: "Validación", hint: "Regla de cruce entre docs",  Icon: ShieldCheck, hasIn: true,  hasOut: true },
+  reference_lookup: { title: "Referencias", hint: "Rastrea documentos citados", Icon: FileSearch, hasIn: true, hasOut: true },
   generate: { title: "Generación", hint: "Documento final",            Icon: FileText,    hasIn: true,  hasOut: false },
   note:     { title: "Nota",       hint: "Comentario para el equipo",  Icon: StickyNote,  hasIn: false, hasOut: false },
 };
@@ -49,6 +50,7 @@ function defaultData(kind: Kind): AnyData {
       membership: { docType: "", field: "", label: "En documento" },
       statusLabels: { pass: "vigente", fail: "no_vigente", unknown: "indeterminado" },
     } };
+    case "reference_lookup": return { name: "Rastreo de referencias", severity: "warn" };
     case "generate": return { templateKey: "salida", name: "Documento de salida", body: "", source: "editor" };
     case "note":     return { body: "Escribe aquí la instrucción o comentario para este flujo." };
   }
@@ -93,6 +95,7 @@ function NodeCard({ type, data, selected }: NodeProps) {
     type === "extract"  ? `${String(d.docTypeKey || "—")} · ${Array.isArray(d.fields) ? d.fields.length : 0} campos` :
     type === "calculate" ? String(d.label || d.name || "Sin nombre") :
     type === "validate" ? String(d.name || "Sin nombre") :
+    type === "reference_lookup" ? String(d.name || "Rastreo de referencias") :
                           String(d.name || d.templateKey || "Sin nombre");
   return (
     <div className={`rounded-lg border bg-card min-w-[184px] max-w-[220px] overflow-hidden transition-shadow ${selected ? "border-primary ring-2 ring-primary/25 shadow-[0_4px_16px_oklch(0.18_0.015_258_/_0.10)]" : "border-border hover:shadow-[0_2px_8px_oklch(0.18_0.015_258_/_0.06)]"}`}>
@@ -659,7 +662,7 @@ function FlowBuilder({ flowId }: { flowId: string }) {
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
-  const nodeTypes = useMemo(() => ({ intake: NodeCard, extract: NodeCard, calculate: NodeCard, validate: NodeCard, generate: NodeCard, note: NodeCard }), []);
+  const nodeTypes = useMemo(() => ({ intake: NodeCard, extract: NodeCard, calculate: NodeCard, validate: NodeCard, reference_lookup: NodeCard, generate: NodeCard, note: NodeCard }), []);
 
   const setGraph = useCallback((graph: { nodes?: Array<{ id: string; kind: Kind; position: { x: number; y: number }; data: AnyData; width?: number; height?: number }>; edges?: Array<{ id: string; source: string; target: string }> }) => {
     setNodes((graph.nodes ?? []).map((n) => ({ id: n.id, type: n.kind, position: n.position, data: n.data, width: n.width, height: n.height })));
@@ -871,6 +874,7 @@ function FlowBuilder({ flowId }: { flowId: string }) {
               {selected.type === "extract"  && <ExtractForm  data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} onTrain={setVisualTraining} />}
               {selected.type === "calculate" && <CalculationForm key={selected.id} data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} fieldsByType={fieldsByType} analysisNodes={analysisNodes} />}
               {selected.type === "validate" && <ValidateForm data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} fieldsByType={fieldsByType} />}
+              {selected.type === "reference_lookup" && <div className="space-y-3"><FieldRow label="Nombre de la etapa"><input className={inp} value={String((selected.data as AnyData).name ?? "")} onChange={(event) => patchSelected({ name: event.target.value })} /></FieldRow><FieldRow label="Si falta el documento citado"><select className={inp} value={String((selected.data as AnyData).severity ?? "warn")} onChange={(event) => patchSelected({ severity: event.target.value })}><option value="info">Informativo</option><option value="warn">Revisión</option><option value="block">Bloqueante</option></select></FieldRow><p className="text-xs leading-relaxed text-muted-foreground">Detecta códigos en los documentos de entrada, busca su origen en el Archivo y compara la pertinencia del asunto. Los enlaces inciertos se revisan en Archivo.</p></div>}
               {selected.type === "generate" && <GenerateForm data={selected.data as AnyData} patch={patchSelected} onOpenEditor={() => setDocEditorOpen(true)} onOpenWordTemplate={() => setWordTemplateOpen(true)} />}
               {selected.type === "note" && <p className="text-xs leading-relaxed text-muted-foreground">Edita el texto directamente en el bloque. Arrastra los controles de sus bordes para ajustar el ancho o alto. Esta nota no crea reglas ni cambia el resultado del caso.</p>}
             </div>

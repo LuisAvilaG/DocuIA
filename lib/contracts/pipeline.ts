@@ -2,7 +2,7 @@ import { randomUUID } from "crypto";
 import { db } from "@/lib/db";
 import { contractCases, contractDocuments, contractExtractionLearnings, contractValidations, contractObligations, contractVisualTrainingVariants, contractAiAnalysisResults } from "@/db/schema";
 import { and, desc, eq } from "drizzle-orm";
-import { uploadFile, getFileBuffer } from "@/lib/storage/minio";
+import { uploadFile, getFileBuffer, getFileSize } from "@/lib/storage/minio";
 import { realExtractDeps, type ContractExtractDeps, type ExtractSource } from "./extract";
 import type { DocsByType } from "./validate";
 import { flowSnapshot, loadContractPlan } from "./plan";
@@ -13,6 +13,11 @@ import { normalizeContractDate } from "./normalization";
 import { logAudit } from "@/lib/audit/log";
 import type { VisualTrainingVariant } from "./visual-training";
 import { runAiAnalysis } from "./ai-analysis";
+import { indexArchiveDocument, registerArchiveDocument } from "./archive";
+import { contractArchivePages } from "@/db/schema";
+import { fieldBatches, selectPagesForFields } from "./page-selection";
+import { archiveValidationsForCase } from "./archive-validations";
+import { caseVerdict } from "./validate";
 
 export interface CaseFileInput { buffer: Buffer; fileName: string; mimeType: string }
 
@@ -147,10 +152,28 @@ export async function processContractCase(caseId: string, deps: ContractExtractD
 
     const summary: Array<{ documentId: string; type: string; typeName: string; fields: number }> = [];
     const docsByType: DocsByType = {};
+    const referenceNode = plan.flow?.nodes.find((node) => node.kind === "reference_lookup");
+    if (referenceNode) {
+      if (!await isFeatureEnabled(kase.organizationId, "contract_reference_archive")) throw new Error("El flujo usa rastreo de referencias, pero la función Archivo está deshabilitada.");
+      for (const doc of docs) {
+        const archiveId = await registerArchiveDocument({ organizationId: kase.organizationId, storageKey: doc.storageKey, originalName: doc.originalName ?? "documento", mimeType: doc.mimeType ?? "application/pdf", caseDocumentId: doc.id, createdBy: kase.createdBy ?? undefined });
+        await indexArchiveDocument(archiveId);
+      }
+    }
 
     for (const doc of docs) {
-      const buffer = await getFileBuffer(doc.storageKey);
-      const { source, mode, text } = toSource(buffer, doc.mimeType);
+      const sizeBytes = await getFileSize(doc.storageKey);
+      const largePdf = doc.mimeType === "application/pdf" && sizeBytes > 20 * 1024 * 1024;
+      let pages: Array<{ pageNumber: number; text: string }> = [];
+      if (largePdf) {
+        const archiveId = await registerArchiveDocument({ organizationId: kase.organizationId, storageKey: doc.storageKey, originalName: doc.originalName ?? "documento.pdf", mimeType: doc.mimeType!, caseDocumentId: doc.id, createdBy: kase.createdBy ?? undefined });
+        await indexArchiveDocument(archiveId);
+        pages = await db.query.contractArchivePages.findMany({ where: eq(contractArchivePages.documentId, archiveId), orderBy: [contractArchivePages.pageNumber], columns: { pageNumber: true, text: true } });
+      }
+      const prepared = largePdf
+        ? { source: { kind: "text" as const, text: selectPagesForFields(pages, [], 20_000) }, mode: "digital" as const, text: null }
+        : toSource(await getFileBuffer(doc.storageKey), doc.mimeType);
+      const { source, mode, text } = prepared;
 
       const classifiedTypeKey = await deps.classify(source, plan.docTypes, undefined, doc.originalName ?? undefined);
       const typeKey = plan.docTypes.some((type) => type.key === classifiedTypeKey)
@@ -163,7 +186,20 @@ export async function processContractCase(caseId: string, deps: ContractExtractD
       // find them.
       const fields = plan.fieldsByType[typeKey] ?? [];
 
-      const { values, citations } = await deps.extract(source, typeName, fields, undefined, learningsByType.get(typeKey) ?? [], visualByType.get(typeKey) ?? []);
+      let values: Record<string, unknown>;
+      let citations: Record<string, unknown>;
+      if (largePdf && fields.length > 0) {
+        values = {};
+        citations = {};
+        for (const batch of fieldBatches(fields)) {
+          const textSource = { kind: "text" as const, text: selectPagesForFields(pages, batch, 20_000) };
+          const extracted = await deps.extract(textSource, typeName, batch, undefined, learningsByType.get(typeKey) ?? [], []);
+          Object.assign(values, extracted.values);
+          Object.assign(citations, extracted.citations);
+        }
+      } else {
+        ({ values, citations } = await deps.extract(source, typeName, fields, undefined, learningsByType.get(typeKey) ?? [], visualByType.get(typeKey) ?? []));
+      }
 
       await db.update(contractDocuments).set({
         detectedType:  typeKey,
@@ -212,7 +248,12 @@ export async function processContractCase(caseId: string, deps: ContractExtractD
       : [];
 
     // Calculations are always deterministic and use the AI items as inputs.
-    const { validations, calculations, calculationValues, verdict } = assembleResults(plan, docsByType, analyses, { validationsEnabled: validationsFeature });
+    const assembled = assembleResults(plan, docsByType, analyses, { validationsEnabled: validationsFeature });
+    const { calculations, calculationValues } = assembled;
+    const validations = referenceNode
+      ? [...assembled.validations, ...await archiveValidationsForCase({ organizationId: kase.organizationId, caseDocumentIds: docs.map((doc) => doc.id), name: referenceNode.data.name, severity: referenceNode.data.severity })]
+      : assembled.validations;
+    const verdict = caseVerdict(validations);
 
     // Derive key-date obligations (renewal/expiry) using the tenant-configured alert lead time.
     const obligations: Array<{ type: string; description: string; dueDate: Date; alertAt: Date }> = [];
@@ -295,6 +336,16 @@ export async function processContractCase(caseId: string, deps: ContractExtractD
       resourceId: caseId,
       metadata: { documents: summary.length, validations: validations.length, analyses: analyses.length, verdict },
     });
+    if (await isFeatureEnabled(kase.organizationId, "contract_reference_archive")) {
+      for (const doc of docs) {
+        try {
+          const archiveId = await registerArchiveDocument({ organizationId: kase.organizationId, storageKey: doc.storageKey, originalName: doc.originalName ?? "documento", mimeType: doc.mimeType ?? "application/pdf", caseDocumentId: doc.id, createdBy: kase.createdBy ?? undefined });
+          await (await import("@/lib/queue")).enqueueArchiveDocument(archiveId);
+        } catch (error) {
+          console.error("[contracts] archive enqueue failed", error);
+        }
+      }
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await db.update(contractCases).set({

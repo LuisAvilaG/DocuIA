@@ -6,6 +6,8 @@ import { loadCasePlan } from "./plan";
 import type { DocsByType, Severity, ValidationResult } from "./validate";
 import { assembleResults, isAiRule, type AnalysisOutcome } from "./assemble";
 import type { AiAnalysisItem, AiAnalysisOutcome } from "./ai-analysis";
+import { archiveValidationsForCase } from "./archive-validations";
+import { caseVerdict } from "./validate";
 
 export interface ContractRevalidation {
   caseId: string;
@@ -59,7 +61,13 @@ export async function calculateContractRevalidation(
     },
   }));
 
-  const { validations, calculations, calculationValues, verdict } = assembleResults(plan, docsByType, analyses, { validationsEnabled });
+  const assembled = assembleResults(plan, docsByType, analyses, { validationsEnabled });
+  const refNode = plan.flow?.nodes.find((node) => node.kind === "reference_lookup");
+  const validations = refNode
+    ? [...assembled.validations, ...await archiveValidationsForCase({ organizationId: kase.organizationId, caseDocumentIds: documents.map((document) => document.id), name: refNode.data.name, severity: refNode.data.severity })]
+    : assembled.validations;
+  const { calculations, calculationValues } = assembled;
+  const verdict = caseVerdict(validations);
   const previousResult = (kase.resultJson && typeof kase.resultJson === "object" && !Array.isArray(kase.resultJson))
     ? kase.resultJson as Record<string, unknown>
     : {};

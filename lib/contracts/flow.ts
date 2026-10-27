@@ -18,7 +18,7 @@ import { CALCULATION_OPERATIONS, type CalculationDefinition } from "./calculatio
 //   validate → "valida esto"            (cross-document rule)
 //   generate → "al final genera esto"   (output template)
 
-export type FlowNodeKind = "intake" | "extract" | "calculate" | "validate" | "generate" | "note";
+export type FlowNodeKind = "intake" | "extract" | "calculate" | "validate" | "reference_lookup" | "generate" | "note";
 
 const zPosition = z.object({ x: z.number(), y: z.number() });
 const zField = z.object({
@@ -80,6 +80,10 @@ const zValidate = z.object({
   id: z.string().min(1), kind: z.literal("validate"), position: zPosition,
   data: z.object({ name: z.string().min(1), severity: z.enum(["info", "warn", "block"]).default("warn"), rule: zRule }),
 });
+const zReferenceLookup = z.object({
+  id: z.string().min(1), kind: z.literal("reference_lookup"), position: zPosition,
+  data: z.object({ name: z.string().min(1).max(150), severity: z.enum(["info", "warn", "block"]).default("warn") }),
+});
 const zCalculate = z.object({
   id: z.string().min(1), kind: z.literal("calculate"), position: zPosition,
   data: z.object({
@@ -124,7 +128,7 @@ const zNote = z.object({
   height: z.number().positive().max(520).optional(),
 });
 
-const zNode = z.discriminatedUnion("kind", [zIntake, zExtract, zCalculate, zValidate, zGenerate, zNote]);
+const zNode = z.discriminatedUnion("kind", [zIntake, zExtract, zCalculate, zValidate, zReferenceLookup, zGenerate, zNote]);
 const zEdge = z.object({ id: z.string().min(1), source: z.string().min(1), target: z.string().min(1) });
 
 export const flowGraphSchema = z.object({

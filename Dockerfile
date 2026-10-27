@@ -34,7 +34,7 @@ ENV HOSTNAME=0.0.0.0
 # when the user chooses the PDF download. Liberation (Arial/Times/Courier) and
 # Carlito (Calibri) are metric-compatible, so Word layouts do not reflow; Noto
 # supplies a Unicode fallback for any other client-specific font.
-RUN apk add --no-cache libreoffice font-noto font-liberation font-carlito && addgroup -g 1001 -S nodejs && adduser -S nextjs -u 1001
+RUN apk add --no-cache libreoffice font-noto font-liberation font-carlito poppler-utils tesseract-ocr tesseract-ocr-data-spa tesseract-ocr-data-eng && addgroup -g 1001 -S nodejs && adduser -S nextjs -u 1001
 
 # public/ (includes the self-hosted pdf.js worker) + the standalone server + static assets.
 COPY --from=builder /app/public ./public

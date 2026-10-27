@@ -1,4 +1,4 @@
-import { S3Client, HeadBucketCommand, CreateBucketCommand, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, HeadBucketCommand, CreateBucketCommand, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, CreateMultipartUploadCommand, UploadPartCommand, ListPartsCommand, CompleteMultipartUploadCommand, AbortMultipartUploadCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
 import { Readable } from "node:stream";
 import type { BucketLocationConstraint } from "@aws-sdk/client-s3";
 
@@ -83,4 +83,51 @@ export async function getFileStream(key: string): Promise<Readable> {
 
 export async function deleteFile(key: string): Promise<void> {
   await getClient().send(new DeleteObjectCommand({ Bucket: BUCKET, Key: key }));
+}
+
+export async function getFileSize(key: string): Promise<number> {
+  const result = await getClient().send(new HeadObjectCommand({ Bucket: BUCKET, Key: key }));
+  if (!Number.isSafeInteger(result.ContentLength)) throw new Error("Tamaño de archivo no disponible");
+  return result.ContentLength!;
+}
+
+export async function startMultipartFile(key: string, mimeType: string): Promise<string> {
+  await ensureBucket();
+  const result = await getClient().send(new CreateMultipartUploadCommand({ Bucket: BUCKET, Key: key, ContentType: mimeType }));
+  if (!result.UploadId) throw new Error("No se pudo iniciar la carga");
+  return result.UploadId;
+}
+
+export async function uploadFilePart(key: string, uploadId: string, partNumber: number, body: Uint8Array): Promise<void> {
+  await getClient().send(new UploadPartCommand({ Bucket: BUCKET, Key: key, UploadId: uploadId, PartNumber: partNumber, Body: Buffer.from(body), ContentLength: body.byteLength }));
+}
+
+export async function listFileParts(key: string, uploadId: string): Promise<Array<{ partNumber: number; etag: string; size: number }>> {
+  const parts: Array<{ partNumber: number; etag: string; size: number }> = [];
+  let marker: string | undefined;
+  do {
+    const page = await getClient().send(new ListPartsCommand({ Bucket: BUCKET, Key: key, UploadId: uploadId, PartNumberMarker: marker }));
+    for (const part of page.Parts ?? []) {
+      if (!part.PartNumber || !part.ETag || !Number.isSafeInteger(part.Size)) throw new Error("Parte de carga inválida");
+      parts.push({ partNumber: part.PartNumber, etag: part.ETag, size: part.Size! });
+    }
+    marker = page.IsTruncated ? String(page.NextPartNumberMarker ?? "") : undefined;
+  } while (marker);
+  return parts.sort((a, b) => a.partNumber - b.partNumber);
+}
+
+export async function completeMultipartFile(key: string, uploadId: string, parts: Array<{ partNumber: number; etag: string }>): Promise<void> {
+  await getClient().send(new CompleteMultipartUploadCommand({ Bucket: BUCKET, Key: key, UploadId: uploadId, MultipartUpload: { Parts: parts.map((part) => ({ PartNumber: part.partNumber, ETag: part.etag })) } }));
+}
+
+export async function abortMultipartFile(key: string, uploadId: string): Promise<void> {
+  await getClient().send(new AbortMultipartUploadCommand({ Bucket: BUCKET, Key: key, UploadId: uploadId }));
+}
+
+export async function getFileRange(key: string, start: number, end: number): Promise<Buffer> {
+  const result = await getClient().send(new GetObjectCommand({ Bucket: BUCKET, Key: key, Range: `bytes=${start}-${end}` }));
+  if (!(result.Body instanceof Readable)) throw new Error("Respuesta de almacenamiento inválida");
+  const chunks: Buffer[] = [];
+  for await (const chunk of result.Body) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  return Buffer.concat(chunks);
 }

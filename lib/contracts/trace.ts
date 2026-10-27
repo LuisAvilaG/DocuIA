@@ -64,6 +64,9 @@ export function buildFlowTrace(
         detail: res.length ? Object.entries(by).map(([s, c]) => `${c} ${s}`).join(", ") : "sin sujetos",
       };
     }
+    if (n.kind === "reference_lookup") {
+      return { nodeId: n.id, kind: n.kind, label: `Rastrea: ${n.data.name}`, status: "done", detail: "Referencias cotejadas con el Archivo documental" };
+    }
     if (n.kind === "note") {
       return {
         nodeId: n.id, kind: n.kind, label: "Nota de flujo",

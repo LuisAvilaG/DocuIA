@@ -3,14 +3,15 @@ import { canApprove } from "@/lib/auth/permissions";
 import Link from "next/link";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
-import { contractAiAnalysisResults, contractCases, contractDocuments, contractValidations, contractObligations, contractFlows, orgUsers, tenantAuditLog } from "@/db/schema";
-import { and, eq, asc } from "drizzle-orm";
+import { contractAiAnalysisResults, contractArchiveDocuments, contractCases, contractDocuments, contractValidations, contractObligations, contractFlows, orgUsers, tenantAuditLog } from "@/db/schema";
+import { and, eq, asc, inArray } from "drizzle-orm";
 import {
   CheckCircle2, XCircle, MinusCircle, ShieldCheck, ShieldAlert, ShieldX,
   FileText, CalendarClock, FileInput, ListChecks, Calculator, FileType, Workflow,
 } from "lucide-react";
 import { CaseActions } from "./actions";
 import { CaseDocuments, type CaseDoc } from "./case-documents";
+import { CaseProcessingRefresh } from "./case-processing-refresh";
 import { getFeature, isFeatureEnabled } from "@/lib/features";
 import { flowGraphSchema } from "@/lib/contracts/flow";
 import { CaseActivity, type CaseActivityItem } from "./case-activity";
@@ -109,9 +110,12 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
 
   const parsedFlow = activeFlow ? flowGraphSchema.safeParse(activeFlow.graphJson) : null;
   const configuredValidations = parsedFlow?.success
-    ? parsedFlow.data.nodes.filter((node) => node.kind === "validate").length
+    ? parsedFlow.data.nodes.filter((node) => node.kind === "validate" || node.kind === "reference_lookup").length
     : null;
   const isProcessing = kase.status === "uploaded" || kase.status === "processing";
+  const archiveProgress = isProcessing && documents.length > 0
+    ? await db.query.contractArchiveDocuments.findMany({ where: and(eq(contractArchiveDocuments.organizationId, session.orgId), inArray(contractArchiveDocuments.caseDocumentId, documents.map((document) => document.id))), columns: { originalName: true, pageCount: true, indexedPages: true, status: true } })
+    : [];
 
   const result = (kase.resultJson ?? {}) as {
     outputKey?: string; outputMime?: string; outputName?: string; missing?: string[];
@@ -199,7 +203,7 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
         </div>
 
         <CaseActions caseId={kase.id} caseTitle={kase.title || `Caso ${kase.id.slice(0, 8)}`} status={kase.status} verdict={validationsEnabled ? verdict : null} decision={result.decision} hasOutput={Boolean(result.outputKey)} generationEnabled={generationEnabled} approvalEnabled={approvalFeature.isEnabled} allowOverride={approvalFeature.config.allow_override !== false} canManage={canApprove(session.role, "contracts")} />
-        {isProcessing && <p className="text-xs text-warning">El caso está en proceso. La clasificación, extracción y validación aparecerán aquí al terminar.</p>}
+        {isProcessing && <><CaseProcessingRefresh /><div className="text-xs text-warning"><p>El caso está en proceso. Esta página se actualiza automáticamente.</p>{archiveProgress.map((document) => <p key={document.originalName} className="mt-1 text-muted-foreground">{document.originalName}: {document.pageCount ? `${document.indexedPages} de ${document.pageCount} páginas indexadas` : "preparando índice"}</p>)}</div></>}
         {kase.errorMessage && <div className="rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-xs px-3 py-2">{kase.errorMessage}</div>}
 
         {/* Recorrido por etapas */}

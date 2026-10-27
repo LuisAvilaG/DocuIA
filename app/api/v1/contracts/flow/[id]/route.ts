@@ -102,6 +102,12 @@ async function handlePATCH(req: NextRequest, { params }: { params: Promise<{ id:
   const { id } = await params;
   const body = await req.json().catch(() => null) as { isActive?: unknown } | null;
   if (typeof body?.isActive !== "boolean") return NextResponse.json({ error: "Estado de flujo inválido" }, { status: 400 });
+  if (body.isActive) {
+    const current = await db.query.contractFlows.findFirst({ where: and(eq(contractFlows.id, id), eq(contractFlows.organizationId, session.orgId)), columns: { graphJson: true } });
+    const graph = flowGraphSchema.safeParse(current?.graphJson);
+    if (!graph.success) return NextResponse.json({ error: "El flujo no es válido" }, { status: 400 });
+    if (graph.data.nodes.some((node) => node.kind === "reference_lookup") && !await isFeatureEnabled(session.orgId, "contract_reference_archive")) return NextResponse.json({ error: "Habilita Archivo y rastreo de referencias antes de activar este flujo" }, { status: 403 });
+  }
 
   const updated = await db.update(contractFlows)
     .set({ isActive: body.isActive, updatedAt: new Date() })

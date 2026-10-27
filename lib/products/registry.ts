@@ -76,6 +76,8 @@ export const FEATURE_PRODUCT: Record<string, ProductKey> = {
   contract_approval_workflow:    "contract_intelligence",
   contract_obligation_tracking:  "contract_intelligence",
   contract_metrics:              "contract_intelligence",
+  contract_reference_archive:    "contract_intelligence",
+  contract_large_documents:      "contract_intelligence",
 };
 
 // Platform features (product_key = null): webhook_system, api_keys,
@@ -122,6 +124,7 @@ export const PRODUCT_MODULES: Record<ProductKey, NavModule[]> = {
     { href: "/contracts/dashboard",  label: "Panel",         icon: "LayoutDashboard" },
     { href: "/cases",                label: "Casos",         icon: "ScrollText",      feature: "contract_ai_extraction" },
     { href: "/cases/history",        label: "Historial",     icon: "Clock",           feature: "contract_ai_extraction" },
+    { href: "/contracts/archive",     label: "Archivo",       icon: "FolderOpen",      feature: "contract_reference_archive" },
     { href: "/contracts/approvals",  label: "Aprobaciones",  icon: "ClipboardCheck",  feature: "contract_approval_workflow", roles: ["approver"] },
     { href: "/contracts/metrics",    label: "Métricas",      icon: "BarChart3",       feature: "contract_metrics" },
     { href: "/contracts/quality",    label: "Calidad",       icon: "BrainCircuit",    feature: "contract_ai_extraction", adminOnly: true },

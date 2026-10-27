@@ -1,9 +1,10 @@
 import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { historyDocuments } from "@/db/schema";
+import { contractLargeUploads, historyDocuments } from "@/db/schema";
 import { and, inArray, lt, or, eq, sql } from "drizzle-orm";
 import { PIPELINE_QUEUE } from "@/lib/queue";
+import { abortMultipartFile, deleteFile } from "@/lib/storage/minio";
 
 function cronAuth(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
@@ -50,7 +51,25 @@ async function handleGET(req: NextRequest) {
       ));
 
     const reaped = (result as unknown as { rowCount?: number }).rowCount ?? 0;
-    return NextResponse.json({ ok: true, reaped, thresholdMinutes: stuckMinutes });
+    // Multipart sessions are not documents. An interrupted browser upload must
+    // not retain 150 MB of unused parts in MinIO indefinitely.
+    const uploadCutoff = new Date(Date.now() - 24 * 60 * 60_000);
+    const staleUploads = await db.query.contractLargeUploads.findMany({ where: and(inArray(contractLargeUploads.status, ["uploading", "completed"]), lt(contractLargeUploads.createdAt, uploadCutoff)), limit: 50 });
+    let expiredUploads = 0;
+    for (const upload of staleUploads) {
+      const locked = await db.update(contractLargeUploads).set({ status: "expiring" }).where(and(eq(contractLargeUploads.id, upload.id), eq(contractLargeUploads.status, upload.status))).returning({ id: contractLargeUploads.id });
+      if (!locked.length) continue;
+      try {
+        if (upload.status === "uploading") await abortMultipartFile(upload.storageKey, upload.multipartId);
+        else await deleteFile(upload.storageKey);
+        await db.update(contractLargeUploads).set({ status: "expired" }).where(eq(contractLargeUploads.id, upload.id));
+        expiredUploads++;
+      } catch (error) {
+        await db.update(contractLargeUploads).set({ status: upload.status }).where(eq(contractLargeUploads.id, upload.id));
+        console.error("[cron/reap-stuck] upload cleanup failed", upload.id, error);
+      }
+    }
+    return NextResponse.json({ ok: true, reaped, expiredUploads, thresholdMinutes: stuckMinutes });
   } catch (err) {
     console.error("[cron/reap-stuck]", err);
     return NextResponse.json({ error: "Internal error" }, { status: 500 });

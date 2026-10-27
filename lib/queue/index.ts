@@ -2,9 +2,11 @@ import { PgBoss } from "pg-boss";
 import { runPipeline } from "@/lib/workflow/pipeline";
 import { getFileBuffer } from "@/lib/storage/minio";
 import { processContractCase } from "@/lib/contracts/pipeline";
+import { indexArchiveDocument } from "@/lib/contracts/archive";
 
 export const PIPELINE_QUEUE = "document-pipeline";
 export const CONTRACT_QUEUE = "contract-pipeline";
+export const ARCHIVE_QUEUE = "contract-archive";
 
 // Serializable job payload — NO Buffer (the file lives in MinIO, keyed by storageKey).
 export type PipelineJob = {
@@ -35,6 +37,7 @@ export async function getBoss(): Promise<PgBoss> {
     await b.start();
     await b.createQueue(PIPELINE_QUEUE);  // idempotent
     await b.createQueue(CONTRACT_QUEUE);  // idempotent
+    await b.createQueue(ARCHIVE_QUEUE);
     boss = b;
     return b;
   })();
@@ -46,7 +49,12 @@ export async function getBoss(): Promise<PgBoss> {
 
 export async function enqueueContractCase(caseId: string): Promise<string | null> {
   const b = await getBoss();
-  return b.send(CONTRACT_QUEUE, { caseId }, { retryLimit: 2, retryDelay: 30, retryBackoff: true, expireInSeconds: 20 * 60 });
+  return b.send(CONTRACT_QUEUE, { caseId }, { retryLimit: 2, retryDelay: 30, retryBackoff: true, expireInSeconds: 2 * 60 * 60 });
+}
+
+export async function enqueueArchiveDocument(documentId: string): Promise<string | null> {
+  const b = await getBoss();
+  return b.send(ARCHIVE_QUEUE, { documentId }, { retryLimit: 2, retryDelay: 30, retryBackoff: true, expireInSeconds: 2 * 60 * 60 });
 }
 
 // ── Enqueue ───────────────────────────────────────────────────────────
@@ -107,6 +115,10 @@ export async function startPipelineWorker(): Promise<void> {
     for (const job of jobs) {
       await processContractCase(job.data.caseId);
     }
+  });
+
+  await b.work<{ documentId: string }>(ARCHIVE_QUEUE, { localConcurrency: 1 }, async (jobs) => {
+    for (const job of jobs) await indexArchiveDocument(job.data.documentId);
   });
 
   console.log("[pg-boss] pipeline worker started");

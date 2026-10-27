@@ -51,7 +51,7 @@ async function handleGET(req: NextRequest) {
     return {
       ...flow,
       documentCount: nodes.filter((node) => node.kind === "intake").length,
-      validationCount: nodes.filter((node) => node.kind === "validate").length,
+      validationCount: nodes.filter((node) => node.kind === "validate" || node.kind === "reference_lookup").length,
     };
   });
   return NextResponse.json({ flows, maxFlows, count: flows.length });

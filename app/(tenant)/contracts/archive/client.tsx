@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowRight, Check, FileSearch, FileText, Loader2, Search, Upload, X } from "lucide-react";
+import { ArrowRight, Check, FileSearch, FileText, Loader2, Search, Trash2, Upload, X } from "lucide-react";
 import { uploadContractFile } from "@/lib/contracts/upload-client";
 
 type ArchiveDoc = { id: string; originalName: string; documentCode: string | null; documentType: string | null; title: string | null; status: string; pageCount: number | null; indexedPages: number; errorMessage: string | null; createdAt: string; references?: { total: number; missing: number; review: number } };
@@ -9,7 +9,7 @@ type ArchiveRef = { id: string; rawCode: string; pageNumber: number; context: st
 
 const STATUS: Record<string, string> = { queued: "En cola", processing: "Indexando", ready: "Listo", failed: "Error", missing: "Sin localizar", ambiguous: "Varias coincidencias", related: "Pertinente", unrelated: "No pertinente", review: "Revisar", confirmed: "Confirmada", rejected: "Descartada" };
 
-export function ArchiveClient() {
+export function ArchiveClient({ canRemove }: { canRemove: boolean }) {
   const [documents, setDocuments] = useState<ArchiveDoc[]>([]);
   const [loading, setLoading] = useState(true);
   const selectedRequest = useRef(0);
@@ -21,6 +21,8 @@ export function ArchiveClient() {
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState("");
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [confirmRemove, setConfirmRemove] = useState(false);
   const [code, setCode] = useState("");
   const [targetByRef, setTargetByRef] = useState<Record<string, string>>({});
   const [targetCodeByRef, setTargetCodeByRef] = useState<Record<string, string>>({});
@@ -104,6 +106,21 @@ export function ArchiveClient() {
     finally { setBusy(false); }
   }
 
+  async function removeSelected() {
+    if (!selectedId || !selected || !canRemove) return;
+    setBusy(true); setError(""); setNotice("");
+    try {
+      const response = await fetch(`/api/v1/contracts/archive/${selectedId}`, { method: "DELETE" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "No se pudo retirar el documento");
+      selectedRequest.current++;
+      setSelected(null); setSelectedId(null); setConfirmRemove(false);
+      await loadList();
+      setNotice("Documento retirado del Archivo. El caso original, si existe, conserva su historial.");
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "No se pudo retirar el documento"); }
+    finally { setBusy(false); }
+  }
+
   return <div className="flex-1 overflow-y-auto bg-background p-6">
     <div className="mx-auto max-w-6xl space-y-5">
       <header className="flex flex-wrap items-end justify-between gap-4">
@@ -122,6 +139,7 @@ export function ArchiveClient() {
         <p className="mt-2 text-[11px] text-muted-foreground">Los documentos quedan disponibles para futuras cartas; una referencia pendiente se enlaza al cargar su origen.</p>
       </section>
       {error && <p role="alert" className="rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-xs text-destructive">{error}</p>}
+      {notice && <p role="status" className="rounded-md border border-border bg-card px-3 py-2 text-xs text-foreground">{notice}</p>}
       <div className="grid min-h-[480px] gap-4 lg:grid-cols-[minmax(280px,0.85fr)_minmax(0,1.4fr)]">
         <section className="overflow-hidden rounded-xl border border-border bg-card">
           <div className="space-y-3 border-b border-border p-4">
@@ -131,12 +149,13 @@ export function ArchiveClient() {
             </div>
           </div>
           <div className="max-h-[640px] divide-y divide-border overflow-y-auto">{loading ? <p className="flex items-center justify-center gap-2 p-6 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Cargando archivo…</p> : documents.length === 0 ? <p className="p-6 text-center text-xs text-muted-foreground">Aún no hay documentos para esta búsqueda.</p> : documents.map((doc) =>
-            <button type="button" key={doc.id} onClick={() => { selectedRequest.current++; setSelected(null); setSelectedId(doc.id); }} className={`flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-secondary/50 ${selectedId === doc.id ? "bg-primary/5" : ""}`}>
+            <button type="button" key={doc.id} onClick={() => { selectedRequest.current++; setSelected(null); setSelectedId(doc.id); setConfirmRemove(false); setNotice(""); }} className={`flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-secondary/50 ${selectedId === doc.id ? "bg-primary/5" : ""}`}>
               <FileText className="mt-0.5 h-4 w-4 shrink-0 text-primary" /><span className="min-w-0 flex-1"><span className="block truncate text-xs font-semibold">{doc.documentCode || doc.originalName}</span><span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{doc.title || doc.originalName}</span><span className="mt-1 block text-[10px] text-muted-foreground">{STATUS[doc.status] || doc.status}{doc.pageCount ? ` · ${doc.indexedPages}/${doc.pageCount} páginas` : ""}{doc.references?.total ? ` · ${doc.references.total} referencias` : ""}</span></span><ArrowRight className="mt-1 h-3.5 w-3.5 text-muted-foreground" />
             </button>)}</div>
         </section>
         <section className="overflow-hidden rounded-xl border border-border bg-card">{!selected ? <div className="flex h-full min-h-[380px] flex-col items-center justify-center p-8 text-center"><FileSearch className="h-6 w-6 text-primary" /><p className="mt-3 text-xs font-semibold">Selecciona un documento</p><p className="mt-1 max-w-xs text-[11px] text-muted-foreground">Aquí verás sus referencias, el documento de origen y la evidencia del cotejo.</p></div> : <>
-          <div className="border-b border-border p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-[10px] uppercase tracking-wide text-muted-foreground">{selected.document.documentType || "Documento"} · {STATUS[selected.document.status]}</p><h2 className="mt-1 text-sm font-semibold">{selected.document.title || selected.document.originalName}</h2><p className="mt-1 text-[11px] text-muted-foreground">{selected.document.originalName}</p></div><a href={`/api/v1/contracts/archive/${selected.document.id}/file`} target="_blank" rel="noreferrer" className="rounded-md border border-border px-3 py-1.5 text-xs hover:bg-secondary">Ver original ↗</a></div>
+          <div className="border-b border-border p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-[10px] uppercase tracking-wide text-muted-foreground">{selected.document.documentType || "Documento"} · {STATUS[selected.document.status]}</p><h2 className="mt-1 text-sm font-semibold">{selected.document.title || selected.document.originalName}</h2><p className="mt-1 text-[11px] text-muted-foreground">{selected.document.originalName}</p></div><div className="flex flex-wrap items-center gap-2"><a href={`/api/v1/contracts/archive/${selected.document.id}/file`} target="_blank" rel="noreferrer" className="rounded-md border border-border px-3 py-1.5 text-xs hover:bg-secondary">Ver original ↗</a>{canRemove && <button type="button" disabled={busy || selected.document.status === "queued" || selected.document.status === "processing"} onClick={() => setConfirmRemove(true)} className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-destructive hover:bg-destructive/5 disabled:opacity-50"><Trash2 className="h-3.5 w-3.5" /> Quitar del Archivo</button>}</div></div>
+            {confirmRemove && <div role="group" aria-label="Confirmar retiro del Archivo" className="mt-3 rounded-lg border border-destructive/20 bg-destructive/5 p-3"><p className="text-xs font-medium">¿Quitar {selected.document.documentCode || selected.document.originalName} del Archivo?</p><p className="mt-1 text-xs leading-relaxed text-muted-foreground">Dejará de aparecer en búsquedas. Las referencias que lo citan se volverán a revisar; el historial de Casos no se elimina.</p><div className="mt-3 flex flex-wrap gap-2"><button type="button" disabled={busy} onClick={() => setConfirmRemove(false)} className="rounded-md border border-border bg-card px-3 py-1.5 text-xs disabled:opacity-50">Cancelar</button><button type="button" disabled={busy} onClick={removeSelected} className="rounded-md bg-destructive px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-50">{busy ? "Quitando…" : "Sí, quitar del Archivo"}</button></div></div>}
             <div className="mt-4 flex flex-wrap items-end gap-2"><label className="min-w-[220px] flex-1 text-[11px] text-muted-foreground">Código propio del documento<input value={code} onChange={(event) => setCode(event.target.value)} placeholder="Ej. CARTA-015-2026" className="mt-1 block w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-xs text-foreground" /></label><button type="button" disabled={busy || code === (selected.document.documentCode ?? "")} onClick={saveCode} className="rounded-md border border-border px-3 py-1.5 text-xs disabled:opacity-50">Guardar código</button></div>
             {selected.document.errorMessage && <p className="mt-2 text-xs text-destructive">{selected.document.errorMessage}</p>}
           </div>

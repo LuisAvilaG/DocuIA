@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, desc, eq, ilike, or } from "drizzle-orm";
+import { and, desc, eq, ilike, ne, or } from "drizzle-orm";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
 import { contractArchiveDocuments, contractArchiveReferences } from "@/db/schema";
@@ -22,7 +22,7 @@ async function handleGET(req: NextRequest) {
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 403 });
   const query = (req.nextUrl.searchParams.get("q") ?? "").trim().slice(0, 100);
   const status = (req.nextUrl.searchParams.get("status") ?? "").trim();
-  const where = and(eq(contractArchiveDocuments.organizationId, session.orgId),
+  const where = and(eq(contractArchiveDocuments.organizationId, session.orgId), ne(contractArchiveDocuments.status, "removed"),
     query ? or(ilike(contractArchiveDocuments.documentCode, `%${query}%`), ilike(contractArchiveDocuments.originalName, `%${query}%`), ilike(contractArchiveDocuments.title, `%${query}%`)) : undefined,
     ["queued", "processing", "ready", "failed"].includes(status) ? eq(contractArchiveDocuments.status, status) : undefined);
   const documents = await db.query.contractArchiveDocuments.findMany({ where, orderBy: [desc(contractArchiveDocuments.createdAt)], limit: 100 });

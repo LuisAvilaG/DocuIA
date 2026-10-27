@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { contractArchiveDocuments, contractArchiveReferences } from "@/db/schema";
 import type { ValidationResult, Severity } from "./validate";
@@ -6,7 +6,7 @@ import type { ValidationResult, Severity } from "./validate";
 export async function archiveValidationsForCase(input: { organizationId: string; caseDocumentIds: string[]; name: string; severity: Severity }): Promise<ValidationResult[]> {
   const results: ValidationResult[] = [];
   for (const caseDocumentId of input.caseDocumentIds) {
-    const archiveDoc = await db.query.contractArchiveDocuments.findFirst({ where: and(eq(contractArchiveDocuments.organizationId, input.organizationId), eq(contractArchiveDocuments.caseDocumentId, caseDocumentId)) });
+    const archiveDoc = await db.query.contractArchiveDocuments.findFirst({ where: and(eq(contractArchiveDocuments.organizationId, input.organizationId), eq(contractArchiveDocuments.caseDocumentId, caseDocumentId), ne(contractArchiveDocuments.status, "removed")) });
     if (!archiveDoc) continue;
     const refs = await db.query.contractArchiveReferences.findMany({ where: eq(contractArchiveReferences.sourceDocumentId, archiveDoc.id) });
     for (const ref of refs) {

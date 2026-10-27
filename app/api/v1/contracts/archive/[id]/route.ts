@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
@@ -8,12 +8,12 @@ import { withApiSecurity } from "@/lib/security/http";
 import { isProductActive } from "@/lib/products";
 import { isFeatureEnabled } from "@/lib/features";
 import { normalizeReferenceCode, detectReferences } from "@/lib/contracts/reference-codes";
-import { reconcileReference } from "@/lib/contracts/archive";
+import { reconcileReference, removeArchiveDocument } from "@/lib/contracts/archive";
 import { logAudit } from "@/lib/audit/log";
 import { syncArchiveCases } from "@/lib/contracts/archive-case-sync";
 
 async function getDocument(id: string, orgId: string) {
-  return db.query.contractArchiveDocuments.findFirst({ where: and(eq(contractArchiveDocuments.id, id), eq(contractArchiveDocuments.organizationId, orgId)) });
+  return db.query.contractArchiveDocuments.findFirst({ where: and(eq(contractArchiveDocuments.id, id), eq(contractArchiveDocuments.organizationId, orgId), ne(contractArchiveDocuments.status, "removed")) });
 }
 
 async function handleGET(_req: NextRequest, context: { params: Promise<{ id: string }> }) {
@@ -57,5 +57,19 @@ async function handlePATCH(req: NextRequest, context: { params: Promise<{ id: st
   return NextResponse.json({ ok: true });
 }
 
+async function handleDELETE(_req: NextRequest, context: { params: Promise<{ id: string }> }) {
+  const session = await getTenantSession({ area: "contracts", permission: "write" });
+  if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+  if (session.role !== "admin") return NextResponse.json({ error: "Solo administradores del cliente pueden retirar documentos" }, { status: 403 });
+  if (!await isProductActive(session.orgId, "contract_intelligence") || !await isFeatureEnabled(session.orgId, "contract_reference_archive")) return NextResponse.json({ error: "Producto no activo" }, { status: 403 });
+  const { id } = await context.params;
+  const result = await removeArchiveDocument(id, session.orgId);
+  if (result === "not_found") return NextResponse.json({ error: "Documento no encontrado" }, { status: 404 });
+  if (result === "processing") return NextResponse.json({ error: "Espera a que termine la indexación para retirar el documento" }, { status: 409 });
+  await logAudit({ orgId: session.orgId, userId: session.sub, userEmail: session.email, action: "contract.archive_removed", resourceType: "contract_archive_document", resourceId: id });
+  return NextResponse.json({ ok: true });
+}
+
 export const GET = withApiSecurity(handleGET);
 export const PATCH = withApiSecurity(handlePATCH);
+export const DELETE = withApiSecurity(handleDELETE);

@@ -61,7 +61,7 @@ async function handlePOST(req: NextRequest) {
 
     // Send invite email (logs to console if no RESEND_API_KEY)
     const org    = await db.query.organizations.findFirst({ where: eq(organizations.id, session.orgId) });
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
 
     await sendEmail({
       to:      normalized,

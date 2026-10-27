@@ -107,7 +107,7 @@ async function handlePOST(
       ? `$${Number(totalRow[0].total).toLocaleString("es-CO", { maximumFractionDigits: 0 })}`
       : "—";
 
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
     const html = buildExpenseSubmittedEmail({
       submitterName: report.submitter.fullName ?? report.submitter.email,
       purpose:       report.purpose,

@@ -45,7 +45,7 @@ async function handlePOST(req: NextRequest) {
         .set({ resetToken: tokenHash, resetTokenExpiresAt: expiresAt, updatedAt: new Date() })
         .where(eq(orgUsers.id, user.id));
 
-      const appUrl  = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+      const appUrl  = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
       const resetUrl = `${appUrl}/reset-password?token=${token}`;
 
       await sendEmail({

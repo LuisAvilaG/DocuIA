@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Loader2, Plus, Trash2, Copy, Pencil, Workflow, X, Power } from "lucide-react";
+import { Loader2, Plus, Trash2, Copy, Pencil, Workflow, X, Power, Download, Upload } from "lucide-react";
 import { referenceDemoGraph } from "@/lib/contracts/reference-demo";
 
 interface FlowRow { id: string; name: string; version: number; isActive: boolean; updatedAt: string }
@@ -16,6 +16,7 @@ export function ContractFlowsListClient() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<FlowRow | null>(null);
+  const importInput = useRef<HTMLInputElement>(null);
 
   async function load() {
     const response = await fetch("/api/v1/contracts/flow");
@@ -61,6 +62,40 @@ export function ContractFlowsListClient() {
     await load();
   }
 
+  async function exportFlow(f: FlowRow) {
+    setBusy(true); setErr(null);
+    try {
+      const response = await fetch(`/api/v1/contracts/flow/${f.id}/export`);
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error ?? "No se pudo exportar el flujo.");
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${f.name.replace(/[^a-zA-Z0-9._-]+/g, "-").slice(0, 80) || "flujo"}.docuia-flow.json`;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (cause) { setErr(cause instanceof Error ? cause.message : "No se pudo exportar el flujo."); }
+    finally { setBusy(false); }
+  }
+
+  async function importFlow(file: File) {
+    setBusy(true); setErr(null);
+    try {
+      const form = new FormData();
+      form.set("file", file);
+      const response = await fetch("/api/v1/contracts/flow/import", { method: "POST", body: form });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error ?? "No se pudo importar el flujo.");
+      router.push(`/contracts/flow/${data.id}`);
+    } catch (cause) { setErr(cause instanceof Error ? cause.message : "No se pudo importar el flujo."); }
+    finally { setBusy(false); if (importInput.current) importInput.current.value = ""; }
+  }
+
   async function remove(f: FlowRow) {
     setBusy(true); setErr(null);
     const res = await fetch(`/api/v1/contracts/flow/${f.id}`, { method: "DELETE" });
@@ -92,13 +127,20 @@ export function ContractFlowsListClient() {
           <div>
             <Link href="/cases" className="text-[11px] text-muted-foreground hover:text-foreground">← Casos</Link>
             <h1 className="text-base font-semibold tracking-[-0.01em] text-foreground mt-1">Flujos de contratos</h1>
-            <p className="text-xs text-muted-foreground mt-0.5">Activa únicamente los flujos listos para usarse. Los borradores no aparecen al crear un caso.</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Exporta un flujo para llevarlo a otro cliente. El archivo incluye sus plantillas Word y muestras visuales; al importarlo queda como borrador.</p>
           </div>
           <div className="flex flex-col items-end gap-1 shrink-0">
-            <button onClick={create} disabled={busy || atLimit} title={atLimit ? `Máximo ${maxFlows} flujos` : "Crear un flujo"}
-              className="inline-flex items-center gap-2 rounded-md bg-primary text-primary-foreground px-4 py-2 text-xs font-medium shadow-[0_1px_3px_oklch(0.48_0.15_182_/_0.3)] hover:bg-primary/90 disabled:opacity-50 transition-colors">
-              {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />} Nuevo flujo
-            </button>
+            <div className="flex items-center gap-2">
+              <input ref={importInput} type="file" accept=".json,.docuia-flow.json,application/json" className="sr-only" aria-label="Archivo de flujo para importar" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importFlow(file); }} />
+              <button type="button" onClick={() => importInput.current?.click()} disabled={busy || atLimit} title={atLimit ? `Máximo ${maxFlows} flujos` : "Importar un flujo exportado desde otra cuenta"}
+                className="inline-flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-xs font-medium text-foreground hover:bg-secondary disabled:opacity-50 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary">
+                <Upload className="w-3.5 h-3.5" /> Importar
+              </button>
+              <button onClick={create} disabled={busy || atLimit} title={atLimit ? `Máximo ${maxFlows} flujos` : "Crear un flujo"}
+                className="inline-flex items-center gap-2 rounded-md bg-primary text-primary-foreground px-4 py-2 text-xs font-medium shadow-[0_1px_3px_oklch(0.48_0.15_182_/_0.3)] hover:bg-primary/90 disabled:opacity-50 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary">
+                {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />} Nuevo flujo
+              </button>
+            </div>
             <span className="text-[10px] text-muted-foreground tabular-nums">{flows.length} / {maxFlows} flujos</span>
           </div>
         </div>
@@ -135,7 +177,8 @@ export function ContractFlowsListClient() {
                     <Power className="h-3 w-3" /> {f.isActive ? "Activo" : "Borrador"}
                   </button>
                   <Link href={`/contracts/flow/${f.id}`} className="inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1.5 text-[11px] font-medium text-foreground hover:bg-secondary transition-colors"><Pencil className="w-3 h-3" /> Editar</Link>
-                  <button onClick={() => duplicate(f)} disabled={busy || atLimit} title={atLimit ? `Máximo ${maxFlows} flujos` : "Duplicar"} className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary disabled:opacity-40 transition-colors"><Copy className="w-3.5 h-3.5" /></button>
+                  <button onClick={() => duplicate(f)} disabled={busy || atLimit} title={atLimit ? `Máximo ${maxFlows} flujos` : "Duplicar en esta cuenta"} aria-label={`Duplicar ${f.name} en esta cuenta`} className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary disabled:opacity-40 transition-colors focus-visible:outline-2 focus-visible:outline-primary"><Copy className="w-3.5 h-3.5" /></button>
+                  <button onClick={() => exportFlow(f)} disabled={busy} title="Exportar para usar en otra cuenta" aria-label={`Exportar ${f.name}`} className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary disabled:opacity-40 transition-colors focus-visible:outline-2 focus-visible:outline-primary"><Download className="w-3.5 h-3.5" /></button>
                   <button onClick={() => { setErr(null); setPendingDelete(f); }} disabled={busy} title="Eliminar" aria-label={`Eliminar ${f.name}`} className="p-1.5 rounded-md text-muted-foreground hover:text-destructive hover:bg-secondary transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>
                 </div>
               </div>

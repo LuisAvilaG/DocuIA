@@ -1,1001 +1,447 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { Input } from "@/components/ui/input";
+import { CheckCircle2, Circle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
-import {
-  CheckCircle2, CircleDot, Circle, Loader2,
-  ChevronRight, Building2, KeyRound, Code2,
-  Server, Zap, Globe, UserPlus, AlertTriangle,
-  Eye, EyeOff, Download, ExternalLink,
-  FileText, Receipt, ScrollText, Package,
-} from "lucide-react";
-import { PRODUCTS } from "@/lib/products/registry";
+import { Switch } from "@/components/ui/switch";
+import { Panel, PanelTitle, Kv, Main, SectionTitle, Pill, StickyActions, Chip, initials } from "@/components/admin/ui";
+import { Field, TextInput, PrefixedInput, Select, PasswordInput, ChoiceCards, TimezoneSelect, generatePassword, control } from "@/components/admin/form";
+import { ProductArt } from "@/components/admin/product-art";
+import { PRODUCTS, FEATURE_PRODUCT, type ProductKey } from "@/lib/products/registry";
+import { FEATURE_CATALOG } from "@/lib/features/catalog";
+import { TENANT_ROLE_LABELS } from "@/lib/auth/permissions";
 
-const PRODUCT_ICONS: Record<string, React.ElementType> = {
-  FileText, Receipt, ScrollText,
-};
-const NS_STEP_IDS = new Set(["sandbox", "scripts", "subs", "sync", "production"]);
+type Step = "products" | "org" | "features" | "erp" | "user" | "done";
+type Plan = "starter" | "growth" | "enterprise";
+const STEP_LABEL: Record<Exclude<Step, "done">, string> = { products: "Productos", org: "Organización", features: "Features", erp: "Conexión ERP", user: "Primer usuario" };
+const PLAN_RANK: Record<Plan, number> = { starter: 0, growth: 1, enterprise: 2 };
+const PLAN_LABEL: Record<Plan, string> = { starter: "Starter", growth: "Growth", enterprise: "Enterprise" };
+const SLUG = /^[a-z0-9](?:[a-z0-9-]{1,98}[a-z0-9])?$/;
+const EMPTY_CREDS = { accountId: "", consumerKey: "", consumerSecret: "", tokenId: "", tokenSecret: "" };
 
-// ── Types ────────────────────────────────────────────────────────────
+type CatalogFeature = (typeof FEATURE_CATALOG)[number];
 
-interface TBACreds {
-  accountId: string;
-  consumerKey: string;
-  consumerSecret: string;
-  tokenId: string;
-  tokenSecret: string;
+function slugify(s: string) { return s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""); }
+
+async function post(path: string, body: unknown) {
+  const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  return { ok: res.ok && data.ok !== false, data };
 }
 
-interface ScriptIds {
-  catalogScriptId: string;
-  catalogDeployId: string;
-  processScriptId: string;
-  processDeployId: string;
-}
-
-interface NSSubsidiary {
-  internal_id: string;
-  name: string;
-  country: string;
-  currency: string;
-  tax_id?: string;
-}
-
-// ── Step configuration ───────────────────────────────────────────────
-
-const STEPS = [
-  { id: "org",        label: "Organización",  icon: Building2 },
-  { id: "sandbox",    label: "Sandbox NS",    icon: KeyRound  },
-  { id: "scripts",    label: "Scripts",       icon: Code2     },
-  { id: "subs",       label: "Subsidiarias",  icon: Server    },
-  { id: "sync",       label: "Sync",          icon: Zap       },
-  { id: "production", label: "Producción",    icon: Globe     },
-  { id: "users",      label: "Usuarios",      icon: UserPlus  },
-];
-
-// ── Helpers ──────────────────────────────────────────────────────────
-
-const EMPTY_CREDS: TBACreds = {
-  accountId: "", consumerKey: "", consumerSecret: "", tokenId: "", tokenSecret: "",
-};
-
-const EMPTY_SCRIPTS: ScriptIds = {
-  catalogScriptId: "", catalogDeployId: "", processScriptId: "", processDeployId: "",
-};
-
-function slugify(s: string) {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-}
-
-async function apiFetch(path: string, body: unknown) {
-  const res = await fetch(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return res.json();
-}
-
-// ── Sub-components ───────────────────────────────────────────────────
-
-function CredFields({
-  value,
-  onChange,
-  disabled,
-}: {
-  value: TBACreds;
-  onChange: (v: TBACreds) => void;
-  disabled?: boolean;
-}) {
-  const [visible, setVisible] = useState(false);
-
-  const set = (k: keyof TBACreds) => (e: React.ChangeEvent<HTMLInputElement>) =>
-    onChange({ ...value, [k]: e.target.value });
-
-  return (
-    <div className="space-y-3">
-      <Field label="Account ID" placeholder="9051643 or 9051643_SB1">
-        <Input value={value.accountId} onChange={set("accountId")} disabled={disabled} />
-      </Field>
-      <Field label="Consumer Key">
-        <Input value={value.consumerKey} onChange={set("consumerKey")} disabled={disabled} />
-      </Field>
-      <Field label="Consumer Secret">
-        <SecretInput value={value.consumerSecret} onChange={set("consumerSecret")} disabled={disabled} visible={visible} />
-      </Field>
-      <Field label="Token ID">
-        <Input value={value.tokenId} onChange={set("tokenId")} disabled={disabled} />
-      </Field>
-      <Field label="Token Secret">
-        <SecretInput value={value.tokenSecret} onChange={set("tokenSecret")} disabled={disabled} visible={visible} />
-      </Field>
-      <button
-        type="button"
-        onClick={() => setVisible((v) => !v)}
-        className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-      >
-        {visible ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
-        {visible ? "Ocultar secrets" : "Mostrar secrets"}
-      </button>
-    </div>
-  );
-}
-
-function SecretInput({
-  value, onChange, disabled, visible,
-}: {
-  value: string;
-  onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  disabled?: boolean;
-  visible: boolean;
-}) {
-  return (
-    <Input
-      type={visible ? "text" : "password"}
-      value={value}
-      onChange={onChange}
-      disabled={disabled}
-      autoComplete="off"
-    />
-  );
-}
-
-function Field({ label, children, placeholder }: { label: string; children: React.ReactNode; placeholder?: string }) {
-  void placeholder;
-  return (
-    <div className="space-y-1">
-      <Label className="text-xs text-muted-foreground">{label}</Label>
-      {children}
-    </div>
-  );
-}
-
-function StatusBadge({ ok, message }: { ok: boolean; message: string }) {
-  return (
-    <div className={cn(
-      "flex items-center gap-2 px-3 py-2 rounded-lg text-xs border",
-      ok
-        ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
-        : "bg-destructive/10 border-destructive/20 text-destructive",
-    )}>
-      {ok ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> : <AlertTriangle className="w-3.5 h-3.5 shrink-0" />}
-      {message}
-    </div>
-  );
-}
-
-function SectionCard({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="bg-card border border-border rounded-xl p-5 space-y-4">
-      <h3 className="text-sm font-medium text-foreground">{title}</h3>
-      {children}
-    </div>
-  );
-}
-
-// ── Main Wizard ──────────────────────────────────────────────────────
-
-export function ClientWizard() {
+/** Product-first onboarding: products → organization → features → ERP (only when needed, skippable) → first user. */
+export function ClientWizard({ playbooks }: { playbooks: Array<{ key: string; name: string }> }) {
   const router = useRouter();
-  const [phase, setPhase] = useState<"select" | "config">("select");
-  const [selectedProducts, setSelectedProducts] = useState<Set<string>>(new Set(["ap_automation"]));
-  const [contractMaxFlows, setContractMaxFlows] = useState(3);
-  const [step, setStep] = useState(0);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [step, setStep] = useState<Step>("products");
+  const [selected, setSelected] = useState<Set<ProductKey>>(new Set(["ap_automation"]));
+  const [maxFlows, setMaxFlows] = useState(3);
+  const [playbook, setPlaybook] = useState(playbooks[0]?.key ?? "");
+  const [org, setOrg] = useState({ name: "", slug: "", slugTouched: false, timezone: "America/Mexico_City", billingEmail: "", planId: "starter" as Plan });
+  const [slugError, setSlugError] = useState("");
+  const [grants, setGrants] = useState<Record<string, boolean>>(() => Object.fromEntries(FEATURE_CATALOG.map((f) => [f.id, f.defaultEnabled])));
+  const [orgId, setOrgId] = useState<string | null>(null);
+  const [creds, setCreds] = useState(EMPTY_CREDS);
+  const [scripts, setScripts] = useState({ catalogScriptId: "", catalogDeployId: "", processScriptId: "", processDeployId: "" });
+  const [tested, setTested] = useState(false);
+  const [probed, setProbed] = useState<string | null>(null);
+  const [nsSubs, setNsSubs] = useState<Array<{ internal_id: string; name: string; currency: string; country: string; tax_id?: string }> | null>(null);
+  const [chosenSubs, setChosenSubs] = useState<Set<string>>(new Set());
+  const [user, setUser] = useState({ email: "", fullName: "", password: "" });
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState("");
 
-  // Does any selected product need an external integration (NetSuite)?
-  const needsNS = [...selectedProducts].some(
-    (k) => PRODUCTS.find((p) => p.key === k)?.requiresIntegration,
-  );
-  const USERS_STEP = STEPS.findIndex((s) => s.id === "users");
-  const visibleSteps = STEPS
-    .map((s, i) => ({ ...s, index: i }))
-    .filter((s) => needsNS || !NS_STEP_IDS.has(s.id));
+  const needsErp = [...selected].some((k) => PRODUCTS.find((p) => p.key === k)?.requiresIntegration);
+  const steps: Array<Exclude<Step, "done">> = needsErp ? ["products", "org", "features", "erp", "user"] : ["products", "org", "features", "user"];
+  const stepIndex = step === "done" ? steps.length : steps.indexOf(step);
 
-  const toggleProduct = (key: string) =>
-    setSelectedProducts((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key); else next.add(key);
-      return next;
-    });
-
-  // Step 0 — org
-  const [orgName, setOrgName]         = useState("");
-  const [orgSlug, setOrgSlug]         = useState("");
-  const [orgTimezone, setOrgTimezone] = useState("America/Mexico_City");
-  const [orgEmail, setOrgEmail]       = useState("");
-  const [orgId, setOrgId]             = useState<string | null>(null);
-
-  // Step 1 — sandbox credentials
-  const [sbCreds, setSbCreds] = useState<TBACreds>(EMPTY_CREDS);
-  const [sbTested, setSbTested] = useState(false);
-  const [sbSaved, setSbSaved]   = useState(false);
-
-  // Step 2 — scripts
-  const [scripts, setScripts]     = useState<ScriptIds>(EMPTY_SCRIPTS);
-  const [scriptProbed, setScriptProbed] = useState(false);
-  const [scriptVersion, setScriptVersion] = useState<string | null>(null);
-
-  // Step 3 — subsidiaries
-  const [nsSubsidiaries, setNsSubsidiaries]         = useState<NSSubsidiary[]>([]);
-  const [selectedSubs, setSelectedSubs]             = useState<Set<string>>(new Set());
-  const [nsIdToDbId, setNsIdToDbId]                 = useState<Record<string, string>>({}); // nsSubsidiaryId → DB id
-  const [subsidsFetched, setSubsidsFetched]         = useState(false);
-  const [subsidsSaved, setSubsidsSaved]             = useState(false);
-
-  // Step 4 — sync
-  const [syncStatus, setSyncStatus] = useState<"idle" | "running" | "done" | "error">("idle");
-  const [syncSummary, setSyncSummary] = useState<Record<string, number> | null>(null);
-
-  // Step 5 — production credentials
-  const [prodCreds, setProdCreds]   = useState<TBACreds>(EMPTY_CREDS);
-  const [prodTested, setProdTested] = useState(false);
-  const [prodSaved, setProdSaved]   = useState(false);
-  const [skipProd, setSkipProd]     = useState(false);
-
-  // Step 6 — first user
-  const [userEmail, setUserEmail]   = useState("");
-  const [userName, setUserName]     = useState("");
-  const [userPassword, setUserPassword] = useState("");
-  const [userCreated, setUserCreated]   = useState(false);
-
-  const run = useCallback(async (fn: () => Promise<void>) => {
-    setError(null);
-    setLoading(true);
-    try {
-      await fn();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
+  // Features grouped by product; platform-wide ones (no product) go last.
+  const groups = useMemo(() => {
+    const byProduct = new Map<string | null, CatalogFeature[]>();
+    for (const f of FEATURE_CATALOG) {
+      const p = FEATURE_PRODUCT[f.id] ?? null;
+      byProduct.set(p, [...(byProduct.get(p) ?? []), f]);
     }
+    return byProduct;
   }, []);
+  const featuresByProduct = useMemo(() => {
+    const m: Record<string, { on: string[]; off: string[] }> = {};
+    for (const [p, list] of groups) if (p) m[p] = { on: list.filter((f) => f.defaultEnabled).map((f) => f.name), off: list.filter((f) => !f.defaultEnabled).map((f) => f.name) };
+    return m;
+  }, [groups]);
+  const abovePlan = (f: CatalogFeature) => PLAN_RANK[f.planRequired as Plan] > PLAN_RANK[org.planId];
+  const relevant = useMemo(() => FEATURE_CATALOG.filter((f) => { const p = FEATURE_PRODUCT[f.id]; return !p || selected.has(p); }), [selected]);
+  const onCount = relevant.filter((f) => grants[f.id] && !abovePlan(f)).length;
+  const offCount = relevant.length - onCount;
 
-  // ── Step handlers ─────────────────────────────────────────────────
-
-  const handleCreateOrg = () => run(async () => {
-    if (!orgName || !orgSlug) throw new Error("Nombre y slug son requeridos");
-    if (selectedProducts.size === 0) throw new Error("Selecciona al menos un producto");
-    const data = await apiFetch("/api/admin/clients", {
-      name: orgName, slug: orgSlug, timezone: orgTimezone, billingEmail: orgEmail || undefined,
-      products: [...selectedProducts],
-      contractMaxFlows: selectedProducts.has("contract_intelligence") ? contractMaxFlows : undefined,
-    });
-    if (!data.ok) throw new Error(data.error ?? "Error al crear organización");
-    setOrgId(data.organizationId);
-    // Skip the NetSuite steps entirely when no selected product needs integration.
-    setStep(needsNS ? 1 : USERS_STEP);
-  });
-
-  const handleTestSandbox = () => run(async () => {
-    if (!sbCreds.accountId || !sbCreds.consumerKey) throw new Error("Completa las credenciales TBA");
-    const data = await apiFetch("/api/admin/ns/test-connection", sbCreds);
-    if (!data.ok) throw new Error(data.error ?? "Conexión fallida");
-    setSbTested(true);
-  });
-
-  const handleSaveSandbox = () => run(async () => {
-    if (!sbTested) throw new Error("Prueba la conexión primero");
-    const data = await apiFetch(`/api/admin/clients/${orgId}/connection`, {
-      environment: "sandbox",
-      ...sbCreds,
-      connectionStatus: "connected",
-    });
-    if (!data.ok) throw new Error(data.error ?? "Error al guardar");
-    setSbSaved(true);
-    setStep(2);
-  });
-
-  const handleProbeScripts = () => run(async () => {
-    if (!scripts.catalogScriptId || !scripts.catalogDeployId) throw new Error("Ingresa los IDs del script de catálogo");
-    const data = await apiFetch("/api/admin/ns/probe-scripts", {
-      ...sbCreds,
-      catalogScriptId: scripts.catalogScriptId,
-      catalogDeployId: scripts.catalogDeployId,
-    });
-    if (!data.ok) throw new Error(data.error ?? "Script no responde");
-    setScriptProbed(true);
-    setScriptVersion(data.version ?? null);
-  });
-
-  const handleSaveScripts = () => run(async () => {
-    if (!scriptProbed) throw new Error("Verifica los scripts primero");
-    const data = await apiFetch(`/api/admin/clients/${orgId}/connection`, {
-      environment: "sandbox",
-      ...sbCreds,
-      ...scripts,
-      scriptsInstalled: true,
-      installMethod: "manual",
-      connectionStatus: "connected",
-    });
-    if (!data.ok) throw new Error(data.error ?? "Error al guardar scripts");
-    setStep(3);
-  });
-
-  const handleSkipScripts = () => run(async () => {
-    // If IDs were entered, save them unverified; otherwise just advance
-    if (scripts.catalogScriptId && scripts.catalogDeployId) {
-      const data = await apiFetch(`/api/admin/clients/${orgId}/connection`, {
-        environment: "sandbox",
-        ...sbCreds,
-        ...scripts,
-        scriptsInstalled: false,
-        connectionStatus: "connected",
-      });
-      if (!data.ok) throw new Error(data.error ?? "Error al guardar");
-    }
-    setStep(3);
-  });
-
-  const handleFetchSubsidiaries = () => run(async () => {
-    if (!scripts.catalogScriptId) throw new Error("Scripts no configurados");
-    const data = await apiFetch("/api/admin/ns/subsidiaries", {
-      ...sbCreds,
-      catalogScriptId: scripts.catalogScriptId,
-      catalogDeployId: scripts.catalogDeployId,
-    });
-    if (!data.ok) throw new Error(data.error ?? "No se pudieron obtener las subsidiarias");
-    setNsSubsidiaries(data.subsidiaries ?? []);
-    setSelectedSubs(new Set((data.subsidiaries as NSSubsidiary[]).map((s) => s.internal_id)));
-    setSubsidsFetched(true);
-  });
-
-  const handleSaveSubsidiaries = () => run(async () => {
-    if (!selectedSubs.size) throw new Error("Selecciona al menos una subsidiaria");
-    const toSave = nsSubsidiaries
-      .filter((s) => selectedSubs.has(s.internal_id))
-      .map((s) => ({ nsSubsidiaryId: s.internal_id, name: s.name, currency: s.currency, taxId: s.tax_id }));
-    const data = await apiFetch(`/api/admin/clients/${orgId}/subsidiaries`, { subsidiaries: toSave });
-    if (!data.ok) throw new Error(data.error ?? "Error al guardar subsidiarias");
-
-    // Build nsSubsidiaryId → dbId map for use in sync step
-    const subsRes = await fetch(`/api/admin/clients/${orgId}/subsidiaries`);
-    const subsData = await subsRes.json();
-    const map: Record<string, string> = {};
-    for (const s of (subsData.subsidiaries ?? []) as { id: string; nsSubsidiaryId: string }[]) {
-      map[s.nsSubsidiaryId] = s.id;
-    }
-    setNsIdToDbId(map);
-
-    setSubsidsSaved(true);
-    setStep(4);
-  });
-
-  const handleSync = async (subsidiaryDbId: string) => {
-    setSyncStatus("running");
-    setSyncSummary(null);
-    try {
-      const data = await apiFetch(`/api/admin/clients/${orgId}/sync`, {
-        subsidiaryId: subsidiaryDbId,
-        types: ["items", "vendors", "locations"],
-      });
-      if (!data.ok) throw new Error(data.error ?? "Sync fallido");
-      setSyncSummary(data.summary ?? {});
-      setSyncStatus("done");
-    } catch (e) {
-      setSyncStatus("error");
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  };
-
-  const handleTestProd = () => run(async () => {
-    if (!prodCreds.accountId) throw new Error("Completa las credenciales TBA de producción");
-    const data = await apiFetch("/api/admin/ns/test-connection", prodCreds);
-    if (!data.ok) throw new Error(data.error ?? "Conexión fallida");
-    setProdTested(true);
-  });
-
-  const handleSaveProd = () => run(async () => {
-    if (!prodTested) throw new Error("Prueba la conexión primero");
-    const data = await apiFetch(`/api/admin/clients/${orgId}/connection`, {
-      environment: "production",
-      ...prodCreds,
-      connectionStatus: "connected",
-    });
-    if (!data.ok) throw new Error(data.error ?? "Error al guardar");
-    setProdSaved(true);
-    setStep(6);
-  });
-
-  const handleCreateUser = () => run(async () => {
-    if (!userEmail || !userPassword) throw new Error("Email y contraseña son requeridos");
-    const data = await apiFetch(`/api/admin/clients/${orgId}/users`, {
-      email: userEmail, fullName: userName || undefined, role: "admin", password: userPassword,
-    });
-    if (!data.ok) throw new Error(data.error ?? "Error al crear usuario");
-    setUserCreated(true);
-  });
-
-  const handleFinish = () => {
-    router.push(`/admin/clients/${orgId}`);
-  };
-
-  // ── Render ────────────────────────────────────────────────────────
-
-  // ── Phase: product selection (first step) ─────────────────────────
-  if (phase === "select") {
-    return (
-      <div className="flex-1 flex flex-col">
-        <div className="h-14 border-b border-border px-6 flex items-center gap-4 shrink-0">
-          <button
-            onClick={() => router.push("/admin/clients")}
-            className="text-muted-foreground hover:text-foreground transition-colors text-xs"
-          >
-            ← Clientes
-          </button>
-          <div className="w-px h-4 bg-border" />
-          <h1 className="text-sm font-semibold text-foreground">Nueva organización · Productos</h1>
-        </div>
-        <div className="flex-1 overflow-y-auto p-6">
-          <div className="max-w-2xl mx-auto space-y-4">
-            <div>
-              <h2 className="text-base font-semibold text-foreground">¿Qué productos va a usar este cliente?</h2>
-              <p className="text-xs text-muted-foreground mt-1">Puedes seleccionar uno o varios. Luego configurarás cada uno.</p>
-            </div>
-            <div className="grid sm:grid-cols-2 gap-3">
-              {PRODUCTS.map((p) => {
-                const Icon = PRODUCT_ICONS[p.icon] ?? Package;
-                const active = selectedProducts.has(p.key);
-                return (
-                  <button
-                    key={p.key}
-                    type="button"
-                    onClick={() => toggleProduct(p.key)}
-                    className={cn(
-                      "text-left p-4 rounded-xl border transition-all",
-                      active
-                        ? "border-primary bg-primary/5 ring-1 ring-primary/30"
-                        : "border-border bg-card hover:border-border/80",
-                    )}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className={cn("w-9 h-9 rounded-lg flex items-center justify-center", active ? "bg-primary/15 text-primary" : "bg-secondary text-muted-foreground")}>
-                        <Icon className="w-4 h-4" />
-                      </div>
-                      {active
-                        ? <CheckCircle2 className="w-4 h-4 text-primary shrink-0" />
-                        : <Circle className="w-4 h-4 text-muted-foreground/40 shrink-0" />}
-                    </div>
-                    <p className="text-sm font-medium text-foreground mt-3">{p.name}</p>
-                    <p className="text-xs text-muted-foreground mt-1">{p.description}</p>
-                    {p.requiresIntegration && (
-                      <span className="inline-block mt-2 text-[10px] font-medium px-1.5 py-0.5 rounded bg-secondary text-muted-foreground">
-                        Requiere NetSuite
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-            {selectedProducts.has("contract_intelligence") && (
-              <div className="rounded-xl border border-border bg-card p-4">
-                <label className="block space-y-1">
-                  <span className="text-xs font-medium text-foreground">Máximo de flujos (Contract Intelligence)</span>
-                  <p className="text-[11px] text-muted-foreground">Cuántos flujos distintos podrá crear este cliente en el editor de flujos.</p>
-                  <input type="number" min={1} max={50} value={contractMaxFlows}
-                    onChange={(e) => setContractMaxFlows(Math.max(1, Number(e.target.value) || 1))}
-                    className="w-28 bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm mt-1" />
-                </label>
-              </div>
-            )}
-            <div className="flex justify-end pt-2">
-              <Button onClick={() => setPhase("config")} disabled={selectedProducts.size === 0}>
-                Continuar <ChevronRight className="w-3.5 h-3.5" />
-              </Button>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
+  async function run(key: string, fn: () => Promise<void>) {
+    setBusy(key); setError("");
+    try { await fn(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(null); }
   }
 
+  const checkOrg = () => run("slug", async () => {
+    setSlugError("");
+    if (!SLUG.test(org.slug)) { setSlugError("Solo minúsculas, números y guiones; mínimo 3 caracteres."); return; }
+    const res = await fetch("/api/admin/clients?deleted=1").then((r) => r.json()).catch(() => ({ organizations: [] }));
+    if ((res.organizations ?? []).some((o: { slug: string }) => o.slug === org.slug)) { setSlugError("Ese identificador ya está en uso."); return; }
+    setStep("features");
+  });
+  const createOrg = () => run("org", async () => {
+    const features = Object.fromEntries(relevant.filter((f) => !abovePlan(f)).map((f) => [f.id, grants[f.id]]));
+    const { ok, data } = await post("/api/admin/clients", {
+      name: org.name.trim(), slug: org.slug.trim(), timezone: org.timezone.trim(), billingEmail: org.billingEmail.trim() || null, planId: org.planId,
+      products: [...selected], contractMaxFlows: selected.has("contract_intelligence") ? maxFlows : undefined, contractPlaybook: selected.has("contract_intelligence") ? playbook : undefined,
+      features,
+    });
+    if (!ok) throw new Error(data.error ?? "No se pudo crear la organización");
+    setOrgId(data.organizationId);
+    setStep(needsErp ? "erp" : "user");
+  });
+  const testCreds = () => run("test", async () => {
+    const { ok, data } = await post("/api/admin/ns/test-connection", creds);
+    if (!ok) throw new Error(data.error ?? "La conexión falló");
+    setTested(true);
+  });
+  const probeScripts = () => run("probe", async () => {
+    const { ok, data } = await post("/api/admin/ns/probe-scripts", { ...creds, catalogScriptId: scripts.catalogScriptId, catalogDeployId: scripts.catalogDeployId });
+    if (!ok) throw new Error(data.error ?? "El script de catálogo no responde");
+    setProbed(data.version ?? "ok");
+  });
+  const fetchSubs = () => run("subs", async () => {
+    const { ok, data } = await post("/api/admin/ns/subsidiaries", { ...creds, catalogScriptId: scripts.catalogScriptId, catalogDeployId: scripts.catalogDeployId });
+    if (!ok) throw new Error(data.error ?? "No se pudieron leer las subsidiarias");
+    setNsSubs(data.subsidiaries ?? []);
+    setChosenSubs(new Set((data.subsidiaries ?? []).map((s: { internal_id: string }) => s.internal_id)));
+  });
+  const saveErp = () => run("save-erp", async () => {
+    const { ok, data } = await post(`/api/admin/clients/${orgId}/connection`, { environment: "sandbox", ...creds, ...scripts, test: true, scriptsInstalled: Boolean(probed), installMethod: "manual" });
+    if (!ok) throw new Error(data.error ?? "No se pudo guardar la conexión");
+    if (nsSubs && chosenSubs.size) {
+      const list = nsSubs.filter((s) => chosenSubs.has(s.internal_id)).map((s) => ({ nsSubsidiaryId: s.internal_id, name: s.name, currency: s.currency, taxId: s.tax_id }));
+      const r = await post(`/api/admin/clients/${orgId}/subsidiaries`, { subsidiaries: list });
+      if (!r.ok) throw new Error(r.data.error ?? "No se pudieron guardar las subsidiarias");
+      // Catalog sync runs in the background; the client panel shows the result.
+      const subsRes = await fetch(`/api/admin/clients/${orgId}/subsidiaries`).then((x) => x.json()).catch(() => ({ subsidiaries: [] }));
+      for (const s of (subsRes.subsidiaries ?? []) as Array<{ id: string }>) void fetch(`/api/admin/clients/${orgId}/sync`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ subsidiaryId: s.id }) }).catch(() => {});
+    }
+    setStep("user");
+  });
+  const createUser = () => run("user", async () => {
+    const { ok, data } = await post(`/api/admin/clients/${orgId}/users`, { email: user.email.trim(), fullName: user.fullName.trim() || undefined, role: "admin", password: user.password });
+    if (!ok) throw new Error(data.error ?? "No se pudo crear el usuario");
+    setStep("done");
+  });
+
+  const orgValid = org.name.trim().length >= 2 && SLUG.test(org.slug);
+  const field = control;
+
   return (
-    <div className="flex-1 flex flex-col">
-      {/* Header */}
-      <div className="h-14 border-b border-border px-6 flex items-center gap-4 shrink-0">
-        <button
-          onClick={() => setPhase("select")}
-          className="text-muted-foreground hover:text-foreground transition-colors text-xs"
-        >
-          ← Productos
-        </button>
-        <div className="w-px h-4 bg-border" />
-        <h1 className="text-sm font-semibold text-foreground">Nueva organización</h1>
-      </div>
-
-      {/* Step indicators */}
-      <div className="border-b border-border px-6 py-3 flex items-center gap-1 overflow-x-auto shrink-0">
-        {/* Productos: ya elegidos en la fase previa */}
-        <div className="flex items-center gap-1 shrink-0">
-          <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-emerald-400">
-            <CheckCircle2 className="w-3.5 h-3.5" />
-            <Package className="w-3 h-3" />
-            Productos
-          </div>
-          <ChevronRight className="w-3 h-3 text-muted-foreground/30 shrink-0" />
+    <>
+      <Panel>
+        <PanelTitle
+          eyebrow={<Link href={orgId ? `/admin/clients/${orgId}` : "/admin/clients"} className="hover:text-foreground">{orgId ? "← Salir del alta" : "← Cancelar alta"}</Link>}
+          avatar={<div className={cn("w-14 h-14 rounded-2xl flex items-center justify-center text-[22px] font-bold", org.name.trim() ? "" : "border-[1.5px] border-dashed border-border text-muted-foreground")} style={org.name.trim() ? { backgroundColor: "oklch(0.22 0.10 240)", color: "oklch(0.65 0.14 182)" } : undefined}>{org.name.trim() ? initials(org.name) : "?"}</div>}
+          title={org.name.trim() || "Nueva organización"}
+          subtitle={step === "done" ? "Alta completa" : `${orgId ? "Creada · " : ""}paso ${stepIndex + 1} de ${steps.length}`}
+        />
+        <ol className="flex flex-col">
+          {steps.map((s, i) => {
+            const done = i < stepIndex;
+            const on = s === step;
+            return (
+              <li key={s} className={cn("flex items-center gap-3 py-2 text-[13px]", on ? "font-medium" : !done && "text-muted-foreground")}>
+                <span className={cn("w-[22px] h-[22px] rounded-full inline-flex items-center justify-center text-[11px] font-semibold", done ? "bg-success/10 text-success" : on ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground")}>{done ? "✓" : i + 1}</span>
+                {STEP_LABEL[s]}{s === "erp" && <span className="ml-auto text-[11px] text-muted-foreground">omitible</span>}
+              </li>
+            );
+          })}
+        </ol>
+        <div>
+          <Kv label="Productos">{[...selected].map((k) => PRODUCTS.find((p) => p.key === k)?.name).join(" · ") || "ninguno"}</Kv>
+          <Kv label="Features al inicio">{onCount} activas · {offCount} disponibles</Kv>
+          <Kv label="Plan">{PLAN_LABEL[org.planId]} · trial de 30 días</Kv>
+          <Kv label="Conexión ERP">{needsErp ? (step === "user" || step === "done" ? (tested ? "Sandbox probado" : "Pendiente, desde el expediente") : `Necesaria (paso ${steps.indexOf("erp") + 1})`) : "No requerida"}</Kv>
         </div>
-        {visibleSteps.map(({ id, label, icon: Icon, index }, vi) => {
-          const state = index < step ? "done" : index === step ? "active" : "pending";
-          return (
-            <div key={id} className="flex items-center gap-1 shrink-0">
-              <div className={cn(
-                "flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium",
-                state === "done"    && "text-emerald-400",
-                state === "active"  && "bg-primary/15 text-primary",
-                state === "pending" && "text-muted-foreground/50",
-              )}>
-                {state === "done"    ? <CheckCircle2 className="w-3.5 h-3.5" /> :
-                 state === "active"  ? <CircleDot className="w-3.5 h-3.5" /> :
-                                       <Circle className="w-3.5 h-3.5" />}
-                <Icon className="w-3 h-3" />
-                {label}
-              </div>
-              {vi < visibleSteps.length - 1 && (
-                <ChevronRight className="w-3 h-3 text-muted-foreground/30 shrink-0" />
-              )}
-            </div>
-          );
-        })}
-      </div>
+        <p className="mt-auto text-xs text-muted-foreground leading-relaxed">
+          {step === "erp" ? "Si omites este paso, el cliente aparece con \"ERP pendiente\" hasta completarlo desde su expediente." : step === "features" ? "Lo que dejes apagado queda disponible para activarlo después desde el expediente." : "Las features se activan o apagan después por cliente. Las de plataforma no dependen del producto."}
+        </p>
+      </Panel>
 
-      {/* Step content */}
-      <div className="flex-1 overflow-y-auto p-6">
-        <div className="max-w-xl mx-auto space-y-4">
+      <Main width="max-w-[1100px]">
+        {error && <p className="text-sm text-destructive -mb-6">{error}</p>}
 
-          {/* Error banner */}
-          {error && (
-            <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-xs">
-              <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-              {error}
-            </div>
-          )}
-
-          {/* ── Step 0: Organization ─────────────────────────────────── */}
-          {step === 0 && (
-            <SectionCard title="Crear organización">
-              <Field label="Nombre de la empresa">
-                <Input
-                  value={orgName}
-                  onChange={(e) => {
-                    setOrgName(e.target.value);
-                    setOrgSlug(slugify(e.target.value));
-                  }}
-                  placeholder="Acme Corp"
-                />
-              </Field>
-              <Field label="Slug (identificador único)">
-                <Input
-                  value={orgSlug}
-                  onChange={(e) => setOrgSlug(slugify(e.target.value))}
-                  placeholder="acme-corp"
-                />
-              </Field>
-              <Field label="Zona horaria">
-                <Input
-                  value={orgTimezone}
-                  onChange={(e) => setOrgTimezone(e.target.value)}
-                  placeholder="America/Mexico_City"
-                />
-              </Field>
-              <Field label="Email de facturación (opcional)">
-                <Input
-                  type="email"
-                  value={orgEmail}
-                  onChange={(e) => setOrgEmail(e.target.value)}
-                  placeholder="billing@acme.com"
-                />
-              </Field>
-              <Button onClick={handleCreateOrg} disabled={loading || !orgName}>
-                {loading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                Crear organización
-              </Button>
-            </SectionCard>
-          )}
-
-          {/* ── Step 1: Sandbox credentials ──────────────────────────── */}
-          {step === 1 && (
-            <>
-              <SectionCard title="Credenciales NetSuite — Sandbox">
-                <p className="text-xs text-muted-foreground">
-                  El Account ID para sandbox generalmente termina en <code className="bg-secondary px-1 rounded">_SB1</code> (ej. <code className="bg-secondary px-1 rounded">9051643_SB1</code>).
-                </p>
-                <CredFields value={sbCreds} onChange={setSbCreds} disabled={sbSaved} />
-                <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    onClick={handleTestSandbox}
-                    disabled={loading || sbSaved}
-                    size="sm"
-                  >
-                    {loading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                    Probar conexión
-                  </Button>
-                  <Button
-                    onClick={handleSaveSandbox}
-                    disabled={loading || !sbTested || sbSaved}
-                    size="sm"
-                  >
-                    {loading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                    Guardar y continuar
-                  </Button>
-                </div>
-                {sbTested && !sbSaved && <StatusBadge ok={true} message="Conexión exitosa — credenciales verificadas" />}
-                {sbSaved && <StatusBadge ok={true} message="Credenciales guardadas" />}
-              </SectionCard>
-            </>
-          )}
-
-          {/* ── Step 2: Scripts ─────────────────────────────────────── */}
-          {step === 2 && (
-            <>
-              <SectionCard title="Instalación de SuiteScripts">
-                <p className="text-xs text-muted-foreground">
-                  Instala los dos scripts en la cuenta NetSuite del cliente. Ambos deben cargarse como Restlets en SuiteCloud.
-                </p>
-
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between px-3 py-2.5 bg-secondary/50 rounded-lg border border-border">
-                    <div>
-                      <p className="text-xs font-medium text-foreground">docuia-catalog-v1.js</p>
-                      <p className="text-[11px] text-muted-foreground">Subsidiarias, catálogo de ítems, proveedores y ubicaciones</p>
-                    </div>
-                    <a
-                      href="/api/scripts/netsuite/docuia-catalog-v1.js"
-                      download
-                      className="flex items-center gap-1 text-xs text-primary hover:text-primary/80 transition-colors"
-                    >
-                      <Download className="w-3 h-3" />
-                      Descargar
-                    </a>
-                  </div>
-                  <div className="flex items-center justify-between px-3 py-2.5 bg-secondary/50 rounded-lg border border-border">
-                    <div>
-                      <p className="text-xs font-medium text-foreground">docuia-process-v1.js</p>
-                      <p className="text-[11px] text-muted-foreground">Creación de Vendor Bills y Purchase Orders</p>
-                    </div>
-                    <a
-                      href="/api/scripts/netsuite/docuia-process-v1.js"
-                      download
-                      className="flex items-center gap-1 text-xs text-primary hover:text-primary/80 transition-colors"
-                    >
-                      <Download className="w-3 h-3" />
-                      Descargar
-                    </a>
-                  </div>
-                </div>
-
-                <a
-                  href="https://docs.oracle.com/en/cloud/saas/netsuite/ns-online-help/section_4387799f7b.html"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-1 text-xs text-primary hover:underline"
-                >
-                  <ExternalLink className="w-3 h-3" />
-                  Cómo subir un RESTlet en NetSuite
-                </a>
-              </SectionCard>
-
-              <SectionCard title="IDs de los scripts instalados">
-                <p className="text-xs text-muted-foreground">
-                  Cada script tiene dos IDs en NetSuite: el <strong className="text-foreground">Script ID</strong> (del record del script) y el <strong className="text-foreground">Deploy ID</strong> (del deployment). Los encuentras en <em>Customization → Scripting → Scripts</em>.
-                </p>
-
-                {/* Script 1 — Catálogo (requerido) */}
-                <div className="space-y-2.5 p-3 rounded-lg border border-border bg-secondary/30">
-                  <p className="text-xs font-medium text-foreground">Script 1 — Catálogo <span className="text-primary">(requerido)</span></p>
-                  <p className="text-[11px] text-muted-foreground">docuia-catalog-v1.js — subsidiarias, ítems, proveedores, ubicaciones</p>
-                  <div className="grid grid-cols-2 gap-3">
-                    <Field label="Script ID">
-                      <Input
-                        value={scripts.catalogScriptId}
-                        onChange={(e) => setScripts(s => ({ ...s, catalogScriptId: e.target.value }))}
-                        placeholder="customscript_docuia_catalog"
-                      />
-                    </Field>
-                    <Field label="Deploy ID">
-                      <Input
-                        value={scripts.catalogDeployId}
-                        onChange={(e) => setScripts(s => ({ ...s, catalogDeployId: e.target.value }))}
-                        placeholder="customdeploy_docuia_catalog"
-                      />
-                    </Field>
-                  </div>
-                </div>
-
-                {/* Script 2 — Proceso (opcional) */}
-                <div className="space-y-2.5 p-3 rounded-lg border border-border bg-secondary/30">
-                  <p className="text-xs font-medium text-foreground">Script 2 — Proceso <span className="text-muted-foreground">(opcional, se puede agregar después)</span></p>
-                  <p className="text-[11px] text-muted-foreground">docuia-process-v1.js — crea Vendor Bills y Purchase Orders</p>
-                  <div className="grid grid-cols-2 gap-3">
-                    <Field label="Script ID">
-                      <Input
-                        value={scripts.processScriptId}
-                        onChange={(e) => setScripts(s => ({ ...s, processScriptId: e.target.value }))}
-                        placeholder="customscript_docuia_process"
-                      />
-                    </Field>
-                    <Field label="Deploy ID">
-                      <Input
-                        value={scripts.processDeployId}
-                        onChange={(e) => setScripts(s => ({ ...s, processDeployId: e.target.value }))}
-                        placeholder="customdeploy_docuia_process"
-                      />
-                    </Field>
-                  </div>
-                </div>
-
-                <div className="flex gap-2 flex-wrap">
-                  <Button
-                    variant="outline"
-                    onClick={handleProbeScripts}
-                    disabled={loading}
-                    size="sm"
-                  >
-                    {loading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                    Verificar script de catálogo
-                  </Button>
-                  <Button
-                    onClick={handleSaveScripts}
-                    disabled={loading || !scriptProbed}
-                    size="sm"
-                  >
-                    {loading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                    Guardar y continuar
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={loading}
-                    onClick={handleSkipScripts}
-                    className="text-xs text-muted-foreground ml-auto"
-                  >
-                    Omitir verificación (configurar después)
-                  </Button>
-                </div>
-
-                {scriptProbed && (
-                  <StatusBadge ok={true} message={`Catálogo responde correctamente${scriptVersion ? ` (${scriptVersion})` : ""}`} />
-                )}
-              </SectionCard>
-            </>
-          )}
-
-          {/* ── Step 3: Subsidiaries ────────────────────────────────── */}
-          {step === 3 && (
-            <SectionCard title="Subsidiarias NetSuite">
-              <p className="text-xs text-muted-foreground">
-                Extrae las subsidiarias disponibles en la cuenta NS y selecciona las que DocuIA debe gestionar.
-              </p>
-
-              {!subsidsFetched ? (
-                <Button onClick={handleFetchSubsidiaries} disabled={loading} variant="outline">
-                  {loading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                  Obtener subsidiarias desde NetSuite
-                </Button>
-              ) : (
-                <div className="space-y-3">
-                  <div className="space-y-1.5 max-h-60 overflow-y-auto">
-                    {nsSubsidiaries.map((sub) => (
-                      <label
-                        key={sub.internal_id}
-                        className={cn(
-                          "flex items-center gap-3 px-3 py-2.5 rounded-lg border cursor-pointer transition-colors",
-                          selectedSubs.has(sub.internal_id)
-                            ? "border-primary/40 bg-primary/5"
-                            : "border-border bg-card/50 hover:bg-card",
-                        )}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={selectedSubs.has(sub.internal_id)}
-                          onChange={(e) => {
-                            const next = new Set(selectedSubs);
-                            e.target.checked ? next.add(sub.internal_id) : next.delete(sub.internal_id);
-                            setSelectedSubs(next);
-                          }}
-                          className="w-3.5 h-3.5 accent-primary"
-                        />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs font-medium text-foreground truncate">{sub.name}</p>
-                          <p className="text-[11px] text-muted-foreground">
-                            ID: {sub.internal_id} · {sub.currency} · {sub.country || "—"}
-                          </p>
-                        </div>
-                      </label>
-                    ))}
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-muted-foreground">
-                      {selectedSubs.size} de {nsSubsidiaries.length} seleccionadas
+        {step === "products" && (
+          <>
+            <section className="-mb-4">
+              <h2 className="text-[24px] font-semibold tracking-[-0.02em]">¿Qué va a usar este cliente?</h2>
+              <p className="text-[15px] text-muted-foreground mt-2">Elige uno o varios. Cada producto muestra lo que se activa desde el primer día y lo que queda disponible; en el paso 3 ajustas feature por feature.</p>
+            </section>
+            {PRODUCTS.map((p) => {
+              const on = selected.has(p.key);
+              const fx = featuresByProduct[p.key] ?? { on: [], off: [] };
+              return (
+                <button key={p.key} type="button" onClick={() => setSelected((prev) => { const n = new Set(prev); if (n.has(p.key)) n.delete(p.key); else n.add(p.key); return n; })}
+                  aria-pressed={on} className={cn("text-left rounded-2xl border bg-card p-6 grid grid-cols-[22px_minmax(0,1fr)] xl:grid-cols-[22px_minmax(0,1fr)_168px] gap-x-4 gap-y-4 xl:gap-x-7 items-start transition-[border-color,box-shadow]", on ? "border-primary shadow-[0_0_0_3px_oklch(0.48_0.15_182_/_0.08)]" : "border-border hover:border-foreground/30")}>
+                  <span className={cn("mt-0.5 w-5 h-5 rounded-md border-[1.5px] inline-flex items-center justify-center text-white", on ? "bg-primary border-primary" : "border-border")}>{on && <CheckCircle2 className="w-3.5 h-3.5" />}</span>
+                  <span className="min-w-0">
+                    <span className="flex items-center gap-2.5 flex-wrap"><span className="font-semibold text-[16px]">{p.name}</span><span className="text-[10.5px] tracking-[0.06em] uppercase text-muted-foreground border border-border rounded px-1.5 py-px">{p.requiresIntegration ? "Requiere ERP" : "Sin integración"}</span></span>
+                    <span className="block text-muted-foreground mt-1">{p.description.replace("NetSuite", "el ERP")}</span>
+                    <span className="grid grid-cols-2 gap-x-6 gap-y-1 mt-3.5 text-[13px]">
+                      {fx.on.map((n) => <span key={n} className="flex items-center gap-2"><Circle className="w-1.5 h-1.5 fill-primary text-primary" />{n}</span>)}
+                      {fx.off.slice(0, 6).map((n) => <span key={n} className="flex items-center gap-2 text-muted-foreground"><Circle className="w-1.5 h-1.5 fill-border text-border" />{n}</span>)}
+                      {fx.off.length > 6 && <span className="text-muted-foreground">+ {fx.off.length - 6} más</span>}
                     </span>
-                    <div className="flex-1" />
-                    <Button
-                      onClick={handleSaveSubsidiaries}
-                      disabled={loading || !selectedSubs.size}
-                      size="sm"
-                    >
-                      {loading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                      Guardar y continuar
-                    </Button>
+                    <span className="block mt-3 text-xs text-muted-foreground">{fx.on.length} activas desde el inicio · {fx.off.length} disponibles según plan</span>
+                    {p.key === "contract_intelligence" && on && (
+                      <span className="grid grid-cols-[150px_minmax(0,320px)] gap-4 mt-4 pt-4 border-t border-border/60" onClick={(e) => e.stopPropagation()}>
+                        <Field label="Máximo de flujos"><TextInput type="number" min={1} max={50} value={maxFlows} onChange={(e) => setMaxFlows(Math.max(1, Math.min(50, Number(e.target.value) || 1)))} /></Field>
+                        <Field label="Playbook inicial"><Select value={playbook} onChange={(e) => setPlaybook(e.target.value)}>{playbooks.map((pb) => <option key={pb.key} value={pb.key}>{pb.name}</option>)}</Select></Field>
+                      </span>
+                    )}
+                  </span>
+                  <span className={cn("hidden xl:block self-center rounded-xl p-3 transition-colors", on ? "bg-primary/5" : "bg-secondary/60")}>
+                    <ProductArt product={p.key} className={cn("transition-opacity", on ? "opacity-100" : "opacity-70")} />
+                  </span>
+                </button>
+              );
+            })}
+            <StickyActions>
+              <span className="mr-auto text-xs text-muted-foreground">{selected.size ? `${selected.size} producto${selected.size === 1 ? "" : "s"} · ${onCount} features activas al inicio` : "Elige al menos un producto"}</span>
+              <Button disabled={selected.size === 0} onClick={() => setStep("org")}>Continuar</Button>
+            </StickyActions>
+          </>
+        )}
+
+        {step === "org" && (
+          <>
+            <section className="-mb-4">
+              <h2 className="text-[24px] font-semibold tracking-[-0.02em]">Datos de la organización.</h2>
+              <p className="text-[15px] text-muted-foreground mt-2 max-w-[62ch]">Nombre, identificador y plan. El cliente arranca en trial de 30 días; todo lo demás se completa después desde su expediente.</p>
+            </section>
+
+            <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_300px] gap-8 items-start">
+              <div className="flex flex-col gap-8">
+                <section className="rounded-2xl border border-border bg-card p-6 flex flex-col gap-5">
+                  <SectionTitle>Identidad</SectionTitle>
+                  <Field label="Nombre de la empresa" hint="Como aparecerá en el panel, en el portal del cliente y en la auditoría.">
+                    <TextInput value={org.name} autoFocus onChange={(e) => setOrg({ ...org, name: e.target.value, slug: org.slugTouched ? org.slug : slugify(e.target.value) })} />
+                  </Field>
+                  <Field label="Identificador" error={slugError} hint={slugError ? undefined : "Se genera a partir del nombre. Minúsculas, números y guiones; no se puede cambiar una vez que el cliente tiene documentos."}>
+                    <PrefixedInput prefix="docuia / " value={org.slug} onChange={(e) => { setSlugError(""); setOrg({ ...org, slug: slugify(e.target.value), slugTouched: true }); }} spellCheck={false} />
+                  </Field>
+                </section>
+
+                <section className="rounded-2xl border border-border bg-card p-6 flex flex-col gap-5">
+                  <SectionTitle>Operación</SectionTitle>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                    <Field label="Zona horaria" hint="Define el corte diario de métricas y los horarios de sincronización.">
+                      <TimezoneSelect value={org.timezone} onChange={(v) => setOrg({ ...org, timezone: v })} />
+                    </Field>
+                    <Field label="Email de facturación" optional hint="Recibe avisos de fin de trial y de consumo.">
+                      <TextInput type="email" value={org.billingEmail} onChange={(e) => setOrg({ ...org, billingEmail: e.target.value })} />
+                    </Field>
                   </div>
+                </section>
 
-                  {subsidsSaved && <StatusBadge ok={true} message="Subsidiarias guardadas" />}
-                </div>
-              )}
-            </SectionCard>
-          )}
+                <section className="rounded-2xl border border-border bg-card p-6 flex flex-col gap-5">
+                  <SectionTitle aside="Cambia después desde el expediente">Plan</SectionTitle>
+                  <ChoiceCards<Plan>
+                    value={org.planId}
+                    onChange={(v) => setOrg({ ...org, planId: v })}
+                    options={[
+                      { value: "starter", label: "Starter", description: "Lo esencial para operar: extracción, mapeo y sincronización.", meta: `${FEATURE_CATALOG.filter((f) => f.planRequired === "starter").length} features del catálogo` },
+                      { value: "growth", label: "Growth", description: "Aprobaciones, duplicados, carga masiva, API y reportes.", meta: `+${FEATURE_CATALOG.filter((f) => f.planRequired === "growth").length} features` },
+                      { value: "enterprise", label: "Enterprise", description: "Seguridad avanzada, gastos de empleados y métricas de contratos.", meta: `+${FEATURE_CATALOG.filter((f) => f.planRequired === "enterprise").length} features` },
+                    ]}
+                  />
+                </section>
+              </div>
 
-          {/* ── Step 4: Catalog sync ────────────────────────────────── */}
-          {step === 4 && (
-            <SectionCard title="Sincronización inicial del catálogo">
-              <p className="text-xs text-muted-foreground">
-                Carga ítems, proveedores y ubicaciones desde NetSuite a DocuIA.
-                Necesario para que el motor de IA pueda mapear los documentos.
-              </p>
-
-              {Object.keys(nsIdToDbId).length > 0 ? (
-                <div className="space-y-3">
-                  <p className="text-xs text-muted-foreground">
-                    Selecciona una subsidiaria para sincronizar ahora. Puedes sincronizar las demás después desde el panel del cliente.
-                  </p>
-
-                  <div className="space-y-1.5">
-                    {nsSubsidiaries
-                      .filter((s) => selectedSubs.has(s.internal_id))
-                      .map((s) => {
-                        const dbId = nsIdToDbId[s.internal_id];
-                        return (
-                          <div key={s.internal_id} className="flex items-center justify-between px-3 py-2.5 rounded-lg border border-border bg-card/50">
-                            <div>
-                              <p className="text-xs font-medium text-foreground">{s.name}</p>
-                              <p className="text-[11px] text-muted-foreground">{s.currency} · ID: {s.internal_id}</p>
-                            </div>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              disabled={syncStatus === "running" || !dbId}
-                              onClick={() => dbId && handleSync(dbId)}
-                            >
-                              {syncStatus === "running" && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                              Sincronizar
-                            </Button>
-                          </div>
-                        );
-                      })}
+              <aside className="rounded-2xl border border-border bg-card p-6 flex flex-col gap-4 lg:sticky lg:top-9">
+                <div className="flex items-center gap-3.5">
+                  <div className="w-12 h-12 rounded-xl flex items-center justify-center text-[18px] font-bold shrink-0" style={{ backgroundColor: "oklch(0.22 0.10 240)", color: "oklch(0.65 0.14 182)" }}>{org.name.trim() ? initials(org.name) : "?"}</div>
+                  <div className="min-w-0">
+                    <div className="font-semibold truncate">{org.name.trim() || "Nombre pendiente"}</div>
+                    <div className="text-xs text-muted-foreground truncate">{org.slug || "identificador"}</div>
                   </div>
-
-                  {syncStatus === "done" && syncSummary && (
-                    <StatusBadge ok={true} message={
-                      `Sync completo — ítems: ${syncSummary.items ?? 0}, proveedores: ${syncSummary.vendors ?? 0}, ubicaciones: ${syncSummary.locations ?? 0}`
-                    } />
-                  )}
                 </div>
-              ) : (
-                <p className="text-xs text-amber-400">No hay subsidiarias guardadas. Regresa al paso anterior.</p>
-              )}
-
-              <div className="flex gap-2 pt-1">
-                <Button variant="outline" size="sm" onClick={() => setStep(5)}>
-                  {syncStatus === "done" ? "Continuar" : "Omitir por ahora"}
-                </Button>
-              </div>
-            </SectionCard>
-          )}
-
-          {/* ── Step 5: Production ──────────────────────────────────── */}
-          {step === 5 && (
-            <>
-              <div className="flex items-center justify-between">
-                <h2 className="text-sm font-medium text-foreground">Entorno de producción</h2>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => { setSkipProd(true); setStep(6); }}
-                  className="text-xs text-muted-foreground"
-                >
-                  Omitir (solo sandbox por ahora)
-                </Button>
-              </div>
-
-              <SectionCard title="Credenciales NetSuite — Producción">
-                <p className="text-xs text-muted-foreground">
-                  El Account ID de producción no tiene sufijo (ej. <code className="bg-secondary px-1 rounded">9051643</code>).
-                  Las credenciales TBA son independientes de las de sandbox.
-                </p>
-                <CredFields value={prodCreds} onChange={setProdCreds} disabled={prodSaved} />
-                <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    onClick={handleTestProd}
-                    disabled={loading || prodSaved}
-                    size="sm"
-                  >
-                    {loading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                    Probar conexión
-                  </Button>
-                  <Button
-                    onClick={handleSaveProd}
-                    disabled={loading || !prodTested || prodSaved}
-                    size="sm"
-                  >
-                    {loading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                    Guardar producción
-                  </Button>
+                <div className="flex flex-col divide-y divide-border/60 text-[13px]">
+                  <div className="py-2.5 flex justify-between gap-3"><span className="text-muted-foreground">Productos</span><span className="text-right">{[...selected].map((k) => PRODUCTS.find((p) => p.key === k)?.name).join(", ")}</span></div>
+                  <div className="py-2.5 flex justify-between gap-3"><span className="text-muted-foreground">Plan</span><span>{PLAN_LABEL[org.planId]} · trial 30 días</span></div>
+                  <div className="py-2.5 flex justify-between gap-3"><span className="text-muted-foreground">Features al inicio</span><span>{onCount} de {relevant.length}</span></div>
+                  <div className="py-2.5 flex justify-between gap-3"><span className="text-muted-foreground">Conexión ERP</span><span>{needsErp ? "Paso siguiente, omitible" : "No requerida"}</span></div>
                 </div>
-                {prodTested && !prodSaved && <StatusBadge ok={true} message="Conexión de producción verificada" />}
-                {prodSaved && <StatusBadge ok={true} message="Producción guardada" />}
-              </SectionCard>
-            </>
-          )}
-
-          {/* ── Step 6: First user ──────────────────────────────────── */}
-          {step === 6 && !userCreated && (
-            <SectionCard title="Crear primer usuario administrador">
-              <p className="text-xs text-muted-foreground">
-                Este usuario podrá acceder al portal de la organización en DocuIA.
-              </p>
-              <Field label="Email">
-                <Input
-                  type="email"
-                  value={userEmail}
-                  onChange={(e) => setUserEmail(e.target.value)}
-                  placeholder="admin@acme.com"
-                />
-              </Field>
-              <Field label="Nombre completo (opcional)">
-                <Input
-                  value={userName}
-                  onChange={(e) => setUserName(e.target.value)}
-                  placeholder="Ana García"
-                />
-              </Field>
-              <Field label="Contraseña inicial">
-                <Input
-                  type="password"
-                  value={userPassword}
-                  onChange={(e) => setUserPassword(e.target.value)}
-                  autoComplete="new-password"
-                />
-              </Field>
-              <Button onClick={handleCreateUser} disabled={loading || !userEmail || !userPassword}>
-                {loading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                Crear usuario
-              </Button>
-            </SectionCard>
-          )}
-
-          {/* ── Completion ──────────────────────────────────────────── */}
-          {step === 6 && userCreated && (
-            <div className="bg-card border border-border rounded-xl p-8 flex flex-col items-center text-center gap-4">
-              <div className="w-14 h-14 rounded-2xl bg-emerald-500/15 border border-emerald-500/20 flex items-center justify-center">
-                <CheckCircle2 className="w-7 h-7 text-emerald-400" />
-              </div>
-              <div>
-                <h2 className="text-base font-semibold text-foreground">¡Organización configurada!</h2>
-                <p className="text-xs text-muted-foreground mt-1 max-w-sm">
-                  <span className="font-medium text-foreground">{orgName}</span> está lista.
-                  {skipProd && " El entorno de producción puede configurarse después desde el perfil del cliente."}
-                </p>
-              </div>
-              <div className="flex gap-2">
-                <Button variant="outline" onClick={() => router.push("/admin/clients")} size="sm">
-                  Ver todos los clientes
-                </Button>
-                <Button onClick={handleFinish} size="sm">
-                  Ir al perfil del cliente
-                </Button>
-              </div>
+                <p className="text-xs text-muted-foreground leading-relaxed">Nada se guarda hasta el paso de features: ahí se crea la organización con todo lo elegido.</p>
+              </aside>
             </div>
-          )}
 
-        </div>
-      </div>
-    </div>
+            <StickyActions className="justify-between">
+              <Button variant="ghost" onClick={() => setStep("products")}>Atrás</Button>
+              <Button disabled={busy !== null || !orgValid} onClick={checkOrg}>{busy === "slug" && <Loader2 className="animate-spin" />}Continuar</Button>
+            </StickyActions>
+          </>
+        )}
+
+        {step === "features" && (
+          <>
+            <section className="-mb-4 flex items-end justify-between gap-6">
+              <div>
+                <h2 className="text-[24px] font-semibold tracking-[-0.02em]">¿Con qué features arranca?</h2>
+                <p className="text-[15px] text-muted-foreground mt-2 max-w-[64ch]">Vienen marcadas las de inicio de cada producto. Las que requieren un plan superior a {PLAN_LABEL[org.planId]} aparecen bloqueadas; se desbloquean cambiando el plan.</p>
+              </div>
+              <div className="flex gap-2 shrink-0">
+                <Button variant="outline" size="sm" onClick={() => setGrants((g) => ({ ...g, ...Object.fromEntries(relevant.map((f) => [f.id, f.defaultEnabled])) }))}>Solo las de inicio</Button>
+                <Button variant="outline" size="sm" onClick={() => setGrants((g) => ({ ...g, ...Object.fromEntries(relevant.filter((f) => !abovePlan(f)).map((f) => [f.id, true])) }))}>Todas las del plan</Button>
+              </div>
+            </section>
+
+            {[...PRODUCTS.filter((p) => selected.has(p.key)).map((p) => ({ key: p.key as string | null, title: p.name, list: groups.get(p.key) ?? [] })), { key: null, title: "Plataforma", list: groups.get(null) ?? [] }].map((g) => {
+              const active = g.list.filter((f) => grants[f.id] && !abovePlan(f)).length;
+              return (
+                <section key={g.key ?? "platform"} className="rounded-2xl border border-border bg-card overflow-hidden">
+                  <header className="flex items-center gap-4 px-5 py-3.5 border-b border-border bg-secondary/40">
+                    {g.key ? <span className="w-12 shrink-0"><ProductArt product={g.key} /></span> : <span className="w-12 h-9 shrink-0 rounded-lg bg-secondary" />}
+                    <div className="flex-1 min-w-0">
+                      <div className="font-semibold">{g.title}</div>
+                      <div className="text-xs text-muted-foreground">{g.key ? "Features del producto" : "Compartidas por todos los productos"}</div>
+                    </div>
+                    <span className="text-xs text-muted-foreground tabular-nums">{active} de {g.list.length} activas</span>
+                  </header>
+                  <ul className="divide-y divide-border/70">
+                    {g.list.map((f) => {
+                      const locked = abovePlan(f);
+                      const on = grants[f.id] && !locked;
+                      return (
+                        <li key={f.id} className={cn("grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-4 px-5 py-3", locked && "opacity-60")}>
+                          <Switch checked={on} disabled={locked} onCheckedChange={(v) => setGrants((g2) => ({ ...g2, [f.id]: Boolean(v) }))} aria-label={f.name} />
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium flex items-center gap-2 flex-wrap">{f.name}{f.isBeta && <span className="text-[10px] uppercase tracking-wider text-[oklch(0.50_0.14_80)]">beta</span>}{f.featureType !== "boolean" && <Chip>configurable</Chip>}</div>
+                            <div className="text-xs text-muted-foreground">{f.description}</div>
+                          </div>
+                          <Pill tone={locked ? "warn" : "mute"}>{locked ? `Requiere ${PLAN_LABEL[f.planRequired as Plan]}` : PLAN_LABEL[f.planRequired as Plan]}</Pill>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </section>
+              );
+            })}
+
+            <StickyActions className="justify-between">
+              <Button variant="ghost" disabled={busy !== null} onClick={() => setStep("org")}>Atrás</Button>
+              <span className="flex items-center gap-4">
+                <span className="text-xs text-muted-foreground">{onCount} activas · {offCount} disponibles</span>
+                <Button disabled={busy !== null} onClick={createOrg}>{busy === "org" && <Loader2 className="animate-spin" />}Crear organización</Button>
+              </span>
+            </StickyActions>
+          </>
+        )}
+
+        {step === "erp" && (
+          <>
+            <section className="-mb-4"><h2 className="text-[24px] font-semibold tracking-[-0.02em]">Conecta el ERP de sandbox.</h2><p className="text-[15px] text-muted-foreground mt-2 max-w-[58ch]">Lo necesita {[...selected].filter((k) => PRODUCTS.find((p) => p.key === k)?.requiresIntegration).map((k) => PRODUCTS.find((p) => p.key === k)?.name).join(" y ")}. Si aún no tienes las credenciales, omite el paso: la organización ya existe.</p></section>
+            <section>
+              <SectionTitle aside={tested ? <Pill tone="ok">Probadas</Pill> : undefined}>a · Credenciales de sandbox</SectionTitle>
+              <div className="grid grid-cols-2 gap-4 mt-4 max-w-[640px]">
+                <label className="col-span-2 max-w-[320px] text-xs text-muted-foreground flex flex-col gap-1">ID de cuenta (termina en _SB1)<input className={field} value={creds.accountId} onChange={(e) => { setCreds({ ...creds, accountId: e.target.value }); setTested(false); }} /></label>
+                {(["consumerKey", "consumerSecret", "tokenId", "tokenSecret"] as const).map((k) => (
+                  <label key={k} className="text-xs text-muted-foreground flex flex-col gap-1">{{ consumerKey: "Consumer key", consumerSecret: "Consumer secret", tokenId: "Token ID", tokenSecret: "Token secret" }[k]}<input className={field} type="password" autoComplete="off" value={creds[k]} onChange={(e) => { setCreds({ ...creds, [k]: e.target.value }); setTested(false); }} /></label>
+                ))}
+              </div>
+              <div className="mt-3"><Button variant="outline" disabled={busy !== null || Object.values(creds).some((v) => !v.trim())} onClick={testCreds}>{busy === "test" && <Loader2 className="animate-spin" />}Probar conexión</Button></div>
+            </section>
+            <section>
+              <SectionTitle aside={<a href="/api/scripts/netsuite/docuia-catalog-v1.js" download className="text-primary">Descargar scripts ↓</a>}>b · Scripts instalados en el ERP</SectionTitle>
+              <div className="grid grid-cols-2 gap-4 mt-4 max-w-[640px]">
+                {([["catalogScriptId", "Catálogo · Script ID"], ["catalogDeployId", "Catálogo · Deploy ID"], ["processScriptId", "Proceso · Script ID (opcional ahora)"], ["processDeployId", "Proceso · Deploy ID"]] as const).map(([k, l]) => (
+                  <label key={k} className="text-xs text-muted-foreground flex flex-col gap-1">{l}<input className={cn(field, "font-mono text-xs")} value={scripts[k]} onChange={(e) => { setScripts({ ...scripts, [k]: e.target.value }); setProbed(null); }} /></label>
+                ))}
+              </div>
+              <div className="mt-3 flex items-center gap-3"><Button variant="outline" disabled={busy !== null || !tested || !scripts.catalogScriptId || !scripts.catalogDeployId} onClick={probeScripts}>{busy === "probe" && <Loader2 className="animate-spin" />}Verificar catálogo</Button>{probed && <Pill tone="ok">Responde · {probed}</Pill>}</div>
+            </section>
+            <section>
+              <SectionTitle aside={nsSubs ? `${nsSubs.length} encontradas en el ERP` : undefined}>c · Subsidiarias a gestionar</SectionTitle>
+              {!nsSubs ? (
+                <div className="mt-4"><Button variant="outline" disabled={busy !== null || !probed} onClick={fetchSubs}>{busy === "subs" && <Loader2 className="animate-spin" />}Obtener subsidiarias del ERP</Button>{!probed && <span className="text-xs text-muted-foreground ml-3">Verifica el catálogo primero.</span>}</div>
+              ) : (
+                <ul className="divide-y divide-border/70">
+                  {nsSubs.map((s) => {
+                    const on = chosenSubs.has(s.internal_id);
+                    return (
+                      <li key={s.internal_id}>
+                        <label className="flex items-center gap-3.5 py-3 cursor-pointer">
+                          <input type="checkbox" className="sr-only" checked={on} onChange={(e) => setChosenSubs((prev) => { const n = new Set(prev); if (e.target.checked) n.add(s.internal_id); else n.delete(s.internal_id); return n; })} />
+                          <span className={cn("w-[18px] h-[18px] rounded-[5px] border-[1.5px] inline-flex items-center justify-center text-white", on ? "bg-primary border-primary" : "border-border")}>{on && "✓"}</span>
+                          <span className="flex-1">{s.name}</span>
+                          <span className="text-xs text-muted-foreground tabular-nums">ID {s.internal_id} · {s.currency}{s.tax_id ? ` · ${s.tax_id}` : ""}{s.country ? ` · ${s.country}` : ""}</span>
+                        </label>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+              <p className="text-xs text-muted-foreground mt-3">El catálogo (ítems, proveedores, ubicaciones) se sincroniza en segundo plano al terminar el alta.</p>
+            </section>
+            <StickyActions>
+              <Button variant="ghost" disabled={busy !== null} onClick={() => setStep("user")}>Omitir por ahora</Button>
+              <Button disabled={busy !== null || !tested} onClick={saveErp}>{busy === "save-erp" && <Loader2 className="animate-spin" />}Guardar y continuar</Button>
+            </StickyActions>
+          </>
+        )}
+
+        {step === "user" && (
+          <>
+            <section className="-mb-4">
+              <h2 className="text-[24px] font-semibold tracking-[-0.02em]">Crea la primera persona con acceso.</h2>
+              <p className="text-[15px] text-muted-foreground mt-2 max-w-[62ch]">Entra como {TENANT_ROLE_LABELS.admin} del portal y desde ahí invita al resto de su equipo. Comparte la contraseña por un canal seguro; podrá cambiarla en su perfil.</p>
+            </section>
+
+            <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_300px] gap-8 items-start">
+              <section className="rounded-2xl border border-border bg-card p-6 flex flex-col gap-5">
+                <div className="flex items-center gap-3.5">
+                  <div className="w-12 h-12 rounded-full flex items-center justify-center text-[16px] font-semibold shrink-0 bg-primary/10 text-primary">{user.fullName.trim() ? initials(user.fullName) : (user.email.trim()[0]?.toUpperCase() ?? "?")}</div>
+                  <div className="min-w-0">
+                    <div className="font-semibold truncate">{user.fullName.trim() || user.email.trim() || "Nueva persona"}</div>
+                    <div className="text-xs text-muted-foreground">{TENANT_ROLE_LABELS.admin} · {org.name}</div>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                  <Field label="Nombre completo" optional><TextInput value={user.fullName} autoFocus onChange={(e) => setUser({ ...user, fullName: e.target.value })} /></Field>
+                  <Field label="Email" hint="Es su usuario para entrar al portal."><TextInput type="email" value={user.email} onChange={(e) => setUser({ ...user, email: e.target.value })} /></Field>
+                </div>
+                <Field label="Contraseña inicial" hint={user.password.length > 0 && user.password.length < 8 ? "Mínimo 8 caracteres." : "Genera una segura o escribe una; mínimo 8 caracteres."}>
+                  <PasswordInput value={user.password} onChange={(v) => setUser({ ...user, password: v })} onGenerate={() => setUser({ ...user, password: generatePassword() })} autoComplete="new-password" />
+                </Field>
+              </section>
+
+              <aside className="rounded-2xl border border-border bg-card p-6 flex flex-col gap-3 text-[13px]">
+                <div className="font-semibold">Como {TENANT_ROLE_LABELS.admin} podrá</div>
+                <ul className="flex flex-col gap-2 text-muted-foreground">
+                  {["Invitar y administrar a su equipo", "Configurar aprobaciones y reglas", "Ver y procesar todos los documentos", "Cambiar su contraseña desde el perfil"].map((t) => (
+                    <li key={t} className="flex gap-2.5"><CheckCircle2 className="w-4 h-4 text-success shrink-0 mt-px" />{t}</li>
+                  ))}
+                </ul>
+                <p className="text-xs text-muted-foreground leading-relaxed border-t border-border/60 pt-3 mt-1">Puedes crear más usuarios y cambiar roles desde la pestaña Usuarios del expediente.</p>
+              </aside>
+            </div>
+
+            <StickyActions className="justify-between">
+              <Button variant="ghost" onClick={() => router.push(`/admin/clients/${orgId}`)}>Hacerlo después</Button>
+              <Button disabled={busy !== null || !user.email.trim() || user.password.length < 8} onClick={createUser}>{busy === "user" && <Loader2 className="animate-spin" />}Crear usuario</Button>
+            </StickyActions>
+          </>
+        )}
+
+        {step === "done" && (
+          <section className="rounded-2xl border border-border bg-card p-10 flex flex-col items-center text-center gap-4">
+            <div className="w-14 h-14 rounded-2xl bg-success/10 flex items-center justify-center"><CheckCircle2 className="w-7 h-7 text-success" /></div>
+            <div><h2 className="text-[20px] font-semibold tracking-[-0.02em]">{org.name} está lista.</h2><p className="text-[15px] text-muted-foreground mt-1 max-w-[46ch]">{needsErp && !tested ? "Falta conectar el ERP; el expediente lo muestra como siguiente paso." : "Puedes gestionar productos, features y usuarios desde su expediente."}</p></div>
+            <div className="flex gap-2"><Button variant="outline" nativeButton={false} render={<Link href="/admin/clients" />}>Ver todos los clientes</Button><Button nativeButton={false} render={<Link href={`/admin/clients/${orgId}`} />}>Ir al expediente</Button></div>
+          </section>
+        )}
+      </Main>
+    </>
   );
 }

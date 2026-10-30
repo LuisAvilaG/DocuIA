@@ -5,6 +5,7 @@ import { historyDocuments, workflowRuntimeLogs } from "@/db/schema";
 import { and, eq, inArray, lt } from "drizzle-orm";
 import { getFeature } from "@/lib/features";
 import { deleteFile } from "@/lib/storage/minio";
+import { purgeExpiredOrganizations } from "@/lib/admin/purge-org";
 
 function cronAuth(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
@@ -93,7 +94,10 @@ async function handleGET(req: NextRequest) {
       summary[org.id] = { documents: documentsDeleted, files: filesDeleted, logs: logsDeleted, errors };
     }
 
-    return NextResponse.json({ ok: true, summary });
+    // Organizations a platform admin deleted more than 30 days ago.
+    const purged = await purgeExpiredOrganizations();
+
+    return NextResponse.json({ ok: true, summary, purged });
   } catch (err) {
     console.error("[cron/retention]", err);
     return NextResponse.json({ error: "Internal error" }, { status: 500 });

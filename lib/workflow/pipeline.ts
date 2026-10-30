@@ -3,7 +3,8 @@ import { db } from "@/lib/db";
 import { historyDocuments, exceptionQueue, organizations, subsidiaries, usageDaily } from "@/db/schema";
 import { and, eq, ne, sql } from "drizzle-orm";
 import { uploadFile } from "@/lib/storage/minio";
-import { extractFromFile } from "./extract";
+import { extractFromFile, mapInvoice, configuredEffort } from "./extract";
+import { parseJsonObject } from "@/lib/ai/provider";
 import { buildUiPayload } from "./match";
 import { processInNetSuite } from "./process-ns";
 import { buildNsPayload, draftWithPo } from "./ns-payload";
@@ -34,6 +35,8 @@ export type PipelineInput = {
   storageKey?:    string;
   // PDF uploaded together with a CFDI XML (stored already; attached to the bill).
   attachmentKey?: string;
+  // Set by the batch path: the model already answered for this document.
+  precomputedExtraction?: { rawJson: string; model: string; promptTokens: number; completionTokens: number; cachedTokens?: number };
   // Set when retrying from the exception queue: a new failure updates that
   // exception instead of piling up a duplicate.
   exceptionId?:   number;
@@ -98,13 +101,8 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
 
   const storageEnabled        = feat.isEnabled("document_storage");
   const fallbackEnabled       = feat.isEnabled("ai_tiered_fallback");
-  const tieredFallback = fallbackEnabled
-    ? feat.getConfig("ai_tiered_fallback") as {
-        soft_fallback_rate?: number; canary_rate?: number; sticky_secondary_enabled?: boolean;
-        allow_secondary_for_baldor?: boolean; complex_line_count_threshold?: number;
-        primary_max_retries?: number; secondary_max_retries?: number;
-        retry_base_ms?: number; retry_max_ms?: number;
-      }
+  const fallbackPolicy = fallbackEnabled
+    ? feat.getConfig("ai_tiered_fallback") as { on_zero_lines?: boolean; on_total_mismatch?: boolean; on_missing_header?: boolean; on_model_doubt?: boolean }
     : undefined;
   const forceSecondary        = feat.isEnabled("ai_force_secondary");
   const detectDupes           = feat.isEnabled("duplicate_detection");
@@ -118,6 +116,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
         primary_model?: string;
         secondary_model?: string;
         max_chars?: number;
+        reasoning_effort?: string;
       }
     : undefined;
   const validationConfig = feat.isEnabled("ai_validation_thresholds")
@@ -235,12 +234,21 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
               itemCode:    l.noIdentificacion || null,
             };
           }),
+          uncertainFields: [],
         },
         model:            "cfdi-parser",
         fallbackUsed:     false,
         rawJson:          "",
         promptTokens:     0,
         completionTokens: 0,
+      };
+    } else if (input.precomputedExtraction) {
+      // A batch already ran the model; reuse its answer instead of calling again.
+      const pre = input.precomputedExtraction;
+      extraction = {
+        invoice: mapInvoice(parseJsonObject(pre.rawJson), input.fileName),
+        model: pre.model, fallbackUsed: false, fallbackReason: null, rawJson: pre.rawJson,
+        promptTokens: pre.promptTokens, completionTokens: pre.completionTokens, cachedTokens: pre.cachedTokens,
       };
     } else {
       const base64Content = input.fileBuffer.toString("base64");
@@ -255,16 +263,13 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
           primaryModel: modelSelection?.primary_model,
           secondaryModel: modelSelection?.secondary_model,
           maxChars: modelSelection?.max_chars,
-          tieredFallback: tieredFallback ? {
-            softFallbackRate: tieredFallback.soft_fallback_rate,
-            canaryRate: tieredFallback.canary_rate,
-            stickySecondaryEnabled: tieredFallback.sticky_secondary_enabled,
-            allowSecondaryForBaldor: tieredFallback.allow_secondary_for_baldor,
-            complexLineCountThreshold: tieredFallback.complex_line_count_threshold,
-            primaryMaxRetries: tieredFallback.primary_max_retries,
-            secondaryMaxRetries: tieredFallback.secondary_max_retries,
-            retryBaseMs: tieredFallback.retry_base_ms,
-            retryMaxMs: tieredFallback.retry_max_ms,
+          effort: configuredEffort(modelSelection?.reasoning_effort),
+          validation: validationConfig,
+          policy: fallbackPolicy ? {
+            onZeroLines: fallbackPolicy.on_zero_lines,
+            onTotalMismatch: fallbackPolicy.on_total_mismatch,
+            onMissingHeader: fallbackPolicy.on_missing_header,
+            onModelDoubt: fallbackPolicy.on_model_doubt,
           } : undefined,
         },
       });
@@ -284,7 +289,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
       lineCount:      extraction.invoice.lines.length,
       durationMs:     Date.now() - t1,
       fallbackUsed:   extraction.fallbackUsed,
-      metaJson:       { promptTokens: extraction.promptTokens, completionTokens: extraction.completionTokens },
+      metaJson:       { promptTokens: extraction.promptTokens, completionTokens: extraction.completionTokens, cachedTokens: extraction.cachedTokens ?? 0, fallbackReason: extraction.fallbackReason ?? null, uncertainFields: extraction.invoice.uncertainFields },
     });
 
     if (validationConfig) {

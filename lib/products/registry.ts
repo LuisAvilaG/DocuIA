@@ -64,6 +64,7 @@ export const FEATURE_PRODUCT: Record<string, ProductKey> = {
   vendor_rules:           "ap_automation",
   erp_attachments:        "ap_automation",
   ap_advanced_stats:      "ap_automation",
+  sandbox_test_send:      "ap_automation",
   // Expense Management
   expense_management:      "expense_management",
   expense_approval:        "expense_management",

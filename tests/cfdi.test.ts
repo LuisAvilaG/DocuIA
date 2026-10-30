@@ -29,6 +29,7 @@ function invoiceFrom(xml: string): ExtractedInvoice {
     format: "general", vendor: c.emisorNombre, invoiceNumber: c.folio, invoiceDate: "", dueDate: "", purchaseOrder: "",
     currency: c.moneda, subtotal: c.subTotal, tax: c.totalTraslados, retention: c.totalRetenciones, total: c.total,
     lines: c.lineas.map((l) => ({ description: l.descripcion, quantity: l.cantidad, rate: null, amount: l.importe - l.descuento, uom: null, itemCode: null })),
+    uncertainFields: [],
   };
 }
 

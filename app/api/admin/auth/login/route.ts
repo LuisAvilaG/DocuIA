@@ -1,6 +1,7 @@
 import { clientIp } from "@/lib/security/request-ip";
 import { loginSchema, accountRateKey } from "@/lib/auth/input";
 import { withApiSecurity } from "@/lib/security/http";
+import { logAdminAction } from "@/lib/audit/admin";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { platformAdmins, authSessions } from "@/db/schema";
@@ -76,6 +77,8 @@ async function handlePOST(req: NextRequest) {
       sessionId,
       tokenNonce,
     });
+
+    await logAdminAction(req, { sub: admin.id, email: admin.email }, { action: "admin.login" });
 
     const res = NextResponse.json({ ok: true });
     setAuthCookies(res, "admin", accessToken, refreshTokenSigned);

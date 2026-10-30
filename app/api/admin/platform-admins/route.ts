@@ -4,6 +4,7 @@ import { desc, eq } from "drizzle-orm";
 import { hashSync } from "bcryptjs";
 import { randomUUID } from "crypto";
 import { requireAdminSession } from "@/lib/auth/admin";
+import { logAdminAction } from "@/lib/audit/admin";
 import { db } from "@/lib/db";
 import { platformAdmins } from "@/db/schema";
 
@@ -46,7 +47,7 @@ async function handleGET() {
 }
 
 async function handlePOST(req: NextRequest) {
-  const { error } = await requireAdminSession();
+  const { error, session } = await requireAdminSession();
   if (error) return error;
 
   try {
@@ -87,6 +88,7 @@ async function handlePOST(req: NextRequest) {
       })
       .returning();
 
+    await logAdminAction(req, session!, { action: "platform_admin.created", targetUserId: admin.id, after: { email: admin.email } });
     return NextResponse.json({ admin: safeAdmin(admin) }, { status: 201 });
   } catch (err) {
     console.error("[platform-admins POST]", err);

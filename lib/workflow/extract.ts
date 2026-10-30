@@ -1,8 +1,16 @@
-import type { BBox, ExtractedInvoice, ExtractedLine, ExtractionResult } from "./types";
+// AP invoice / purchase-order extraction on top of the provider layer.
+//
+// One primary model reads the document under an enforced JSON schema. A second
+// model is consulted only on evidence that the first result is wrong: no lines,
+// header totals that do not add up, key header fields missing, or the model
+// itself flagging those fields as doubtful. No sampling, no line-count rules.
 
-const FLASH_MODEL = "gemini-2.5-flash";
-const PRO_MODEL   = "gemini-2.5-pro";
-const MAX_CHARS   = 65000;
+import { generateJson, isKnownModel, type AiJsonRequest, type AiUsage, type JsonSchema } from "@/lib/ai/provider";
+import { validateExtraction, type ExtractionValidationConfig } from "./validation";
+import type { BBox, ExtractedInvoice, ExtractedLine, ExtractionResult, UncertainField } from "./types";
+
+export const DEFAULT_PRIMARY_MODEL   = "claude-haiku-5-5";
+export const DEFAULT_SECONDARY_MODEL = "claude-sonnet-5-5";
 
 function normalize(value: unknown): string {
   return String(value ?? "")
@@ -45,18 +53,6 @@ function toDDMMYYYY(value: unknown): string {
   return input;
 }
 
-function parseJsonObject(text: string): Record<string, unknown> {
-  const raw = String(text || "").trim();
-  if (!raw) return {};
-  try {
-    return JSON.parse(raw);
-  } catch {
-    const match = raw.match(/\{[\s\S]*\}/);
-    if (!match) throw new Error("AI response has no valid JSON object");
-    return JSON.parse(match[0]);
-  }
-}
-
 function toBbox(value: unknown): BBox | null {
   if (!value || typeof value !== "object") return null;
   const b = value as Record<string, unknown>;
@@ -64,7 +60,7 @@ function toBbox(value: unknown): BBox | null {
   const rX1 = Number(b.x1), rY1 = Number(b.y1);
   const rX2 = Number(b.x2), rY2 = Number(b.y2);
   if (!Number.isFinite(rX1) || !Number.isFinite(rY1) || !Number.isFinite(rX2) || !Number.isFinite(rY2)) return null;
-  // Gemini sometimes returns 0-1000 instead of 0-1
+  // Some models return 0-1000 instead of 0-1
   const maxVal = Math.max(rX1, rY1, rX2, rY2);
   const s = maxVal > 1.5 ? 1000 : 1;
   const x1 = Math.max(0, Math.min(1, rX1 / s));
@@ -77,15 +73,21 @@ function toBbox(value: unknown): BBox | null {
 
 function mapLine(line: unknown): ExtractedLine | null {
   const row = (line || {}) as Record<string, unknown>;
-  const description = normalize(row.description || row.item_code || row.itemCode);
+  const itemCode = normalize(row.supplier_item_code ?? row.item_code ?? row.itemCode) || null;
+  const description = normalize(row.description) || itemCode || "";
   if (!description) return null;
+  const lineType = row.line_type === "charge" ? "charge" : "item";
   return {
     description,
+    lineType,
     quantity: toNumber(row.quantity),
     rate:     toNumber(row.rate),
     amount:   toNumber(row.amount),
     uom:      normalize(row.uom) || null,
-    itemCode: normalize(row.item_code || row.itemCode) || null,
+    itemCode,
+    otherItemCode: normalize(row.other_item_code) || null,
+    billedWeight:  toNumber(row.billed_weight),
+    weightUom:     normalize(row.weight_uom) || null,
     bbox:     toBbox(row.bbox) ?? undefined,
   };
 }
@@ -97,18 +99,42 @@ function detectFormat(text: string, vendor: string): ExtractedInvoice["format"] 
   return "general";
 }
 
-function mapInvoice(parsed: Record<string, unknown>, sourceText: string): ExtractedInvoice {
+const HEADER_FIELDS = new Set(["vendor", "vendor_tax_id", "invoice_number", "invoice_date", "delivery_date", "due_date", "purchase_order", "currency", "subtotal", "tax", "total"]);
+
+function mapUncertain(value: unknown): UncertainField[] {
+  if (!Array.isArray(value)) return [];
+  const out: UncertainField[] = [];
+  for (const entry of value.slice(0, 20)) {
+    const row = (entry || {}) as Record<string, unknown>;
+    const field = normalize(row.field);
+    if (!field) continue;
+    out.push({ field, reason: normalize(row.reason).slice(0, 200) || "sin motivo", header: HEADER_FIELDS.has(field) });
+  }
+  return out;
+}
+
+export function mapInvoice(parsed: Record<string, unknown>, sourceText: string): ExtractedInvoice {
   const linesRaw = Array.isArray(parsed?.lines) ? parsed.lines : [];
   const lines = linesRaw
     .map((row) => mapLine(row))
     .filter((l): l is ExtractedLine => l !== null);
   const vendor = normalize(parsed?.vendor);
+  const uncertainFields = mapUncertain(parsed?.uncertain_fields);
+  const issueDate = toDDMMYYYY(parsed?.invoice_date || parsed?.invoiceDate);
+  const deliveryDate = toDDMMYYYY(parsed?.delivery_date);
+  // Delivery-dated invoices (food service, freight) carry no separate issue
+  // date; the delivery date is what accounting posts, flagged so a reviewer sees it.
+  if (!issueDate && deliveryDate && !uncertainFields.some((f) => f.field === "invoice_date")) {
+    uncertainFields.unshift({ field: "invoice_date", reason: "tomada de la fecha de entrega", header: true });
+  }
 
   return {
     format:        detectFormat(sourceText, vendor),
     vendor,
+    vendorRfc:     normalize(parsed?.vendor_tax_id) || undefined,
     invoiceNumber: normalize(parsed?.invoice_number || parsed?.invoiceNumber),
-    invoiceDate:   toDDMMYYYY(parsed?.invoice_date || parsed?.invoiceDate),
+    invoiceDate:   issueDate || deliveryDate,
+    deliveryDate,
     dueDate:       toDDMMYYYY(parsed?.due_date || parsed?.dueDate),
     purchaseOrder: normalize(parsed?.purchase_order || parsed?.purchaseOrder),
     currency:      normalize(parsed?.currency || "USD").toUpperCase() || "USD",
@@ -116,223 +142,172 @@ function mapInvoice(parsed: Record<string, unknown>, sourceText: string): Extrac
     tax:           toNumber(parsed?.tax),
     total:         toNumber(parsed?.total),
     lines,
+    uncertainFields,
   };
 }
 
-function getApiKey(override?: string): string {
-  const key = normalize(override || process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY);
-  if (!key) throw new Error("Missing GOOGLE_API_KEY — configure it in .env.local or in the client's AI config");
-  return key;
-}
+// ── Prompt and schema ─────────────────────────────────────────────────
+// Claude's structured outputs cap union-typed (nullable) properties at 16 per
+// schema, so strings use "" for "not printed" and only dates and numbers are
+// nullable.
+const nullable = (type: string, description?: string): JsonSchema => ({ type: [type, "null"], ...(description ? { description } : {}) });
+const text = (description: string): JsonSchema => ({ type: "string", description: `${description} Empty string if not printed.` });
 
-function getInstruction(): string {
-  return [
-    "Extract invoice fields from the provided content.",
-    "Return ONLY a strict JSON object.",
-    "Do not include markdown, comments, or explanations.",
-    "Do not invent values — use null or empty string if unknown.",
-    "Vendor must be supplier name only, never address or contact text.",
-    "Dates (invoice_date, due_date) MUST be returned in ISO format YYYY-MM-DD. Never use DD/MM/YYYY or MM/DD/YYYY.",
-    "Capture all line items present before subtotal/tax/total.",
-    "For each line include bbox: the visual bounding box of that line in the document (page is 1-indexed; x1,y1 are the top-left corner; x2,y2 are the bottom-right corner; all coordinates normalized 0.0-1.0).",
-    "Schema:",
-    JSON.stringify({
-      vendor:         "string",
-      invoice_number: "string",
-      invoice_date:   "YYYY-MM-DD",
-      due_date:       "YYYY-MM-DD",
-      purchase_order: "string",
-      currency:       "string",
-      subtotal:       "number|null",
-      tax:            "number|null",
-      total:          "number|null",
-      lines: [{
-        description: "string",
-        item_code:   "string|null",
-        quantity:    "number|null",
-        rate:        "number|null",
-        amount:      "number|null",
-        uom:         "string|null",
-        bbox:        { page: 1, x1: 0.0, y1: 0.0, x2: 1.0, y2: 1.0 },
-      }],
-    }),
-  ].join(" ");
-}
-
-type GeminiPart = Record<string, unknown>;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-// Transient Gemini errors worth retrying: rate limits and upstream hiccups.
-const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
-const GEMINI_TIMEOUT_MS = Number(process.env.GEMINI_TIMEOUT_MS) || 90_000;
-
-export type TieredFallbackConfig = {
-  softFallbackRate?: unknown;
-  canaryRate?: unknown;
-  stickySecondaryEnabled?: unknown;
-  allowSecondaryForBaldor?: unknown;
-  complexLineCountThreshold?: unknown;
-  primaryMaxRetries?: unknown;
-  secondaryMaxRetries?: unknown;
-  retryBaseMs?: unknown;
-  retryMaxMs?: unknown;
-};
-
-type ResolvedTieredFallbackConfig = {
-  softFallbackRate: number;
-  canaryRate: number;
-  stickySecondaryEnabled: boolean;
-  allowSecondaryForBaldor: boolean;
-  complexLineCountThreshold: number;
-  primaryMaxRetries: number;
-  secondaryMaxRetries: number;
-  retryBaseMs: number;
-  retryMaxMs: number;
-};
-
-function boundedNumber(value: unknown, fallback: number, min: number, max: number): number {
-  const number = Number(value);
-  return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : fallback;
-}
-
-function resolveTieredFallbackConfig(config?: TieredFallbackConfig): ResolvedTieredFallbackConfig {
-  return {
-    softFallbackRate: boundedNumber(config?.softFallbackRate, 0.08, 0, 1),
-    canaryRate: boundedNumber(config?.canaryRate, 0, 0, 0.5),
-    stickySecondaryEnabled: config?.stickySecondaryEnabled !== false,
-    allowSecondaryForBaldor: config?.allowSecondaryForBaldor === true,
-    complexLineCountThreshold: Math.round(boundedNumber(config?.complexLineCountThreshold, 12, 3, 200)),
-    primaryMaxRetries: Math.round(boundedNumber(config?.primaryMaxRetries, 3, 0, 5)),
-    secondaryMaxRetries: Math.round(boundedNumber(config?.secondaryMaxRetries, 1, 0, 3)),
-    retryBaseMs: Math.round(boundedNumber(config?.retryBaseMs, 1500, 250, 10000)),
-    retryMaxMs: Math.round(boundedNumber(config?.retryMaxMs, 8000, 1000, 60000)),
-  };
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function outputTokenLimit(maxChars: unknown): number | undefined {
-  const characters = Number(maxChars);
-  if (!Number.isFinite(characters)) return undefined;
-  // Gemini controls output in tokens; four characters per token is the usual
-  // conservative conversion for the JSON extraction response.
-  return Math.max(256, Math.min(8192, Math.round(characters / 4)));
-}
-
-async function callModel(
-  model: string,
-  parts: GeminiPart[],
-  apiKeyOverride?: string,
-  maxChars?: number,
-  retry?: Pick<ResolvedTieredFallbackConfig, "retryBaseMs" | "retryMaxMs"> & { maxRetries: number },
-): Promise<{
-  text: string;
-  promptTokens: number;
-  completionTokens: number;
-}> {
-  const apiKey = getApiKey(apiKeyOverride);
-  const maxOutputTokens = outputTokenLimit(maxChars);
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
-
-  const maxRetries = retry?.maxRetries ?? 3;
-  const attempts = maxRetries + 1;
-  const retryBaseMs = retry?.retryBaseMs ?? 1500;
-  const retryMaxMs = retry?.retryMaxMs ?? 8000;
-  let response: Response | null = null;
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    if (attempt > 0) {
-      const backoff = Math.min(retryMaxMs, retryBaseMs * 2 ** (attempt - 1)) + Math.floor(Math.random() * Math.min(300, retryBaseMs / 4));
-      await sleep(backoff);
-    }
-    try {
-      response = await fetch(url, {
-        method:  "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-        body: JSON.stringify({
-          contents:         [{ role: "user", parts }],
-          generationConfig: {
-            temperature: 0,
-            responseMimeType: "application/json",
-            ...(maxOutputTokens ? { maxOutputTokens } : {}),
+export const INVOICE_SCHEMA: JsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["vendor", "vendor_tax_id", "invoice_number", "invoice_date", "delivery_date", "due_date", "purchase_order", "currency", "subtotal", "tax", "total", "lines", "uncertain_fields"],
+  properties: {
+    vendor:         text("Supplier (seller) legal or trade name only; never the buyer, never an address."),
+    vendor_tax_id:  text("Supplier tax id (RFC, NIT, RUT, VAT, EIN)."),
+    invoice_number: text("Invoice or order number as printed."),
+    invoice_date:   nullable("string", "Date the document was issued, YYYY-MM-DD. null if not printed."),
+    delivery_date:  nullable("string", "Delivery or service date, YYYY-MM-DD. null if not printed."),
+    due_date:       nullable("string", "Payment due date, YYYY-MM-DD. null if not printed."),
+    purchase_order: text("Buyer's purchase order reference as printed."),
+    currency:       text("ISO 4217 code, e.g. USD, MXN."),
+    subtotal:       nullable("number"),
+    tax:            nullable("number", "Total taxes charged (VAT/IVA/sales tax)."),
+    total:          nullable("number", "Amount payable."),
+    lines: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["line_type", "description", "supplier_item_code", "other_item_code", "quantity", "uom", "billed_weight", "weight_uom", "rate", "amount", "bbox"],
+        properties: {
+          line_type:          { type: "string", enum: ["item", "charge"], description: "item = product or service sold; charge = surcharge, fee, freight, deposit or discount line." },
+          description:        { type: "string" },
+          supplier_item_code: text("The supplier's own item/SKU code from the item code column."),
+          other_item_code:    text("Any other code printed for the line (manufacturer, customer or UPC code)."),
+          quantity:           nullable("number", "Quantity in the unit that is priced."),
+          uom:                text("Unit of the quantity (CS, EA, LB, KG, BX, pack/size text)."),
+          billed_weight:      nullable("number", "For weight-priced lines, the weight the amount was computed on."),
+          weight_uom:         text("Unit of billed_weight."),
+          rate:               nullable("number", "Unit price in the priced unit."),
+          amount:             nullable("number", "Extended line amount as printed."),
+          bbox: {
+            type: ["object", "null"],
+            additionalProperties: false,
+            required: ["page", "x1", "y1", "x2", "y2"],
+            properties: { page: { type: "integer" }, x1: { type: "number" }, y1: { type: "number" }, x2: { type: "number" }, y2: { type: "number" } },
           },
-        }),
-        cache: "no-store",
-        signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
-      });
-    } catch (e) {
-      // Network error or timeout (AbortError). Retry unless attempts exhausted.
-      if (attempt === attempts - 1) {
-        const reason = e instanceof Error ? e.message : String(e);
-        throw new Error(`AI extraction request failed (network/timeout): ${reason}`);
-      }
-      continue;
-    }
-    if (response.ok) break;
-    if (!RETRYABLE_STATUS.has(response.status) || attempt === attempts - 1) {
-      const body = await response.text();
-      throw new Error(`AI extraction failed (${response.status}): ${body}`);
-    }
-    // retryable status → loop and back off
-  }
-
-  const json = await response!.json() as Record<string, unknown>;
-  const candidates = Array.isArray(json?.candidates) ? json.candidates : [];
-  let text = "";
-  for (const candidate of candidates) {
-    const content = isRecord(candidate) && isRecord(candidate.content) ? candidate.content : null;
-    const parts2 = content && Array.isArray(content.parts) ? content.parts : [];
-    for (const part of parts2) {
-      const t = normalize(isRecord(part) ? part.text : "");
-      if (t) { text = t; break; }
-    }
-    if (text) break;
-  }
-  if (!text) throw new Error("AI extraction returned empty content");
-
-  const usage = isRecord(json.usageMetadata) ? json.usageMetadata : {};
-  return {
-    text,
-    promptTokens:     Number(usage?.promptTokenCount    || 0),
-    completionTokens: Number(usage?.candidatesTokenCount || 0),
-  };
-}
-
-export type ExtractOptions = {
-  fallbackEnabled?: boolean; // ai_tiered_fallback — default true
-  forceSecondary?:  boolean; // ai_force_secondary  — default false
-  apiKey?:          string;  // per-org override; falls back to GOOGLE_API_KEY env
-  primaryModel?:     string; // ai_model_selection
-  secondaryModel?:   string; // ai_model_selection
-  maxChars?:         number; // ai_model_selection (OCR input / approximate AI output limit)
-  tieredFallback?:   TieredFallbackConfig;
+        },
+      },
+    },
+    uncertain_fields: {
+      type: "array",
+      description: "Fields you could not read with confidence, with the reason.",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["field", "reason"],
+        properties: { field: { type: "string" }, reason: { type: "string" } },
+      },
+    },
+  },
 };
 
-function allowsSecondary(source: string, config: ResolvedTieredFallbackConfig): boolean {
-  return config.allowSecondaryForBaldor || !source.toLowerCase().includes("baldor");
+/** Stable task description; it is cached by the provider, so it must not contain anything per document. */
+export function getInstruction(): string {
+  return [
+    "You extract accounts-payable data from supplier invoices, order confirmations and purchase orders (any language, digital or scanned).",
+    "Return only the JSON object described by the schema. Never invent values: a text field that is not printed is an empty string; a number or date that is not printed is null.",
+    "Header rules:",
+    "- vendor is the seller. The buyer, ship-to and bill-to parties are never the vendor.",
+    "- invoice_date is the issue date of the document. Delivery, order-submitted and due dates go in their own fields. Never derive a date from the file name or a reference code.",
+    "- Dates are YYYY-MM-DD. If the year is missing, use the year printed elsewhere on the document; otherwise null.",
+    "- total is the amount payable; subtotal and tax only when printed.",
+    "Line rules:",
+    "- Capture every line printed before the totals, in document order, including surcharges, freight, fees, deposits and discounts; mark those as line_type \"charge\".",
+    "- supplier_item_code is the code in the supplier's own item/SKU column. Codes that belong to the manufacturer, the customer or a barcode go in other_item_code.",
+    "- quantity and rate refer to the unit that is priced. When a line is priced by weight (price per LB/KG with a billed weight), put the billed weight in billed_weight with its unit, and set quantity to that weight so that quantity x rate equals amount.",
+    "- amount is the extended amount as printed; do not recompute it. Group subtotals and running totals are not lines.",
+    "- bbox is the visual box of the whole line on its page: page is 1-based; x1,y1 top-left and x2,y2 bottom-right, normalized 0.0-1.0 relative to the page.",
+    "- Keep descriptions as printed, without the pack/size prefix when it is a separate column.",
+    "uncertain_fields: list only values that are printed but you could not read clearly or could not place with confidence (faint scan, overlapping marks, ambiguous column), naming the field (for lines use \"lines[n].amount\") and why. A field that is simply not printed is not uncertain: leave it null or empty and do not list it.",
+  ].join("\n");
 }
 
-function isSoftExtractionFailure(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.includes("zero lines") || message.includes("empty content") || message.includes("valid JSON");
+// ── Fallback by evidence ──────────────────────────────────────────────
+export interface FallbackPolicy {
+  onZeroLines?: boolean;
+  onTotalMismatch?: boolean;
+  onMissingHeader?: boolean;
+  onModelDoubt?: boolean;
 }
 
-function retryConfig(config: ResolvedTieredFallbackConfig, secondary: boolean) {
-  return {
-    maxRetries: secondary ? config.secondaryMaxRetries : config.primaryMaxRetries,
-    retryBaseMs: config.retryBaseMs,
-    retryMaxMs: config.retryMaxMs,
+const DEFAULT_POLICY: Required<FallbackPolicy> = { onZeroLines: true, onTotalMismatch: true, onMissingHeader: true, onModelDoubt: true };
+
+/** Why a second model should look at this document; null when the first result holds up. */
+export function secondaryReason(invoice: ExtractedInvoice, validation: ExtractionValidationConfig = {}, policy: FallbackPolicy = {}): string | null {
+  const p = { ...DEFAULT_POLICY, ...policy };
+  if (p.onZeroLines && invoice.lines.length === 0) return "sin líneas";
+  if (p.onTotalMismatch) {
+    const v = validateExtraction(invoice, validation);
+    if (v.level === "error") return `las líneas no cuadran con el total (diferencia ${v.difference.toFixed(2)})`;
+  }
+  if (p.onMissingHeader && !invoice.invoiceNumber && invoice.total === null) return "sin número ni total";
+  if (p.onMissingHeader && !invoice.vendor) return "sin proveedor";
+  if (p.onModelDoubt) {
+    const doubted = invoice.uncertainFields.filter((f) => ["total", "invoice_number", "vendor"].includes(f.field));
+    if (doubted.length > 0) return `el modelo duda de ${doubted.map((f) => f.field).join(", ")}`;
+  }
+  return null;
+}
+
+/** Prefer the second result only when it resolves what triggered it. */
+function better(primary: ExtractedInvoice, secondary: ExtractedInvoice, validation: ExtractionValidationConfig, policy: FallbackPolicy): boolean {
+  const primaryReason = secondaryReason(primary, validation, policy);
+  const secondaryIssue = secondaryReason(secondary, validation, policy);
+  if (secondaryIssue === null) return true;
+  if (primaryReason === "sin líneas" && secondary.lines.length > 0) return true;
+  return false;
+}
+
+// ── Entry point ───────────────────────────────────────────────────────
+export type ExtractOptions = {
+  fallbackEnabled?: boolean;        // ai_tiered_fallback
+  forceSecondary?:  boolean;        // ai_force_secondary
+  apiKey?:          string;         // per-org Gemini key
+  primaryModel?:    string;         // ai_model_selection
+  secondaryModel?:  string;         // ai_model_selection
+  maxChars?:        number;         // ai_model_selection (approximate AI output limit)
+  policy?:          FallbackPolicy; // ai_tiered_fallback
+  validation?:      ExtractionValidationConfig; // ai_validation_thresholds, used to judge the first result
+  timeoutMs?:       number;
+  effort?:          "low" | "medium" | "high"; // ai_model_selection (Claude only)
+};
+
+export function configuredEffort(value: unknown): "low" | "medium" | "high" | undefined {
+  return value === "low" || value === "medium" || value === "high" ? value : undefined;
+}
+
+export function configuredModel(value: unknown, fallback: string): string {
+  return isKnownModel(value) ? value : fallback;
+}
+
+function outputTokenLimit(maxChars: unknown): number {
+  const characters = Number(maxChars);
+  if (!Number.isFinite(characters)) return 8000;
+  // Four characters per token is the usual conservative conversion for the JSON response.
+  return Math.max(1024, Math.min(16000, Math.round(characters / 4)));
+}
+
+async function callModel(model: string, fileName: string, mimeType: string, base64: string, options: ExtractOptions): Promise<{ invoice: ExtractedInvoice; rawJson: string; usage: AiUsage }> {
+  const req: AiJsonRequest = {
+    model,
+    instruction: getInstruction(),
+    parts: [{ kind: "file", base64, mimeType }],
+    note: `FILE_NAME: ${normalize(fileName) || "invoice"}`,
+    schema: INVOICE_SCHEMA,
+    apiKey: options.apiKey,
+    maxOutputTokens: outputTokenLimit(options.maxChars),
+    timeoutMs: options.timeoutMs,
+    effort: options.effort,
   };
-}
-
-function configuredModel(value: unknown, fallback: string): string {
-  const model = normalize(value);
-  // Keep the configurable value constrained to Gemini model identifiers.
-  return /^gemini-[a-z0-9.-]+$/i.test(model) ? model : fallback;
+  const res = await generateJson(req);
+  return { invoice: mapInvoice(res.json, normalize(fileName)), rawJson: res.rawText, usage: res.usage };
 }
 
 export async function extractFromFile(params: {
@@ -341,140 +316,45 @@ export async function extractFromFile(params: {
   base64Content: string;
   options?:      ExtractOptions;
 }): Promise<ExtractionResult> {
-  const { fallbackEnabled = true, forceSecondary = false, apiKey } = params.options ?? {};
-  const tiered = resolveTieredFallbackConfig(params.options?.tieredFallback);
-  const primaryModel = configuredModel(params.options?.primaryModel, FLASH_MODEL);
-  const secondaryModel = configuredModel(params.options?.secondaryModel, PRO_MODEL);
+  const options = params.options ?? {};
+  const { fallbackEnabled = true, forceSecondary = false } = options;
+  const primaryModel = configuredModel(options.primaryModel, DEFAULT_PRIMARY_MODEL);
+  const secondaryModel = configuredModel(options.secondaryModel, DEFAULT_SECONDARY_MODEL);
+  const validation = options.validation ?? {};
+  const policy = options.policy ?? {};
 
-  const instruction = getInstruction();
-  const parts: GeminiPart[] = [
-    { text: `${instruction} FILE_NAME: ${normalize(params.fileName) || "invoice"}` },
-    { inline_data: { mime_type: params.mimeType, data: params.base64Content } },
-  ];
-  const secondaryAllowed = allowsSecondary(params.fileName, tiered);
-
-  // ai_force_secondary: skip primary model entirely
   if (forceSecondary) {
-    const result = await callModel(secondaryModel, parts, apiKey, params.options?.maxChars, retryConfig(tiered, true));
-    const parsed  = parseJsonObject(result.text);
-    const invoice = mapInvoice(parsed, normalize(params.fileName));
-    return {
-      invoice,
-      model:            secondaryModel,
-      fallbackUsed:     true,
-      rawJson:          result.text,
-      promptTokens:     result.promptTokens,
-      completionTokens: result.completionTokens,
-    };
+    const r = await callModel(secondaryModel, params.fileName, params.mimeType, params.base64Content, options);
+    return { invoice: r.invoice, model: secondaryModel, fallbackUsed: true, fallbackReason: "forzado por configuración", rawJson: r.rawJson, promptTokens: r.usage.inputTokens, completionTokens: r.usage.outputTokens, cachedTokens: r.usage.cachedInputTokens };
   }
 
-  // Primary model attempt
+  const first = await callModel(primaryModel, params.fileName, params.mimeType, params.base64Content, options);
+  const reason = secondaryReason(first.invoice, validation, policy);
+  const primaryResult: ExtractionResult = { invoice: first.invoice, model: primaryModel, fallbackUsed: false, fallbackReason: null, rawJson: first.rawJson, promptTokens: first.usage.inputTokens, completionTokens: first.usage.outputTokens, cachedTokens: first.usage.cachedInputTokens };
+  if (!reason || !fallbackEnabled || secondaryModel === primaryModel) return primaryResult;
+
+  console.warn(`[extract] ${primaryModel} → ${secondaryModel}: ${reason}`);
+  let second: Awaited<ReturnType<typeof callModel>>;
   try {
-    const result = await callModel(primaryModel, parts, apiKey, params.options?.maxChars, retryConfig(tiered, false));
-    const parsed  = parseJsonObject(result.text);
-    const invoice = mapInvoice(parsed, normalize(params.fileName));
-    if (invoice.lines.length === 0) throw new Error("Primary model returned zero lines");
-
-    // Complex documents intentionally receive a Pro extraction as the final
-    // result. Canary calls exercise Pro without replacing a valid Flash result.
-    if (secondaryAllowed && invoice.lines.length >= tiered.complexLineCountThreshold) {
-      try {
-        const secondary = await callModel(secondaryModel, parts, apiKey, params.options?.maxChars, retryConfig(tiered, true));
-        const secondaryInvoice = mapInvoice(parseJsonObject(secondary.text), normalize(params.fileName));
-        if (secondaryInvoice.lines.length === 0) throw new Error("Secondary model returned zero lines");
-        return {
-          invoice: secondaryInvoice, model: secondaryModel, fallbackUsed: true, rawJson: secondary.text,
-          promptTokens: secondary.promptTokens, completionTokens: secondary.completionTokens,
-        };
-      } catch (secondaryError) {
-        if (tiered.stickySecondaryEnabled) {
-          const message = secondaryError instanceof Error ? secondaryError.message : String(secondaryError);
-          throw new Error(`Secondary model failed for complex document: ${message}`);
-        }
-      }
-    } else if (secondaryAllowed && Math.random() < tiered.canaryRate) {
-      void callModel(secondaryModel, parts, apiKey, params.options?.maxChars, retryConfig(tiered, true)).catch(() => {});
-    }
-    return {
-      invoice,
-      model:            primaryModel,
-      fallbackUsed:     false,
-      rawJson:          result.text,
-      promptTokens:     result.promptTokens,
-      completionTokens: result.completionTokens,
-    };
-  } catch (primaryErr) {
-    // Soft extraction failures are sampled; transport/provider failures always
-    // fall through to Pro. Baldor is explicitly opt-in for Pro usage.
-    const message = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
-    if (message.startsWith("Secondary model failed for complex document:")
-      || !fallbackEnabled || !secondaryAllowed
-      || (isSoftExtractionFailure(primaryErr) && Math.random() >= tiered.softFallbackRate)) {
-      throw primaryErr;
-    }
-    console.warn("[extract] Primary failed, using secondary:", (primaryErr as Error).message);
-    const result = await callModel(secondaryModel, parts, apiKey, params.options?.maxChars, retryConfig(tiered, true));
-    const parsed  = parseJsonObject(result.text);
-    const invoice = mapInvoice(parsed, normalize(params.fileName));
-    return {
-      invoice,
-      model:            secondaryModel,
-      fallbackUsed:     true,
-      rawJson:          result.text,
-      promptTokens:     result.promptTokens,
-      completionTokens: result.completionTokens,
-    };
+    second = await callModel(secondaryModel, params.fileName, params.mimeType, params.base64Content, options);
+  } catch (error) {
+    // The first result still stands; the pipeline's own validation decides its fate.
+    console.warn("[extract] secondary model failed, keeping primary:", error instanceof Error ? error.message : error);
+    return primaryResult;
   }
+  if (!better(first.invoice, second.invoice, validation, policy)) return primaryResult;
+  return {
+    invoice: second.invoice, model: secondaryModel, fallbackUsed: true, fallbackReason: reason, rawJson: second.rawJson,
+    promptTokens: first.usage.inputTokens + second.usage.inputTokens,
+    completionTokens: first.usage.outputTokens + second.usage.outputTokens,
+    cachedTokens: first.usage.cachedInputTokens + second.usage.cachedInputTokens,
+  };
 }
 
-export async function extractFromText(params: {
-  ocrText: string;
-  model?:  string;
-  options?: ExtractOptions;
-}): Promise<ExtractionResult> {
-  const { fallbackEnabled = true, forceSecondary = false, apiKey } = params.options ?? {};
-  const tiered = resolveTieredFallbackConfig(params.options?.tieredFallback);
-  const primaryModel = configuredModel(params.options?.primaryModel, FLASH_MODEL);
-  const secondaryModel = configuredModel(params.options?.secondaryModel, PRO_MODEL);
-  const configuredMaxChars = Number(params.options?.maxChars);
-  const maxChars = Number.isFinite(configuredMaxChars)
-    ? Math.max(5000, Math.min(configuredMaxChars, 200000))
-    : MAX_CHARS;
-  const text = params.ocrText.slice(0, maxChars);
-  const instruction = getInstruction();
-  const parts: GeminiPart[] = [{ text: `${instruction} OCR_TEXT:\n${text}` }];
-  const secondaryAllowed = allowsSecondary(text, tiered);
-
-  const startModel = forceSecondary ? secondaryModel : (params.model || primaryModel);
-
-  try {
-    const result = await callModel(startModel, parts, apiKey, params.options?.maxChars, retryConfig(tiered, forceSecondary));
-    const parsed  = parseJsonObject(result.text);
-    const invoice = mapInvoice(parsed, text);
-    if (invoice.lines.length === 0 && !params.model && !forceSecondary) {
-      throw new Error("Primary model returned zero lines");
-    }
-    return {
-      invoice,
-      model:            startModel,
-      fallbackUsed:     forceSecondary,
-      rawJson:          result.text,
-      promptTokens:     result.promptTokens,
-      completionTokens: result.completionTokens,
-    };
-  } catch (err) {
-    if (params.model || forceSecondary || !fallbackEnabled || !secondaryAllowed || (isSoftExtractionFailure(err) && Math.random() >= tiered.softFallbackRate)) throw err;
-    console.warn("[extract] Primary OCR failed, using secondary:", (err as Error).message);
-    const result = await callModel(secondaryModel, parts, apiKey, params.options?.maxChars, retryConfig(tiered, true));
-    const parsed  = parseJsonObject(result.text);
-    const invoice = mapInvoice(parsed, text);
-    return {
-      invoice,
-      model:            secondaryModel,
-      fallbackUsed:     true,
-      rawJson:          result.text,
-      promptTokens:     result.promptTokens,
-      completionTokens: result.completionTokens,
-    };
-  }
+/** Builds the request a batch would submit for this document (same prompt, schema and limits as a direct call). */
+export function extractionRequest(model: string, fileName: string, mimeType: string, base64: string, options: ExtractOptions = {}): AiJsonRequest {
+  return {
+    model, instruction: getInstruction(), parts: [{ kind: "file", base64, mimeType }], note: `FILE_NAME: ${normalize(fileName) || "invoice"}`,
+    schema: INVOICE_SCHEMA, apiKey: options.apiKey, maxOutputTokens: outputTokenLimit(options.maxChars), effort: options.effort,
+  };
 }

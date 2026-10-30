@@ -16,6 +16,8 @@ import type { EffectiveVendorRule } from "@/lib/workflow/vendor-rules";
 import { DocPreview } from "./doc-preview-lazy";
 import { SelectMenu } from "@/components/ui/select-menu";
 import { Badge, Card, FiscalPanel, PoComparisonCard, PoPicker } from "./ap-panels";
+import { SandboxTestSend } from "@/components/tenant/sandbox-test-send";
+import type { TestSend } from "@/lib/workflow/test-send";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -117,6 +119,8 @@ export function ReviewClient({
   statusReason = null,
   canApprove = false,
   approvalWorkflow = false,
+  sandboxTest = false,
+  testSends = [],
   payload,
 }: {
   docId: number;
@@ -130,6 +134,9 @@ export function ReviewClient({
   statusReason?: string | null;
   canApprove?: boolean;
   approvalWorkflow?: boolean;
+  /** sandbox_test_send feature while the active ERP environment is sandbox. */
+  sandboxTest?: boolean;
+  testSends?: TestSend[];
   payload: ReviewPayload;
 }) {
   const router = useRouter();
@@ -509,31 +516,36 @@ export function ReviewClient({
 
   // ── Submit ────────────────────────────────────────────────────────────────
 
+  // The draft as the reviewer sees it: what approval posts and what a sandbox
+  // test send uses, so both go to the ERP with the same lines.
+  function reviewBody(): Record<string, unknown> {
+    const current = comparison && comparison.poInternalId === poId ? comparison : null;
+    return {
+      vendor_internal_id:   vendorId,
+      vendor_name:          vendorName || null,
+      invoice_number:       doc.invoice_number,
+      invoice_date:         doc.invoice_date,
+      due_date:             doc.due_date,
+      currency:             doc.currency,
+      location_internal_id: locationId || null,
+      po_internal_id:       poId || null,
+      line_items: lineItems.map((l, i) => ({
+        ...l,
+        po_line: current?.lines.find(c => c.index === i)?.poLine ?? null,
+      })),
+    };
+  }
+
   async function handleApprove(opts: { requestApproval?: boolean } = {}) {
     setSubmitError("");
     if (!vendorId) { setSubmitError("Selecciona un proveedor del ERP antes de aprobar."); return; }
     if (!validLines.length) { setSubmitError("Asigna al menos un ítem del ERP para poder aprobar."); return; }
-    const current = comparison && comparison.poInternalId === poId ? comparison : null;
     setSubmitting(true);
     try {
       const res = await fetch(`/api/v1/workflow/${docId}/approve`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          vendor_internal_id:   vendorId,
-          vendor_name:          vendorName || null,
-          invoice_number:       doc.invoice_number,
-          invoice_date:         doc.invoice_date,
-          due_date:             doc.due_date,
-          currency:             doc.currency,
-          location_internal_id: locationId || null,
-          po_internal_id:       poId || null,
-          request_approval:     opts.requestApproval === true,
-          line_items: lineItems.map((l, i) => ({
-            ...l,
-            po_line: current?.lines.find(c => c.index === i)?.poLine ?? null,
-          })),
-        }),
+        body: JSON.stringify({ ...reviewBody(), request_approval: opts.requestApproval === true }),
       });
       const data = await res.json();
       if (!res.ok) { setSubmitError(data.error ?? "Error al procesar en el ERP"); return; }
@@ -1270,6 +1282,15 @@ export function ReviewClient({
               <p className="flex-1 min-w-[240px] text-[0.8125rem] text-foreground">
                 {submitError ? <span className="text-destructive">{submitError}</span> : action.message}
               </p>
+              {sandboxTest && (
+                <SandboxTestSend
+                  docId={docId}
+                  compact
+                  history={testSends}
+                  disabled={submitting}
+                  buildBody={() => (vendorId && validLines.length ? reviewBody() : null)}
+                />
+              )}
               <button onClick={() => router.back()} disabled={submitting} className="text-xs text-muted-foreground hover:text-foreground px-2">Cancelar</button>
               {action.secondary && (
                 <button

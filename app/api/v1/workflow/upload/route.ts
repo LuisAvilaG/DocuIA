@@ -6,7 +6,8 @@ import { db } from "@/lib/db";
 import { organizations, subsidiaries } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import { runPipeline, createQueuedDocument } from "@/lib/workflow/pipeline";
-import { enqueuePipeline } from "@/lib/queue";
+import { enqueuePipeline, scheduleBatchCollection } from "@/lib/queue";
+import { batchModeFor, queueDocumentForBatch } from "@/lib/ai/batch-jobs";
 import { isFeatureEnabled } from "@/lib/features";
 import { uploadFile } from "@/lib/storage/minio";
 
@@ -116,6 +117,26 @@ async function handlePOST(req: NextRequest) {
       autoProcessThreshold: org?.autoProcessThreshold ?? undefined,
       attachmentKey,
     };
+
+    // ── Batch path: bulk uploads grouped into one provider batch (half price,
+    // results within hours). Falls through to the normal queue on any failure.
+    if (isBulk && storageEnabled) {
+      const mode = await batchModeFor(session.orgId, documentType).catch(() => null);
+      if (mode) {
+        try {
+          const { documentId, storageKey } = await createQueuedDocument(pipelineInput);
+          await queueDocumentForBatch({
+            documentId, storageKey, organizationId: session.orgId, subsidiaryId, documentType,
+            fileName: file.name, mimeType: file.type, requestedBy: session.sub,
+            autoProcessThreshold: org?.autoProcessThreshold ?? undefined, attachmentKey,
+          });
+          await scheduleBatchCollection(session.orgId, mode.waitMinutes);
+          return NextResponse.json({ ok: true, status: "queued", documentId, batch: true });
+        } catch (batchErr) {
+          console.error("[upload] batch path failed, using the regular queue:", batchErr instanceof Error ? batchErr.message : batchErr);
+        }
+      }
+    }
 
     // ── Async path: only when the file is durably stored (document_storage).
     // The pipeline runs off the HTTP thread in a pg-boss worker; the client

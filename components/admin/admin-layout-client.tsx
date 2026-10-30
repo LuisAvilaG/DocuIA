@@ -1,10 +1,10 @@
 "use client";
 
 import { usePathname } from "next/navigation";
-import { AdminSidebar } from "./admin-sidebar";
+import { AdminRail } from "./admin-rail";
 import { SessionRefresh } from "@/components/providers/session-refresh";
 
-export function AdminLayoutClient({ children }: { children: React.ReactNode }) {
+export function AdminLayoutClient({ children, adminInitials }: { children: React.ReactNode; adminInitials: string }) {
   const pathname = usePathname();
 
   if (pathname === "/admin/login") {
@@ -12,12 +12,13 @@ export function AdminLayoutClient({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex min-h-screen bg-background">
+    <div className="min-h-screen bg-background">
       <SessionRefresh realm="admin" />
-      <AdminSidebar />
-      <main className="flex-1 ml-56 min-h-screen flex flex-col">
+      <AdminRail adminInitials={adminInitials} />
+      {/* Every page renders its own panel + content inside this flex row. */}
+      <div className="ml-16 min-h-screen flex items-stretch">
         {children}
-      </main>
+      </div>
     </div>
   );
 }

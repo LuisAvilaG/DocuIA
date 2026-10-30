@@ -7,6 +7,7 @@ import { nsConnections, organizations } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { encryptField } from "@/lib/crypto/encrypt";
+import { testNsCredentials } from "@/lib/netsuite/client";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -74,6 +75,18 @@ async function handlePOST(req: NextRequest, { params }: Params) {
       return NextResponse.json({ error: "environment must be sandbox or production" }, { status: 400 });
     }
 
+    // "Guardar y probar": the credentials are checked against the ERP right
+    // away, so the environment can be activated without a second step.
+    let tested: boolean | null = null;
+    let testError: string | null = null;
+    let effectiveStatus: "pending" | "connected" | "error" | undefined = connectionStatus;
+    if (body.test === true) {
+      const probe = await testNsCredentials({ accountId, consumerKey, consumerSecret, tokenId, tokenSecret });
+      tested = probe.ok;
+      testError = probe.ok ? null : (probe.error ?? "Error desconocido");
+      effectiveStatus = probe.ok ? "connected" : "error";
+    }
+
     const encConsumerKey    = encryptField(consumerKey);
     const encConsumerSecret = encryptField(consumerSecret);
     const encTokenId        = encryptField(tokenId);
@@ -100,9 +113,9 @@ async function handlePOST(req: NextRequest, { params }: Params) {
           catalogDeployId: catalogDeployId ?? existing.catalogDeployId,
           processScriptId: processScriptId ?? existing.processScriptId,
           processDeployId: processDeployId ?? existing.processDeployId,
-          connectionStatus: connectionStatus ?? existing.connectionStatus,
-          connectionTestedAt: connectionStatus === "connected" ? now : existing.connectionTestedAt,
-          connectionError: connectionStatus === "connected" ? null : existing.connectionError,
+          connectionStatus: effectiveStatus ?? "pending",
+          connectionTestedAt: effectiveStatus === "connected" || tested !== null ? now : null,
+          connectionError: tested === false ? testError : effectiveStatus === "connected" ? null : existing.connectionError,
           scriptsInstalled: scriptsInstalled ?? existing.scriptsInstalled,
           scriptsInstalledAt: scriptsInstalled && !existing.scriptsInstalled ? now : existing.scriptsInstalledAt,
           installMethod: installMethod ?? existing.installMethod,
@@ -110,8 +123,8 @@ async function handlePOST(req: NextRequest, { params }: Params) {
         })
         .where(eq(nsConnections.id, existing.id));
 
-      await logAdminAction(req, session!, { action: "netsuite_connection.updated", targetOrgId: organizationId, after: { environment, accountId } });
-      return NextResponse.json({ ok: true, connectionId: existing.id });
+      await logAdminAction(req, session!, { action: "netsuite_connection.updated", targetOrgId: organizationId, after: { environment, accountId, tested } });
+      return NextResponse.json({ ok: tested !== false, connectionId: existing.id, tested, error: testError, status: effectiveStatus ?? "pending" }, { status: tested === false ? 422 : 200 });
     }
 
     const connectionId = randomUUID();
@@ -128,8 +141,9 @@ async function handlePOST(req: NextRequest, { params }: Params) {
       catalogDeployId: catalogDeployId ?? null,
       processScriptId: processScriptId ?? null,
       processDeployId: processDeployId ?? null,
-      connectionStatus: connectionStatus ?? "pending",
-      connectionTestedAt: connectionStatus === "connected" ? now : null,
+      connectionStatus: effectiveStatus ?? "pending",
+      connectionTestedAt: effectiveStatus === "connected" || tested !== null ? now : null,
+      connectionError: tested === false ? testError : null,
       scriptsInstalled: scriptsInstalled ?? false,
       scriptsInstalledAt: scriptsInstalled ? now : null,
       installMethod: installMethod ?? null,
@@ -138,8 +152,8 @@ async function handlePOST(req: NextRequest, { params }: Params) {
       updatedAt: now,
     });
 
-    await logAdminAction(req, session!, { action: "netsuite_connection.created", targetOrgId: organizationId, after: { environment, accountId } });
-    return NextResponse.json({ ok: true, connectionId }, { status: 201 });
+    await logAdminAction(req, session!, { action: "netsuite_connection.created", targetOrgId: organizationId, after: { environment, accountId, tested } });
+    return NextResponse.json({ ok: tested !== false, connectionId, tested, error: testError, status: effectiveStatus ?? "pending" }, { status: tested === false ? 422 : 201 });
   } catch (err) {
     console.error("[clients/connection POST]", err);
     return NextResponse.json({ error: "Internal error" }, { status: 500 });

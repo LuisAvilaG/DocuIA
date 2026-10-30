@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { hashSync } from "bcryptjs";
 import { requireAdminSession } from "@/lib/auth/admin";
+import { logAdminAction } from "@/lib/audit/admin";
 import { db } from "@/lib/db";
 import { authSessions, platformAdmins } from "@/db/schema";
 
@@ -88,6 +89,11 @@ async function handlePATCH(req: NextRequest, { params }: Params) {
           isNull(authSessions.revokedAt),
         ));
     }
+
+    await logAdminAction(req, session!, {
+      action: "platform_admin.updated", targetUserId: adminId,
+      after: { email: admin.email, passwordReset: Boolean(updates.passwordHash), isActive: admin.isActive },
+    });
 
     return NextResponse.json({
       admin: {

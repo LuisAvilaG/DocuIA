@@ -1,4 +1,5 @@
 import { withApiSecurity } from "@/lib/security/http";
+import { logAdminAction } from "@/lib/audit/admin";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession } from "@/lib/auth/admin";
 import { db } from "@/lib/db";
@@ -32,7 +33,7 @@ async function handleGET(_req: NextRequest, { params }: Params) {
 }
 
 async function handlePOST(req: NextRequest, { params }: Params) {
-  const { error } = await requireAdminSession();
+  const { error, session } = await requireAdminSession();
   if (error) return error;
 
   try {
@@ -82,6 +83,10 @@ async function handlePOST(req: NextRequest, { params }: Params) {
       }
     }
 
+    await logAdminAction(req, session!, {
+      action: "subsidiary.created", targetOrgId: organizationId,
+      after: { name: incoming.map((s) => s.name).filter(Boolean).join(", "), count: upserted.length },
+    });
     return NextResponse.json({ ok: true, count: upserted.length });
   } catch (err) {
     console.error("[clients/subsidiaries POST]", err);

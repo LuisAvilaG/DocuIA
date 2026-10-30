@@ -1,4 +1,5 @@
 import { withApiSecurity } from "@/lib/security/http";
+import { logAdminAction } from "@/lib/audit/admin";
 import { getActiveNsConnection } from "@/lib/netsuite/connection";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession } from "@/lib/auth/admin";
@@ -72,7 +73,7 @@ async function handleGET(_req: NextRequest, { params }: Params) {
 }
 
 async function handlePOST(req: NextRequest, { params }: Params) {
-  const { error } = await requireAdminSession();
+  const { error, session } = await requireAdminSession();
   if (error) return error;
 
   const { id: organizationId } = await params;
@@ -105,6 +106,7 @@ async function handlePOST(req: NextRequest, { params }: Params) {
       results.employees = await syncEmployees(organizationId, creds);
     }
 
+    await logAdminAction(req, session!, { action: "expense_catalogs.synced", targetOrgId: organizationId, after: { action: body.action, results } });
     return NextResponse.json({ ok: true, results });
   } catch (err) {
     console.error("[admin/expenses POST]", err);

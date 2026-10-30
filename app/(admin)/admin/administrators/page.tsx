@@ -11,16 +11,16 @@ export default async function PlatformAdministratorsPage() {
 
   const admins = await db
     .select({
-      id: platformAdmins.id,
-      email: platformAdmins.email,
-      fullName: platformAdmins.fullName,
-      isActive: platformAdmins.isActive,
-      lastLoginAt: platformAdmins.lastLoginAt,
-      createdAt: platformAdmins.createdAt,
-      updatedAt: platformAdmins.updatedAt,
+      id: platformAdmins.id, email: platformAdmins.email, fullName: platformAdmins.fullName, isActive: platformAdmins.isActive,
+      lastLoginAt: platformAdmins.lastLoginAt, createdAt: platformAdmins.createdAt,
     })
     .from(platformAdmins)
     .orderBy(desc(platformAdmins.createdAt));
 
-  return <PlatformAdminsClient initialAdmins={admins} currentAdminId={session!.sub} />;
+  return (
+    <PlatformAdminsClient
+      admins={admins.map((a) => ({ ...a, lastLoginAt: a.lastLoginAt?.toISOString() ?? null, createdAt: a.createdAt.toISOString() }))}
+      currentAdminId={session!.sub}
+    />
+  );
 }

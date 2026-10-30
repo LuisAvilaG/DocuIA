@@ -19,6 +19,8 @@ import { canApprove } from "@/lib/auth/permissions";
 import { DocPreview } from "./doc-preview-lazy";
 import { isFeatureEnabled } from "@/lib/features";
 import type { ApChecks } from "@/lib/workflow/ap-checks";
+import { sandboxTestSendAvailable, testSendsOf } from "@/lib/workflow/test-send";
+import { SandboxTestSend } from "@/components/tenant/sandbox-test-send";
 
 import { DOC_STATUS } from "@/lib/status-config";
 
@@ -93,11 +95,14 @@ export default async function HistoryDetailPage({
   }
 
   const storageEnabled = await isFeatureEnabled(session.orgId, "document_storage");
-  const [poProcessingEnabled, poMatchingEnabled, approvalWorkflow] = await Promise.all([
+  const [poProcessingEnabled, poMatchingEnabled, approvalWorkflow, sandboxGate] = await Promise.all([
     isFeatureEnabled(session.orgId, "po_processing"),
     isFeatureEnabled(session.orgId, "po_matching"),
     isFeatureEnabled(session.orgId, "approval_workflow"),
+    sandboxTestSendAvailable(session.orgId),
   ]);
+  const sandboxTest = sandboxGate.ok && doc.documentType !== "purchase_order" && session.role !== "viewer";
+  const testSends = testSendsOf(doc.products);
   const apChecks = doc.products && typeof doc.products === "object" && !Array.isArray(doc.products)
     ? ((doc.products as { ap_checks?: ApChecks }).ap_checks ?? null)
     : null;
@@ -122,6 +127,8 @@ export default async function HistoryDetailPage({
         statusReason={doc.errorMessage ?? null}
         canApprove={isApprover}
         approvalWorkflow={approvalWorkflow}
+        sandboxTest={sandboxTest}
+        testSends={testSends}
         payload={doc.products as unknown as Parameters<typeof ReviewClient>[0]["payload"]}
       />
     );
@@ -141,6 +148,8 @@ export default async function HistoryDetailPage({
         isAdmin={isApprover}
         reason={doc.errorMessage ?? null}
         apChecks={apChecks}
+        sandboxTest={sandboxTest}
+        testSends={testSends}
         lines={draft.lines.map((l) => ({
           description:      l.item_document_name,
           quantity:         l.quantity,
@@ -257,6 +266,9 @@ export default async function HistoryDetailPage({
 
   const sidebar = (
     <div className="space-y-4">
+      {sandboxTest && testSends.length > 0 && (
+        <SandboxTestSend docId={doc.id} history={testSends} disabled={!storedDraft(doc.products)} />
+      )}
       <div className="bg-card border border-border rounded-xl p-4">
         <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-4">
           Estado del proceso

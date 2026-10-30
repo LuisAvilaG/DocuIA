@@ -1,4 +1,5 @@
 import { withApiSecurity } from "@/lib/security/http";
+import { logAdminAction } from "@/lib/audit/admin";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession } from "@/lib/auth/admin";
 import { db } from "@/lib/db";
@@ -8,7 +9,7 @@ import { eq } from "drizzle-orm";
 type Params = { params: Promise<{ id: string }> };
 
 async function handlePATCH(req: NextRequest, { params }: Params) {
-  const { error } = await requireAdminSession();
+  const { error, session } = await requireAdminSession();
   if (error) return error;
 
   try {
@@ -41,6 +42,10 @@ async function handlePATCH(req: NextRequest, { params }: Params) {
       .set({ activeNsEnvironment: environment, updatedAt: new Date() })
       .where(eq(organizations.id, organizationId));
 
+    await logAdminAction(req, session!, {
+      action: "environment.switched", targetOrgId: organizationId, targetOrgName: org.name,
+      before: { environment: org.activeNsEnvironment }, after: { environment },
+    });
     return NextResponse.json({ ok: true, activeNsEnvironment: environment });
   } catch (err) {
     console.error("[clients/environment PATCH]", err);

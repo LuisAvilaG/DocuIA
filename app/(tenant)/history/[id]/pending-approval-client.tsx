@@ -9,6 +9,8 @@ import {
 } from "lucide-react";
 import type { ApChecks } from "@/lib/workflow/ap-checks";
 import { FiscalPanel, PoComparisonCard } from "./ap-panels";
+import { SandboxTestSend } from "@/components/tenant/sandbox-test-send";
+import type { TestSend } from "@/lib/workflow/test-send";
 
 interface Line {
   description: string;
@@ -29,13 +31,15 @@ interface Props {
   isAdmin:  boolean;
   reason?:  string | null;
   apChecks?: ApChecks | null;
+  sandboxTest?: boolean;
+  testSends?: TestSend[];
 }
 
 const DOC_LABELS: Record<string, string> = {
   invoice: "Factura", purchase_order: "Orden de compra", xml_cfdi: "CFDI XML",
 };
 
-export function PendingApprovalClient({ docId, vendor, numDoc, total, docType, lines, isAdmin, reason = null, apChecks = null }: Props) {
+export function PendingApprovalClient({ docId, vendor, numDoc, total, docType, lines, isAdmin, reason = null, apChecks = null, sandboxTest = false, testSends = [] }: Props) {
   const router  = useRouter();
   const [loading,  setLoading]  = useState(false);
   const [error,    setError]    = useState("");
@@ -220,6 +224,10 @@ export function PendingApprovalClient({ docId, vendor, numDoc, total, docType, l
               </tbody>
             </table>
           </div>
+        )}
+
+        {sandboxTest && docType !== "purchase_order" && (
+          <SandboxTestSend docId={docId} history={testSends} />
         )}
 
         {/* Actions */}

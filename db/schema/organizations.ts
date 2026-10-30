@@ -22,6 +22,10 @@ export const organizations = pgTable("organizations", {
   activeNsEnvironment:      varchar("active_ns_environment", { length: 20 }).default("sandbox"),
   autoProcessThreshold:     real("auto_process_threshold").notNull().default(0.85),
   aiApiKeyEncrypted:        text("ai_api_key_encrypted"),
+  // Platform admin lifecycle: why access was suspended, and when the org was
+  // marked for deletion (purged by the retention cron after 30 days).
+  suspensionReason:         text("suspension_reason"),
+  deletedAt:                timestamp("deleted_at"),
   createdAt:                timestamp("created_at").notNull().defaultNow(),
   updatedAt:                timestamp("updated_at").notNull().defaultNow(),
 }, (t) => [

@@ -14,4 +14,5 @@ export * from "./contracts";
 export * from "./contract-archive";
 export * from "./rate-limits";
 export * from "./vendor-rules";
+export * from "./ai-batches";
 export * from "./relations";

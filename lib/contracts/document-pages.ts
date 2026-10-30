@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createReadStream, createWriteStream } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -101,6 +101,47 @@ export async function forEachDocumentPage(input: {
       pending = "";
       pageNumber++;
     }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+/** Page count of a stored PDF, without extracting anything. */
+export async function countPdfPages(storageKey: string): Promise<number> {
+  const dir = await mkdtemp(join(tmpdir(), "docuia-count-"));
+  const file = join(dir, "source.pdf");
+  try {
+    await pipeline(await getFileStream(storageKey), createWriteStream(file));
+    const { stdout } = await run("pdfinfo", [file], { timeout: 30_000, maxBuffer: 1024 * 1024 });
+    const count = Number(stdout.match(/^Pages:\s*(\d+)/m)?.[1]);
+    if (!Number.isInteger(count) || count < 1) throw new Error("No se pudo leer el número de páginas del PDF");
+    return count;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * A new PDF holding only the given pages (ascending), so a long contract can be
+ * shown to the model page-faithfully, scans included, without sending it whole.
+ */
+export async function extractPdfPages(storageKey: string, pageNumbers: number[]): Promise<Buffer> {
+  const pages = [...new Set(pageNumbers)].sort((a, b) => a - b);
+  if (pages.length === 0) throw new Error("Sin páginas que extraer");
+  const dir = await mkdtemp(join(tmpdir(), "docuia-pages-"));
+  const file = join(dir, "source.pdf");
+  try {
+    await pipeline(await getFileStream(storageKey), createWriteStream(file));
+    const parts: string[] = [];
+    for (const page of pages) {
+      const out = join(dir, `p-${page}.pdf`);
+      await run("pdfseparate", ["-f", String(page), "-l", String(page), file, out], { timeout: 60_000, maxBuffer: 1024 * 1024 });
+      parts.push(out);
+    }
+    const merged = join(dir, "selected.pdf");
+    if (parts.length === 1) return await readFile(parts[0]);
+    await run("pdfunite", [...parts, merged], { timeout: 60_000, maxBuffer: 1024 * 1024 });
+    return await readFile(merged);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

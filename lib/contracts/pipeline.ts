@@ -3,7 +3,9 @@ import { db } from "@/lib/db";
 import { contractCases, contractDocuments, contractExtractionLearnings, contractValidations, contractObligations, contractVisualTrainingVariants, contractAiAnalysisResults } from "@/db/schema";
 import { and, desc, eq } from "drizzle-orm";
 import { uploadFile, getFileBuffer, getFileSize } from "@/lib/storage/minio";
-import { realExtractDeps, type ContractExtractDeps, type ExtractSource } from "./extract";
+import { createExtractDeps, DEFAULT_CONTRACT_MODEL, type ContractExtractDeps, type ExtractSource } from "./extract";
+import { AI_MODELS } from "@/lib/ai/provider";
+import { countPdfPages, extractPdfPages } from "./document-pages";
 import type { DocsByType } from "./validate";
 import { flowSnapshot, loadContractPlan } from "./plan";
 import { assembleResults, isAiRule, type AnalysisOutcome } from "./assemble";
@@ -15,7 +17,7 @@ import type { VisualTrainingVariant } from "./visual-training";
 import { runAiAnalysis } from "./ai-analysis";
 import { indexArchiveDocument, registerArchiveDocument } from "./archive";
 import { contractArchivePages } from "@/db/schema";
-import { fieldBatches, selectPagesForFields } from "./page-selection";
+import { fieldBatches, locatePages, pagesText, widenPages } from "./page-selection";
 import { archiveValidationsForCase } from "./archive-validations";
 import { caseVerdict } from "./validate";
 
@@ -31,6 +33,15 @@ function parseDateLoose(v: unknown): Date | null {
 
 // Fields whose value is a key date worth alerting on (renewal / expiry).
 const DATE_FIELD_RE = /(fecha|date|vigencia|termino|término|renov|corte|vencim)/i;
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+/** A value the extraction did not find (null, empty string, empty list). */
+function isBlank(value: unknown): boolean {
+  return value === null || value === undefined || value === "" || (Array.isArray(value) && value.length === 0);
+}
 
 function normalizeName(value: string): string {
   return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -96,11 +107,12 @@ function toSource(buffer: Buffer, mimeType: string | null): { source: ExtractSou
 // Process a case off-thread: classify each doc, extract configured fields with
 // citations, persist, and move the case to "review". Extractor is injectable
 // so the orchestration can be tested without an AI key.
-export async function processContractCase(caseId: string, deps: ContractExtractDeps = realExtractDeps): Promise<void> {
+export async function processContractCase(caseId: string, injectedDeps?: ContractExtractDeps): Promise<void> {
   const kase = await db.query.contractCases.findFirst({ where: eq(contractCases.id, caseId) });
   if (!kase) throw new Error(`Contract case ${caseId} not found`);
 
-  if (!await isFeatureEnabled(kase.organizationId, "contract_ai_extraction")) {
+  const extractionFeature = await getFeature(kase.organizationId, "contract_ai_extraction");
+  if (!extractionFeature.isEnabled) {
     // Terminal, not retried: without this the case stayed "En cola" forever.
     const message = "El análisis AI de contratos fue deshabilitado antes de procesar este caso.";
     await db.update(contractCases).set({ status: "failed", errorMessage: message, updatedAt: new Date() }).where(eq(contractCases.id, caseId));
@@ -108,8 +120,16 @@ export async function processContractCase(caseId: string, deps: ContractExtractD
     return;
   }
 
+  // Model and long-document handling are per organization (feature config).
+  const cfg = extractionFeature.config as { model?: unknown; locator_min_pages?: unknown; max_pages_per_call?: unknown; selected_pages_mode?: unknown };
+  const model = AI_MODELS.some((m) => m.id === cfg.model) ? String(cfg.model) : DEFAULT_CONTRACT_MODEL;
+  const locatorMinPages = clamp(Number(cfg.locator_min_pages) || 25, 5, 500);
+  const maxPagesPerCall = clamp(Number(cfg.max_pages_per_call) || 20, 4, 40);
+  const pagesMode: "auto" | "pdf" | "text" = cfg.selected_pages_mode === "pdf" || cfg.selected_pages_mode === "text" ? cfg.selected_pages_mode : "auto";
+  const deps = injectedDeps ?? createExtractDeps({ model });
+
   await db.update(contractCases).set({ status: "processing", updatedAt: new Date() }).where(eq(contractCases.id, caseId));
-  await logAudit({ orgId: kase.organizationId, action: "contract.processing_started", resourceType: "contract_case", resourceId: caseId });
+  await logAudit({ orgId: kase.organizationId, action: "contract.processing_started", resourceType: "contract_case", resourceId: caseId, metadata: { model } });
 
   try {
     const [docs, plan, validationsFeature, obligationsFeature, learnings] = await Promise.all([
@@ -150,7 +170,7 @@ export async function processContractCase(caseId: string, deps: ContractExtractD
     const learningsByType = new Map<string, typeof learnings>();
     for (const learning of learnings) (learningsByType.get(learning.documentType) ?? learningsByType.set(learning.documentType, []).get(learning.documentType)!).push(learning);
 
-    const summary: Array<{ documentId: string; type: string; typeName: string; fields: number }> = [];
+    const summary: Array<{ documentId: string; type: string; typeName: string; fields: number; pages?: number[]; pageCount?: number }> = [];
     const docsByType: DocsByType = {};
     const referenceNode = plan.flow?.nodes.find((node) => node.kind === "reference_lookup");
     if (referenceNode) {
@@ -162,16 +182,40 @@ export async function processContractCase(caseId: string, deps: ContractExtractD
     }
 
     for (const doc of docs) {
+      const isPdf = doc.mimeType === "application/pdf";
       const sizeBytes = await getFileSize(doc.storageKey);
-      const largePdf = doc.mimeType === "application/pdf" && sizeBytes > 20 * 1024 * 1024;
-      let pages: Array<{ pageNumber: number; text: string }> = [];
-      if (largePdf) {
+      const pageCount = isPdf ? await countPdfPages(doc.storageKey).catch(() => null) : null;
+      // Long documents never go whole to the model: they are indexed page by
+      // page and each field batch receives only the pages that matter to it.
+      // The threshold is pages, not bytes: a 300-page born-digital PDF is small
+      // on disk and huge in tokens.
+      const useLocator = isPdf && ((pageCount !== null && pageCount >= locatorMinPages) || sizeBytes > 20 * 1024 * 1024);
+      let pages: Array<{ pageNumber: number; text: string; ocrMode: string | null }> = [];
+      if (useLocator) {
         const archiveId = await registerArchiveDocument({ organizationId: kase.organizationId, storageKey: doc.storageKey, originalName: doc.originalName ?? "documento.pdf", mimeType: doc.mimeType!, caseDocumentId: doc.id, createdBy: kase.createdBy ?? undefined });
         await indexArchiveDocument(archiveId);
-        pages = await db.query.contractArchivePages.findMany({ where: eq(contractArchivePages.documentId, archiveId), orderBy: [contractArchivePages.pageNumber], columns: { pageNumber: true, text: true } });
+        pages = await db.query.contractArchivePages.findMany({ where: eq(contractArchivePages.documentId, archiveId), orderBy: [contractArchivePages.pageNumber], columns: { pageNumber: true, text: true, ocrMode: true } });
       }
-      const prepared = largePdf
-        ? { source: { kind: "text" as const, text: selectPagesForFields(pages, [], 20_000) }, mode: "digital" as const, text: null }
+      const scannedPages = new Set(pages.filter((page) => page.ocrMode === "scanned").map((page) => page.pageNumber));
+      // Located pages go as a small PDF when the model should see the page
+      // (scans, or always, per config); otherwise as labelled text.
+      const sourceForPages = async (pageNumbers: number[]): Promise<ExtractSource> => {
+        const wantsPdf = pagesMode === "pdf" || (pagesMode === "auto" && pageNumbers.some((page) => scannedPages.has(page)));
+        if (wantsPdf) {
+          try {
+            const pdf = await extractPdfPages(doc.storageKey, pageNumbers);
+            return { kind: "file", base64: pdf.toString("base64"), mimeType: "application/pdf" };
+          } catch (error) {
+            console.warn("[contracts] no se pudo recortar el PDF, se envía texto", error instanceof Error ? error.message : error);
+          }
+        }
+        return { kind: "text", text: pagesText(pages, pageNumbers) };
+      };
+      const pagesNote = (pageNumbers: number[]) =>
+        `Recibes solo las páginas ${pageNumbers.join(", ")} de un documento de ${pageCount ?? pages.length} páginas; cuando cites, indica el número de página original.`;
+
+      const prepared = useLocator
+        ? { source: await sourceForPages(locatePages(pages, [], { maxPages: 5 }).pages), mode: scannedPages.size > 0 ? "scanned" as const : "digital" as const, text: null }
         : toSource(await getFileBuffer(doc.storageKey), doc.mimeType);
       const { source, mode, text } = prepared;
 
@@ -188,14 +232,30 @@ export async function processContractCase(caseId: string, deps: ContractExtractD
 
       let values: Record<string, unknown>;
       let citations: Record<string, unknown>;
-      if (largePdf && fields.length > 0) {
+      const pagesUsed = new Set<number>();
+      if (useLocator && fields.length > 0) {
         values = {};
         citations = {};
-        for (const batch of fieldBatches(fields)) {
-          const textSource = { kind: "text" as const, text: selectPagesForFields(pages, batch, 20_000) };
-          const extracted = await deps.extract(textSource, typeName, batch, undefined, learningsByType.get(typeKey) ?? [], []);
-          Object.assign(values, extracted.values);
-          Object.assign(citations, extracted.citations);
+        const typeLearnings = learningsByType.get(typeKey) ?? [];
+        for (const batch of fieldBatches(fields, 12)) {
+          const located = locatePages(pages, batch, { maxPages: maxPagesPerCall });
+          const first = await deps.extract(await sourceForPages(located.pages), typeName, batch, undefined, typeLearnings, [], pagesNote(located.pages));
+          Object.assign(values, first.values);
+          Object.assign(citations, first.citations);
+          for (const page of located.pages) pagesUsed.add(page);
+          // Second pass: fields still empty get their next-best pages, and only
+          // those fields, before anything is reported as missing.
+          const missing = batch.filter((field) => isBlank(values[field.fieldKey]));
+          const more = missing.length ? widenPages(located, missing.map((field) => field.fieldKey), located.pages, Math.max(4, Math.floor(maxPagesPerCall / 2))) : [];
+          if (more.length > 0) {
+            const second = await deps.extract(await sourceForPages(more), typeName, missing, undefined, typeLearnings, [], pagesNote(more));
+            for (const field of missing) {
+              if (isBlank(second.values[field.fieldKey])) continue;
+              values[field.fieldKey] = second.values[field.fieldKey];
+              if (second.citations[field.fieldKey] !== undefined) citations[field.fieldKey] = second.citations[field.fieldKey];
+            }
+            for (const page of more) pagesUsed.add(page);
+          }
         }
       } else {
         ({ values, citations } = await deps.extract(source, typeName, fields, undefined, learningsByType.get(typeKey) ?? [], visualByType.get(typeKey) ?? []));
@@ -210,7 +270,10 @@ export async function processContractCase(caseId: string, deps: ContractExtractD
       }).where(eq(contractDocuments.id, doc.id));
 
       (docsByType[typeKey] ??= []).push({ values, citations });
-      summary.push({ documentId: doc.id, type: typeKey, typeName, fields: Object.keys(values).length });
+      summary.push({
+        documentId: doc.id, type: typeKey, typeName, fields: Object.keys(values).length,
+        ...(useLocator ? { pages: [...pagesUsed].sort((a, b) => a - b), pageCount: pageCount ?? pages.length } : {}),
+      });
     }
 
     // Cross-document validation (declarative rules from the active flow or tables).

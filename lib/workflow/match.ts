@@ -484,6 +484,10 @@ export async function buildUiPayload(
       recommendation_confidence: recConfidence,
       confidence,
       bbox: line.bbox,
+      line_type: line.lineType ?? "item",
+      other_item_code: line.otherItemCode ?? null,
+      billed_weight: line.billedWeight ?? null,
+      weight_uom: line.weightUom ?? null,
     });
   }
 
@@ -500,11 +504,15 @@ export async function buildUiPayload(
   // A weak vendor match drags header confidence down, gating auto-process — so we
   // never auto-post a bill to a fuzzy-matched (possibly wrong) vendor.
   const vendorQuality = selectedVendor ? Math.min(1, (selectedVendor._score ?? 0) / 220) : 0;
+  // Header fields the model itself flagged as doubtful count as half-read:
+  // a total it could not see clearly must not auto-post on completeness alone.
+  const doubted = new Set((extracted.uncertainFields ?? []).filter((f) => f.header).map((f) => f.field));
+  const doubt = (field: string, value: number) => (doubted.has(field) ? value * 0.5 : value);
   const headerConfidence = Number(
-    ((vendorQuality +
-      (extracted.invoiceNumber ? 1 : 0) +
-      (invoiceDate ? 1 : 0) +
-      (extracted.total !== null ? 1 : 0)) / 4).toFixed(4)
+    ((doubt("vendor", vendorQuality) +
+      doubt("invoice_number", extracted.invoiceNumber ? 1 : 0) +
+      doubt("invoice_date", invoiceDate ? 1 : 0) +
+      doubt("total", extracted.total !== null ? 1 : 0)) / 4).toFixed(4)
   );
   const linesConfidence = lines.length > 0
     ? Number((totalLineConfidence / lines.length).toFixed(4))
@@ -545,6 +553,8 @@ export async function buildUiPayload(
       subsidiary_id: subsidiaryId,
       lines_count: lines.length,
       generated_date: now,
+      delivery_date: extracted.deliveryDate || null,
+      uncertain_fields: extracted.uncertainFields ?? [],
       ...(options?.meta || {}),
     },
   };

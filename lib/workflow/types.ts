@@ -6,13 +6,24 @@ export type BBox = {
 
 export type ExtractedLine = {
   description: string;
+  /** item = product or service; charge = surcharge, freight, fee, deposit or discount. */
+  lineType?: "item" | "charge";
   quantity: number | null;
   rate: number | null;
   amount: number | null;
   uom: string | null;
+  /** The supplier's own item/SKU code (the one catalogs are keyed by). */
   itemCode: string | null;
+  /** Manufacturer, customer or barcode code printed on the same line. */
+  otherItemCode?: string | null;
+  /** Weight the amount was computed on, for weight-priced lines. */
+  billedWeight?: number | null;
+  weightUom?: string | null;
   bbox?: BBox;
 };
+
+/** A field the model could not read with confidence. */
+export type UncertainField = { field: string; reason: string; header: boolean };
 
 export type ExtractedInvoice = {
   format: "general" | "baldor" | "performance";
@@ -21,6 +32,8 @@ export type ExtractedInvoice = {
   vendorRfc?: string;
   invoiceNumber: string;
   invoiceDate: string;
+  /** Delivery or service date when printed (DD.MM.YYYY like the other dates). */
+  deliveryDate?: string;
   dueDate: string;
   purchaseOrder: string;
   currency: string;
@@ -30,6 +43,8 @@ export type ExtractedInvoice = {
   retention?: number | null;
   total: number | null;
   lines: ExtractedLine[];
+  /** What the model flagged as doubtful; empty when it did not flag anything. */
+  uncertainFields: UncertainField[];
 };
 
 export type ItemOption = {
@@ -73,15 +88,23 @@ export type MatchedLine = {
   recommendation_confidence: number | null;
   confidence: number;
   bbox?: BBox;
+  line_type?: "item" | "charge";
+  other_item_code?: string | null;
+  billed_weight?: number | null;
+  weight_uom?: string | null;
 };
 
 export type ExtractionResult = {
   invoice: ExtractedInvoice;
   model: string;
   fallbackUsed: boolean;
+  /** Evidence that sent the document to the second model, when it did. */
+  fallbackReason?: string | null;
   rawJson: string;
   promptTokens: number;
   completionTokens: number;
+  /** Input tokens served from the prompt cache (subset of promptTokens). */
+  cachedTokens?: number;
 };
 
 export type UiPayload = {

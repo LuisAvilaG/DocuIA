@@ -5,8 +5,8 @@ import { accessPayloadSchema } from "@/lib/auth/token-payload";
 import { AUTH_COOKIES, clearAuthCookies, type AuthRealm } from "@/lib/auth/cookies";
 
 const TENANT_ROUTES = [
-  "/dashboard", "/workflow", "/history", "/exceptions",
-  "/mappings", "/vendor-rules", "/catalogs", "/statistics", "/settings",
+  "/dashboard", "/workflow", "/history", "/documents", "/exceptions",
+  "/mappings", "/vendor-rules", "/catalogs", "/statistics", "/metrics", "/settings",
   "/expenses", "/accounting", "/contracts",
   "/cases",
 ];
@@ -67,11 +67,13 @@ export const config = {
     "/dashboard/:path*",
     "/workflow/:path*",
     "/history/:path*",
+    "/documents/:path*",
     "/exceptions/:path*",
     "/mappings/:path*",
     "/vendor-rules/:path*",
     "/catalogs/:path*",
     "/statistics/:path*",
+    "/metrics/:path*",
     "/settings/:path*",
     "/expenses/:path*",
     "/accounting/:path*",

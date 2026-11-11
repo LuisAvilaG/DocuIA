@@ -112,7 +112,7 @@ export function DashboardView({ data, statsEnabled }: { data: DashboardData | nu
 
   const tasks = data ? [
     data.review && {
-      key: "review", count: data.review.count, title: "En revisión", href: "/history?status=review", cta: "Revisar", tone: "warn" as const,
+      key: "review", count: data.review.count, title: "En revisión", href: "/documents?status=review", cta: "Revisar", tone: "warn" as const,
       detail: `Ítems, proveedor u OC por confirmar.${data.review.oldest ? ` La más antigua tiene ${ago(new Date(data.review.oldest))}.` : ""}`,
     },
     data.exceptions.count > 0 && {
@@ -120,11 +120,11 @@ export function DashboardView({ data, statsEnabled }: { data: DashboardData | nu
       detail: groupReasons(data.exceptions.reasons) || "Documentos que no pudieron procesarse.", tone: "err" as const,
     },
     data.approval && {
-      key: "approval", count: data.approval.count, title: "Por aprobar", href: "/history?status=pending_approval", cta: "Aprobar", tone: "info" as const,
+      key: "approval", count: data.approval.count, title: "Por aprobar", href: "/documents?status=pending_approval", cta: "Aprobar", tone: "info" as const,
       detail: `Esperan a un aprobador. $${money(data.approval.amount)} en total.`,
     },
     data.receipt && {
-      key: "receipt", count: data.receipt.count, title: "Esperando recepción", href: "/history?status=awaiting_receipt", cta: "Ver", tone: "wait" as const,
+      key: "receipt", count: data.receipt.count, title: "Esperando recepción", href: "/documents?status=awaiting_receipt", cta: "Ver", tone: "wait" as const,
       detail: `Se envían solas cuando almacén registre la entrada.${data.receipt.nextCheck ? ` Próxima revisión ${new Date(data.receipt.nextCheck).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" })}.` : ""}`,
     },
   ].filter((t): t is Exclude<typeof t, false | undefined | null> => Boolean(t)) : [];
@@ -180,7 +180,7 @@ export function DashboardView({ data, statsEnabled }: { data: DashboardData | nu
               <section className="bg-card border border-border rounded-xl overflow-hidden">
                 <div className="px-5 py-3.5 border-b border-border flex items-baseline gap-2.5">
                   <h2 className="text-sm font-semibold tracking-[-0.01em] text-foreground">Esta semana</h2>
-                  {statsEnabled && <Link href="/statistics" className="ml-auto text-xs text-muted-foreground hover:text-foreground">Estadísticas →</Link>}
+                  {statsEnabled && <Link href="/metrics" className="ml-auto text-xs text-muted-foreground hover:text-foreground">Métricas →</Link>}
                 </div>
                 <div className="px-5 pt-4 pb-5 flex flex-col gap-4">
                   <WeekBars days={data.week.days} />
@@ -197,10 +197,10 @@ export function DashboardView({ data, statsEnabled }: { data: DashboardData | nu
             <section className="bg-card border border-border rounded-xl overflow-hidden">
               <div className="px-5 py-3.5 border-b border-border flex items-center justify-between">
                 <h2 className="text-sm font-semibold tracking-[-0.01em] text-foreground">Recientes</h2>
-                <Link href="/history" className="text-xs text-muted-foreground hover:text-foreground">Ver historial →</Link>
+                <Link href="/documents" className="text-xs text-muted-foreground hover:text-foreground">Ver documentos →</Link>
               </div>
               {data.recent.length === 0 ? (
-                <p className="px-5 py-8 text-sm text-muted-foreground">Sube tu primer documento desde <Link href="/workflow" className="text-primary hover:underline">Workflow</Link>.</p>
+                <p className="px-5 py-8 text-sm text-muted-foreground">Sube tu primer documento con <Link href="/workflow" className="text-primary hover:underline">Subir documentos</Link>.</p>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">

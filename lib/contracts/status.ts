@@ -1,14 +1,23 @@
+import { CASE_STATUS, TONE_PILL } from "@/lib/status-vocabulary";
+
 // Single vocabulary for contract cases. Case status values are persisted in
 // English for the API, but no raw value should reach a Spanish tenant UI.
+// Labels and tones come from the single 2026 vocabulary (lib/status-vocabulary.ts):
+// Analizando, Por decidir, Aprobado, Rechazado, Error.
+function entry(key: keyof typeof CASE_STATUS) {
+  const word = CASE_STATUS[key];
+  return { label: word.label, cls: TONE_PILL[word.tone], tone: TONE_PILL[word.tone].split(" ")[1] };
+}
+
 export const CONTRACT_CASE_STATUS = {
-  uploaded:   { label: "En cola",     cls: "bg-secondary text-muted-foreground", tone: "text-muted-foreground" },
-  processing: { label: "Procesando",  cls: "bg-warning/10 text-warning",          tone: "text-warning" },
-  review:     { label: "En revisión", cls: "bg-warning/10 text-warning",          tone: "text-warning" },
-  validated:  { label: "Validado",    cls: "bg-success/10 text-success",          tone: "text-success" },
-  generated:  { label: "Generado",    cls: "bg-success/10 text-success",          tone: "text-success" },
-  approved:   { label: "Aprobado",    cls: "bg-success/10 text-success",          tone: "text-success" },
-  rejected:   { label: "Rechazado",   cls: "bg-destructive/10 text-destructive",  tone: "text-destructive" },
-  failed:     { label: "Error",       cls: "bg-destructive/10 text-destructive",  tone: "text-destructive" },
+  uploaded:   entry("uploaded"),
+  processing: entry("processing"),
+  review:     entry("review"),
+  validated:  entry("validated"),
+  generated:  entry("generated"),
+  approved:   entry("approved"),
+  rejected:   entry("rejected"),
+  failed:     entry("failed"),
 } as const;
 
 const OUTCOME_LABELS: Record<string, string> = {

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
-  LayoutDashboard, FileUp, Clock, AlertTriangle,
+  LayoutDashboard, FileUp, FileText, Clock, AlertTriangle,
   GitMerge, Database, BarChart3, Settings, Workflow, ClipboardCheck,
   LogOut, User, Zap, Crown, Receipt, ScrollText, FolderOpen, BrainCircuit, KeyRound, ListChecks,
 } from "lucide-react";
@@ -12,12 +12,12 @@ import { useState } from "react";
 import { ChangePasswordDialog } from "@/components/shared/change-password-dialog";
 import Image from "next/image";
 import { useFeatures } from "@/components/providers/feature-provider";
-import { PRODUCTS, PRODUCT_AREA, PRODUCT_MODULES, PLATFORM_MODULES, type ProductKey, type NavModule } from "@/lib/products/registry";
+import { PRODUCTS, PRODUCT_AREA, PRODUCT_MODULES, PLATFORM_MODULES, productForPath, type ProductKey, type NavModule } from "@/lib/products/registry";
 import { canAccessTenantArea, TENANT_ROLE_LABELS, isTenantRole } from "@/lib/auth/permissions";
 
 // lucide icon name → component (registry stores names as strings)
 const ICONS: Record<string, React.ElementType> = {
-  LayoutDashboard, FileUp, Clock, AlertTriangle, GitMerge, Database,
+  LayoutDashboard, FileUp, FileText, Clock, AlertTriangle, GitMerge, Database,
   BarChart3, Settings, Workflow, ClipboardCheck, Receipt, ScrollText, FolderOpen, BrainCircuit, ListChecks,
 };
 
@@ -52,19 +52,32 @@ export function TenantSidebar({ orgName, plan, userEmail, userRole, activeProduc
     (!m.feature || features[m.feature])
     && (userRole === "admin" || (!m.adminOnly && (!m.roles || m.roles.includes(userRole))));
 
-  // One section per active product the role can use; hide empty sections.
-  const sections = PRODUCTS
+  // One entry per active product the role can use; hide products with nothing to show.
+  const products = PRODUCTS
     .filter((p) => active.has(p.key) && canAccessTenantArea(userRole, { area: PRODUCT_AREA[p.key as ProductKey] }))
-    .map((p) => ({ name: p.name, items: PRODUCT_MODULES[p.key as ProductKey].filter(isVisible) }))
+    .map((p) => ({ key: p.key, name: p.shortName, items: PRODUCT_MODULES[p.key as ProductKey].filter(isVisible) }))
     .filter((s) => s.items.length > 0);
+
+  // Rediseño 2026: con más de un producto, un selector arriba y solo el menú del
+  // producto actual (el de la ruta; en rutas de plataforma, el primero).
+  const routeProduct = productForPath(pathname);
+  const current = products.find((p) => p.key === routeProduct) ?? products[0];
+  const sections = current
+    ? [
+        { name: "", items: current.items.filter((m) => m.group !== "config") },
+        { name: "Configuración", items: current.items.filter((m) => m.group === "config") },
+      ].filter((s) => s.items.length > 0)
+    : [];
 
   const platformItems = PLATFORM_MODULES.filter(isVisible);
 
   // Highlight only the most specific matching route (longest href prefix), so a
   // parent like "/contracts" doesn't stay active on "/contracts/flow".
+  // Rutas que viven dentro de otra entrada del menú (carga y detalle → Documentos).
+  const navPath = pathname.startsWith("/workflow") || pathname.startsWith("/history") ? "/documents" : pathname;
   const allHrefs = [...sections.flatMap((s) => s.items), ...platformItems].map((m) => m.href);
   const activeHref = allHrefs
-    .filter((h) => pathname === h || pathname.startsWith(h + "/"))
+    .filter((h) => navPath === h || navPath.startsWith(h + "/"))
     .sort((a, b) => b.length - a.length)[0];
 
   async function logout() {
@@ -93,11 +106,33 @@ export function TenantSidebar({ orgName, plan, userEmail, userRole, activeProduc
         </div>
       </div>
 
-      {/* Navegación — una sección por producto activo */}
+      {/* Selector de producto (solo con más de uno) */}
+      {products.length > 1 && (
+        <div role="group" aria-label="Producto" className="mx-2 mt-3 grid gap-0.5 rounded-[9px] bg-secondary p-[3px]" style={{ gridTemplateColumns: `repeat(${products.length}, minmax(0, 1fr))` }}>
+          {products.map((p) => {
+            const on = p.key === current?.key;
+            return (
+              <Link
+                key={p.key}
+                href={p.items[0].href}
+                aria-current={on ? "true" : undefined}
+                className={cn(
+                  "flex min-h-[30px] items-center justify-center rounded-[7px] px-1 text-[11.5px] transition-all duration-[120ms]",
+                  on ? "bg-card font-semibold text-foreground shadow-sm" : "font-medium text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {p.name}
+              </Link>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Navegación del producto actual */}
       <nav className="flex-1 px-2 py-3 space-y-3 overflow-y-auto">
         {sections.map((section) => (
-          <div key={section.name} className="space-y-0.5">
-            {sections.length > 1 && (
+          <div key={section.name || "main"} className="space-y-0.5">
+            {section.name && (
               <p className="px-[10px] pt-1 pb-1 text-[10px] font-semibold uppercase tracking-[0.06em] text-muted-foreground/60">
                 {section.name}
               </p>

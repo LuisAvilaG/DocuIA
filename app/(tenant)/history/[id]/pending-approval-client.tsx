@@ -131,7 +131,7 @@ export function PendingApprovalClient({ docId, vendor, numDoc, total, docType, l
     <div className="flex-1 flex flex-col overflow-auto">
       {/* Header */}
       <div className="h-14 border-b border-border px-6 flex items-center gap-3 shrink-0">
-        <Link href="/history" className="text-muted-foreground hover:text-foreground transition-colors">
+        <Link href="/documents" className="text-muted-foreground hover:text-foreground transition-colors">
           <ChevronLeft className="w-4 h-4" />
         </Link>
         <div className="flex-1">

@@ -20,7 +20,7 @@ interface DocRow {
   numDoc: string | null; total: number | null; createdAt: string; updatedAt: string;
 }
 
-export function HistoryTableClient({ docs, initialStatus = "" }: { docs: DocRow[]; initialStatus?: string }) {
+export function HistoryTableClient({ docs, initialStatus = "", canUpload = false }: { docs: DocRow[]; initialStatus?: string; canUpload?: boolean }) {
   const router = useRouter();
   const dataExport = useFeature("data_export");
   const [search,  setSearch]  = useState("");
@@ -51,7 +51,7 @@ export function HistoryTableClient({ docs, initialStatus = "" }: { docs: DocRow[
       <div className="h-14 border-b border-border px-6 flex items-center gap-3 shrink-0">
         <Clock className="w-4 h-4 text-muted-foreground" />
         <div className="flex-1">
-          <h1 className="text-sm font-semibold text-foreground">Historial</h1>
+          <h1 className="text-sm font-semibold text-foreground">Documentos</h1>
           <p className="text-xs text-muted-foreground">
             {docs.length === 200 ? "Mostrando los últimos 200 documentos" : `${docs.length} documentos`}
           </p>
@@ -64,6 +64,14 @@ export function HistoryTableClient({ docs, initialStatus = "" }: { docs: DocRow[
             <Download className="w-3.5 h-3.5" />
             Exportar CSV
           </a>
+        )}
+        {canUpload && (
+          <Link
+            href="/workflow"
+            className="flex items-center gap-1.5 text-xs font-medium text-primary-foreground bg-primary hover:bg-primary/90 rounded-lg px-3 py-1.5 transition-all"
+          >
+            Subir documentos
+          </Link>
         )}
       </div>
 

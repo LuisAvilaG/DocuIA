@@ -28,6 +28,14 @@ const nextConfig: NextConfig = {
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },
+  // Rediseño 2026: rutas viejas → nuevas. Temporales (307) mientras se migra;
+  // los filtros (?status=…) viajan solos. El detalle /history/:id sigue igual.
+  async redirects() {
+    return [
+      { source: "/history", destination: "/documents", permanent: false },
+      { source: "/statistics", destination: "/metrics", permanent: false },
+    ];
+  },
 };
 
 export default nextConfig;

@@ -79,7 +79,7 @@ export function AwaitingReceiptClient(props: Props) {
   return (
     <div className="flex-1 flex flex-col overflow-auto">
       <div className="h-14 border-b border-border px-6 flex items-center gap-3 shrink-0">
-        <Link href="/history" aria-label="Volver al historial" className="text-muted-foreground hover:text-foreground transition-colors">
+        <Link href="/documents" aria-label="Volver a documentos" className="text-muted-foreground hover:text-foreground transition-colors">
           <ChevronLeft className="w-4 h-4" />
         </Link>
         <div className="flex-1 min-w-0">

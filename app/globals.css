@@ -49,6 +49,21 @@
   /* Semantic tokens */
   --color-success: var(--success);
   --color-warning: var(--warning);
+  /* Rediseño 2026 — tonos de estado (fondo + texto con contraste AA) */
+  --color-link: var(--link);
+  --color-line-soft: var(--line-soft);
+  --color-tone-ok: var(--tone-ok-fg);
+  --color-tone-ok-bg: var(--tone-ok-bg);
+  --color-tone-warn: var(--tone-warn-fg);
+  --color-tone-warn-bg: var(--tone-warn-bg);
+  --color-tone-err: var(--tone-err-fg);
+  --color-tone-err-bg: var(--tone-err-bg);
+  --color-tone-info: var(--tone-info-fg);
+  --color-tone-info-bg: var(--tone-info-bg);
+  --color-tone-blue: var(--tone-blue-fg);
+  --color-tone-blue-bg: var(--tone-blue-bg);
+  --color-tone-mute: var(--tone-mute-fg);
+  --color-tone-mute-bg: var(--tone-mute-bg);
 }
 
 /* ── El Despacho Digital — light theme ─────────────────────────── */
@@ -97,6 +112,16 @@
   /* Charts: categorical pair validated for CVD (automatic vs reviewed) */
   --viz-auto:              #008a7a;
   --viz-review:            #6470d8;
+
+  /* Rediseño 2026 — texto de enlace, línea suave y tonos de estado */
+  --link:                  #0B6E64;
+  --line-soft:             #EEECE6;
+  --tone-ok-bg:            #E3F4EC;  --tone-ok-fg:   #1F6B4A;
+  --tone-warn-bg:          #FBF1DC;  --tone-warn-fg: #7A5606;
+  --tone-err-bg:           #FBE7E5;  --tone-err-fg:  #A3302A;
+  --tone-info-bg:          #E6F2F0;  --tone-info-fg: #0B6E64;
+  --tone-blue-bg:          #EEF4FB;  --tone-blue-fg: #2F5F9E;
+  --tone-mute-bg:          #EFEDE8;  --tone-mute-fg: #565A66;
 }
 
 .dark {

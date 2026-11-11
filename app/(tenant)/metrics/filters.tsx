@@ -22,7 +22,7 @@ export function StatsFilters({ subsidiaries, vendors, groupToggle }: {
   function set(key: string, value: string | null) {
     const next = new URLSearchParams(params.toString());
     if (value) next.set(key, value); else next.delete(key);
-    router.push(`/statistics${next.size ? `?${next}` : ""}`, { scroll: false });
+    router.push(`/metrics${next.size ? `?${next}` : ""}`, { scroll: false });
   }
 
   return (

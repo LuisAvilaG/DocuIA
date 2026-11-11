@@ -4,11 +4,11 @@ import { requireApAutomation } from "@/lib/products";
 import { db } from "@/lib/db";
 import { historyDocuments } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
-import { HistoryTableClient } from "./client";
+import { HistoryTableClient } from "../history/client";
 
 const STATUS_FILTERS = new Set(["review", "pending_approval", "awaiting_receipt", "completed", "failed"]);
 
-export default async function HistoryPage({ searchParams }: { searchParams: Promise<{ status?: string }> }) {
+export default async function DocumentsPage({ searchParams }: { searchParams: Promise<{ status?: string }> }) {
   const { status } = await searchParams;
   const session = await getTenantSession({ area: "documents" });
   if (!session) redirect("/login");
@@ -42,8 +42,10 @@ export default async function HistoryPage({ searchParams }: { searchParams: Prom
       updatedAt:    r.updatedAt.toISOString(),
     }));
   } catch (err) {
-    console.error("[history]", err);
+    console.error("[documents]", err);
   }
 
-  return <HistoryTableClient docs={docs} initialStatus={status && STATUS_FILTERS.has(status) ? status : ""} />;
+  // Sin rol de solo lectura se puede subir; la feature manual_upload llega en la fase 1.
+  const canUpload = session.role !== "viewer";
+  return <HistoryTableClient docs={docs} canUpload={canUpload} initialStatus={status && STATUS_FILTERS.has(status) ? status : ""} />;
 }

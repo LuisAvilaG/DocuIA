@@ -9,7 +9,7 @@ import { isFeatureEnabled } from "@/lib/features";
 import { loadApStats, type ApStats, type Period } from "@/lib/stats/ap-stats";
 import { StatsFilters } from "./filters";
 
-type Search = { period?: string; sub?: string; vendor?: string; group?: string };
+type Search = { period?: string; sub?: string; vendor?: string; group?: string; qa?: string };
 
 const num = (n: number) => n.toLocaleString("es-MX");
 function compactMoney(n: number) {
@@ -119,20 +119,22 @@ export default async function StatisticsPage({ searchParams }: { searchParams: P
 
   const sp = await searchParams;
   const period: Period = sp.period === "7d" || sp.period === "quarter" ? sp.period : "month";
-  const [subs, vendorList, categoryStats] = await Promise.all([
+  const [subs, vendorList, categoryStats, qaDocs] = await Promise.all([
     db.select({ id: subsidiaries.id, name: subsidiaries.name }).from(subsidiaries).where(eq(subsidiaries.organizationId, session.orgId)),
     db.select({ vendor: historyDocuments.vendor }).from(historyDocuments)
       .where(and(eq(historyDocuments.organizationId, session.orgId), isNotNull(historyDocuments.vendor), gte(historyDocuments.createdAt, sql`now() - interval '180 days'`)))
       .groupBy(historyDocuments.vendor).orderBy(desc(sql`count(*)`)).limit(200),
     isFeatureEnabled(session.orgId, "ap_advanced_stats"),
+    db.$count(historyDocuments, and(eq(historyDocuments.organizationId, session.orgId), eq(historyDocuments.isQa, true))),
   ]);
+  const includeQa = qaDocs > 0 && sp.qa === "1";
   const subsidiaryId = sp.sub && subs.some((s) => s.id === sp.sub) ? sp.sub : null;
   const vendor = sp.vendor?.trim() ? sp.vendor.trim().slice(0, 191) : null;
   const byCategory = categoryStats && sp.group === "category";
 
   let stats: ApStats | null = null;
   try {
-    stats = await loadApStats({ organizationId: session.orgId, period, subsidiaryId, vendor }, { byCategory });
+    stats = await loadApStats({ organizationId: session.orgId, period, subsidiaryId, vendor, includeQa }, { byCategory });
   } catch (err) {
     console.error("[statistics]", err);
   }
@@ -173,7 +175,7 @@ export default async function StatisticsPage({ searchParams }: { searchParams: P
         </div>
         <div className="ml-auto">
           <Suspense>
-            <StatsFilters subsidiaries={subs} vendors={vendorList.map((v) => v.vendor as string)} groupToggle={categoryStats} />
+            <StatsFilters subsidiaries={subs} vendors={vendorList.map((v) => v.vendor as string)} groupToggle={categoryStats} qaToggle={qaDocs > 0} />
           </Suspense>
         </div>
       </div>

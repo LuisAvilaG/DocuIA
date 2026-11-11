@@ -10,6 +10,7 @@ import { enqueuePipeline, scheduleBatchCollection } from "@/lib/queue";
 import { batchModeFor, queueDocumentForBatch } from "@/lib/ai/batch-jobs";
 import { isFeatureEnabled } from "@/lib/features";
 import { uploadFile } from "@/lib/storage/minio";
+import { formatMismatch } from "@/lib/subsidiaries/invoice-format";
 
 const ALLOWED_MIME_TYPES = new Set([
   "application/pdf",
@@ -80,6 +81,13 @@ async function handlePOST(req: NextRequest) {
     ]);
     if (!sub) {
       return NextResponse.json({ error: "Subsidiaria no válida" }, { status: 404 });
+    }
+    // La subsidiaria define cómo llegan sus facturas (CFDI con XML o PDF/imagen).
+    const mismatch = formatMismatch(sub.invoiceFormat, documentType);
+    if (mismatch) return NextResponse.json({ error: mismatch }, { status: 400 });
+    // Carga manual: las personas necesitan la feature; las integraciones por API no.
+    if (session.role !== "api_key" && !await isFeatureEnabled(session.orgId, "manual_upload")) {
+      return NextResponse.json({ error: "La carga manual no está activa para tu empresa." }, { status: 403 });
     }
 
     const fileBuffer = Buffer.from(await file.arrayBuffer());

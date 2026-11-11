@@ -10,10 +10,12 @@ const PERIODS = [
   { id: "quarter", label: "Trimestre" },
 ];
 
-export function StatsFilters({ subsidiaries, vendors, groupToggle }: {
+export function StatsFilters({ subsidiaries, vendors, groupToggle, qaToggle = false }: {
   subsidiaries: { id: string; name: string }[];
   vendors: string[];
   groupToggle: boolean;
+  /** Hay documentos del modo QA: se pueden incluir en las métricas. */
+  qaToggle?: boolean;
 }) {
   const router = useRouter();
   const params = useSearchParams();
@@ -51,6 +53,12 @@ export function StatsFilters({ subsidiaries, vendors, groupToggle }: {
             );
           })}
         </div>
+      )}
+      {qaToggle && (
+        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <input type="checkbox" checked={params.get("qa") === "1"} onChange={(e) => set("qa", e.target.checked ? "1" : null)} className="accent-primary" />
+          Incluir modo QA
+        </label>
       )}
       <div className="inline-flex rounded-lg border border-border bg-card p-0.5" role="group" aria-label="Periodo">
         {PERIODS.map((p) => (

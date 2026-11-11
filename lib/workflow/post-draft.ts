@@ -13,6 +13,7 @@ import { buildNsPayload, type NsDraft, type PoConfig } from "./ns-payload";
 import { upsertItemMappings } from "./mappings";
 import { recordPostedAmount } from "./pipeline";
 import { erpExtras } from "./erp-extras";
+import { qaPlanFor, recordQaSend } from "./qa-send";
 
 type HistoryDocument = typeof historyDocuments.$inferSelect;
 
@@ -38,9 +39,11 @@ export async function postClaimedDocument(opts: {
     ]);
     if (!sub) throw new Error("Subsidiaria no encontrada");
     const customFormId = formsFeat.isEnabled ? resolveCustomFormId(formsFeat.config, doc.subsidiaryId, doc.documentType) : "";
+    // Modo QA: otro id externo y número de prueba para que el ERP lo cree aunque ya exista.
+    const qa = dryRun ? null : await qaPlanFor(orgId, doc, draft.invoiceNumber ?? doc.numDoc);
 
     const nsResult = await processInNetSuite(orgId, {
-      ...buildNsPayload(draft, {
+      ...buildNsPayload(qa ? { ...draft, invoiceNumber: qa.documentNumber } : draft, {
         organizationId: orgId,
         documentId:     doc.id,
         documentType:   doc.documentType,
@@ -50,7 +53,9 @@ export async function postClaimedDocument(opts: {
         poConfig:       poFeature.config as PoConfig,
       }),
       ...(await erpExtras(doc)),
+      ...(qa ? { external_id: qa.externalId, memo: qa.memo } : {}),
     });
+    if (qa) await recordQaSend(doc.id, qa, nsResult, opts.approvedBy);
 
     const vendorName = draft.vendorName ?? doc.vendor ?? null;
     await db.update(historyDocuments).set({

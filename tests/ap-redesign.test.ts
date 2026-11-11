@@ -52,3 +52,26 @@ test("pestaña de factura desconocida vuelve a Datos y líneas", () => {
   assert.equal(parseInvoiceTab("otra"), "lines");
   assert.equal(parseInvoiceTab(undefined), "lines");
 });
+
+test("modo QA: número y id externo del siguiente envío", async () => {
+  const { buildQaPlan, qaAppliesTo } = await import("../lib/workflow/qa-send");
+  const now = new Date("2026-11-11T10:00:00Z");
+  const p = buildQaPlan({ config: { number_suffix: "-QA{n}" }, orgId: "org-1", docId: 42, previous: 1, baseNumber: "A-10482", now });
+  assert.equal(p.seq, 2);
+  assert.equal(p.documentNumber, "A-10482-QA2");
+  assert.equal(p.externalId, `docuia-qa:org-1:42:2-${now.getTime().toString(36)}`);
+  assert.equal(buildQaPlan({ config: { number_suffix: "-QA{n}" }, orgId: "o", docId: 7, previous: 0, baseNumber: null, now }).documentNumber, "DOC7-QA1");
+  assert.equal(buildQaPlan({ config: { number_suffix: "-QA{n}" }, orgId: "o", docId: 7, previous: 0, baseNumber: "X".repeat(60), now }).documentNumber.length, 45);
+  assert.equal(qaAppliesTo({ applies_to: "invoices" }, "purchase_order"), false);
+  assert.equal(qaAppliesTo({ applies_to: "invoices_and_po" }, "purchase_order"), true);
+  assert.equal(qaAppliesTo({ applies_to: "invoices" }, "xml_cfdi"), true);
+});
+
+test("la carga respeta el formato de la subsidiaria", async () => {
+  const { formatMismatch } = await import("../lib/subsidiaries/invoice-format");
+  assert.equal(formatMismatch("cfdi", "xml_cfdi"), null);
+  assert.ok(formatMismatch("cfdi", "invoice"));
+  assert.equal(formatMismatch("pdf", "invoice"), null);
+  assert.ok(formatMismatch("pdf", "xml_cfdi"));
+  assert.equal(formatMismatch("cfdi", "purchase_order"), null);
+});

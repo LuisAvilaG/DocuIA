@@ -12,6 +12,7 @@ import { storedDraft } from "@/lib/workflow/ns-payload";
 import type { ApChecks } from "@/lib/workflow/ap-checks";
 import type { LineStatus } from "@/lib/workflow/po-match";
 import { sandboxTestSendAvailable, testSendsOf } from "@/lib/workflow/test-send";
+import { qaSendsOf } from "@/lib/workflow/qa-send";
 import { SandboxTestSend } from "@/components/tenant/sandbox-test-send";
 import { btn, Notice, SectionTitle, StatusPill, type StageState } from "@/components/kit";
 import type { Tone } from "@/lib/status-vocabulary";
@@ -184,7 +185,7 @@ export default async function InvoiceDetailPage({ params, searchParams }: {
         title={title}
         status={doc.status}
         statusDetail={statusDetail}
-        meta={[isCfdi ? "CFDI" : isPo ? "Orden de compra" : "Factura en PDF", sub?.name && `subsidiaria ${sub.name}`, apChecks?.vendorRule?.ruleId && `regla «${apChecks.vendorRule.ruleLabel.replace(/^(Categoría|Proveedor): /, "")}»`, `llegó ${when(doc.createdAt)}`]}
+        meta={[isCfdi ? "CFDI" : isPo ? "Orden de compra" : "Factura en PDF", doc.isQa && "ronda de modo QA", sub?.name && `subsidiaria ${sub.name}`, apChecks?.vendorRule?.ruleId && `regla «${apChecks.vendorRule.ruleLabel.replace(/^(Categoría|Proveedor): /, "")}»`, `llegó ${when(doc.createdAt)}`]}
         actions={actions}
         stages={stages}
         current={tab}
@@ -293,6 +294,22 @@ export default async function InvoiceDetailPage({ params, searchParams }: {
                       <dt className="text-muted-foreground">Líneas</dt><dd>{lines.length}</dd>
                     </dl>
                   </section>
+                  {qaSendsOf(doc.qaSends).length > 0 && (
+                    <section>
+                      <SectionTitle title="Envíos del modo QA" aside={String(qaSendsOf(doc.qaSends).length)} />
+                      <ul className="mt-2">
+                        {qaSendsOf(doc.qaSends).map((q) => (
+                          <li key={q.externalId} className="flex flex-wrap items-center justify-between gap-2 border-b border-line-soft py-2.5 text-[13px] last:border-0">
+                            <span className="tabular-nums">{when(new Date(q.at))} · <b className="font-semibold">{q.documentNumber}</b>{q.duplicateOf ? <span className="text-muted-foreground"> · duplicado del #{q.duplicateOf}, aceptado por QA</span> : null}</span>
+                            {q.recordUrl
+                              ? <a href={q.recordUrl} target="_blank" rel="noopener noreferrer" className="text-link hover:underline">ERP {q.internalId}</a>
+                              : <StatusPill tone="ok">ERP {q.internalId ?? "—"}</StatusPill>}
+                          </li>
+                        ))}
+                      </ul>
+                      <p className="mt-2 text-[12.5px] text-muted-foreground">Durante el modo QA cada envío usa otro número para que el ERP lo cree aunque ya exista.</p>
+                    </section>
+                  )}
                   {sandboxTest || testSends.length > 0 ? (
                     <section>
                       <SectionTitle title="Envíos de prueba a sandbox" aside={testSends.length ? String(testSends.length) : undefined} />

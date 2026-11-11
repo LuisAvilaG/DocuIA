@@ -8,6 +8,8 @@ import { parseJsonObject } from "@/lib/ai/provider";
 import { buildUiPayload } from "./match";
 import { processInNetSuite } from "./process-ns";
 import { buildNsPayload, draftWithPo } from "./ns-payload";
+import { qaModeState } from "@/lib/features/qa-mode-state";
+import { buildQaPlan, qaAppliesTo, recordQaSend } from "./qa-send";
 import { runApChecks } from "./ap-checks";
 import { erpExtras } from "./erp-extras";
 import type { CfdiData } from "./cfdi-parser";
@@ -77,6 +79,7 @@ export async function createQueuedDocument(input: PipelineInput): Promise<{ docu
       storageKey,
       attachmentKey:  input.attachmentKey ?? null,
       processedBy:    input.requestedBy ?? null,
+      isQa:           await qaRoundFor(input.organizationId, input.documentType),
     })
     .returning({ id: historyDocuments.id });
   return { documentId: doc.id, storageKey };
@@ -87,13 +90,16 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   const t0 = Date.now();
 
   // ── Load org config (AI key + features) ──────────────────────────────────
-  const [orgRow, feat] = await Promise.all([
+  const [orgRow, feat, qaState] = await Promise.all([
     db.query.organizations.findFirst({
       where: eq(organizations.id, input.organizationId),
       columns: { aiApiKeyEncrypted: true },
     }),
     loadFeatures(input.organizationId),
+    qaModeState(input.organizationId).catch(() => null),
   ]);
+  // Modo QA vigente para este tipo de documento (ronda de pruebas del cliente).
+  const qa = qaState?.active && qaState.config && qaAppliesTo(qaState.config, input.documentType) ? qaState.config : null;
 
   const orgApiKey = orgRow?.aiApiKeyEncrypted
     ? decryptField(orgRow.aiApiKeyEncrypted)
@@ -164,6 +170,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
         storageKey:     storageEnabled ? storageKey : null,
         attachmentKey:  input.attachmentKey ?? null,
         processedBy:    input.requestedBy ?? null,
+        isQa:           qa !== null,
       })
       .returning({ id: historyDocuments.id });
     docId = doc.id;
@@ -318,6 +325,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
     }
 
     // ── 4. Duplicate detection (after extraction — we need vendor + number) ──
+    let qaDuplicateOf: number | null = null;
     if (detectDupes && extraction.invoice.vendor && extraction.invoice.invoiceNumber) {
       const existing = await db.query.historyDocuments.findFirst({
         where: and(
@@ -328,7 +336,10 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
           ne(historyDocuments.status, "failed"),
         ),
       });
-      if (existing) {
+      if (existing && qa?.skip_duplicates) {
+        // Modo QA: el duplicado se acepta y se anota en el envío QA.
+        qaDuplicateOf = existing.id;
+      } else if (existing) {
         throw new Error(
           `Factura duplicada: ${extraction.invoice.vendor} #${extraction.invoice.invoiceNumber} ya existe (doc #${existing.id})`
         );
@@ -517,10 +528,14 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
     if (!sub) throw new Error(`Subsidiaria ${input.subsidiaryId} no encontrada para enviar al ERP`);
 
     const t3 = Date.now();
+    const qaPlan = qa && !dryRun
+      ? buildQaPlan({ config: qa, orgId: input.organizationId, docId, previous: 0, baseNumber: extraction.invoice.invoiceNumber || null })
+      : null;
+    const sendDraft = draftWithPo(payload);
     const nsResult = await processInNetSuite(
       input.organizationId,
       {
-        ...buildNsPayload(draftWithPo(payload), {
+        ...buildNsPayload(qaPlan ? { ...sendDraft, invoiceNumber: qaPlan.documentNumber } : sendDraft, {
           organizationId: input.organizationId,
           documentId:     docId,
           documentType:   input.documentType,
@@ -536,8 +551,10 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
           attachmentKey:  input.attachmentKey ?? null,
           numDoc:         extraction.invoice.invoiceNumber || null,
         })),
+        ...(qaPlan ? { external_id: qaPlan.externalId, memo: qaPlan.memo } : {}),
       }
     );
+    if (qaPlan) await recordQaSend(docId, qaPlan, nsResult, input.requestedBy ?? null, qaDuplicateOf);
 
     await db.update(historyDocuments).set({
       status:        "completed",
@@ -699,4 +716,10 @@ function determineFailureStage(message: string): "extract" | "validate" | "proce
   if (lower.includes("extract") || lower.includes("ai ") || lower.includes("returned zero") || lower.includes("valid json")) return "extract";
   if (lower.includes("netsuite") || lower.includes("restlet") || lower.includes("process")) return "process";
   return "validate";
+}
+
+/** Si un documento nuevo entra en una ronda de pruebas del modo QA. */
+async function qaRoundFor(orgId: string, documentType: string): Promise<boolean> {
+  const state = await qaModeState(orgId).catch(() => null);
+  return Boolean(state?.active && state.config && qaAppliesTo(state.config, documentType));
 }

@@ -141,6 +141,13 @@
       "when": 1794403784826,
       "tag": "0019_subsidiary_invoice_format",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1794406937074,
+      "tag": "0020_qa_mode_documents",
+      "breakpoints": true
     }
   ]
 }

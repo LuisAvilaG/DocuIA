@@ -12,7 +12,7 @@ export type DocTab = "all" | "review" | "pending_approval" | "awaiting_receipt" 
 
 export interface DocListRow {
   id: number; documentType: string; status: string; vendor: string | null; numDoc: string | null;
-  total: number | null; createdAt: string; auto: boolean; reason: string | null; po: string | null;
+  total: number | null; createdAt: string; auto: boolean; reason: string | null; po: string | null; qa: boolean;
 }
 
 const TAB_LABEL: Record<DocTab, string> = {
@@ -153,6 +153,7 @@ export function DocumentsView({
                     <td className="whitespace-nowrap px-3.5 py-3">
                       <Link href={`/history/${r.id}`} className="font-semibold text-link hover:underline">{r.numDoc ?? `#${r.id}`}</Link>
                       <span className="ml-2 rounded-[5px] bg-tone-mute-bg px-1.5 py-0.5 text-[11.5px] font-semibold text-foreground/70">{TYPE_LABEL[r.documentType] ?? r.documentType}</span>
+                      {r.qa && <span title="Llegó durante una ronda del modo QA" className="ml-1.5 rounded-[5px] bg-tone-warn-bg px-1.5 py-0.5 text-[11.5px] font-semibold text-tone-warn">QA</span>}
                     </td>
                     <td className="max-w-[260px] truncate px-3.5 py-3">{r.vendor ?? <span className="text-muted-foreground">—</span>}</td>
                     <td className="whitespace-nowrap px-3.5 py-3">{r.documentType === "purchase_order" ? <span className="text-muted-foreground">—</span> : r.po ?? <span className="text-muted-foreground">Sin OC</span>}</td>

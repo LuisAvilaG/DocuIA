@@ -13,6 +13,8 @@ export interface StatsFilters {
   period: Period;
   subsidiaryId: string | null;
   vendor: string | null;
+  /** Los documentos de rondas del modo QA no cuentan salvo que se pidan. */
+  includeQa?: boolean;
 }
 
 export function periodRange(period: Period, now = new Date()): { from: Date; to: Date; prevFrom: Date; label: string; prevLabel: string } {
@@ -56,6 +58,7 @@ export async function loadApStats(f: StatsFilters, opts: { byCategory: boolean }
     lt(historyDocuments.createdAt, to),
     ...(f.subsidiaryId ? [eq(historyDocuments.subsidiaryId, f.subsidiaryId)] : []),
     ...(f.vendor ? [eq(historyDocuments.vendor, f.vendor)] : []),
+    ...(f.includeQa ? [] : [eq(historyDocuments.isQa, false)]),
   ];
   const cur = and(...scope(range.from, range.to));
   const prev = and(...scope(range.prevFrom, range.from));

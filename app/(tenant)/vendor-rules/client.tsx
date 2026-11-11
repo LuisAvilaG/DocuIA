@@ -6,7 +6,8 @@ import { btn, Drawer, EmptyState, Notice, PageFrame } from "@/components/kit";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import type { VendorRuleConfig } from "@/lib/workflow/vendor-rules";
-import type { VendorCategory, VendorRuleScope, VendorRuleView } from "@/lib/workflow/vendor-rules-store";
+import type { RuleUsage, VendorCategory, VendorRuleScope, VendorRuleView } from "@/lib/workflow/vendor-rules-store";
+import { RuleFinder } from "./rule-finder";
 
 interface Props {
   initialRules: VendorRuleView[];
@@ -15,6 +16,8 @@ interface Props {
   maxRules: number;
   orgThresholdPct: number;
   features: { poMatching: boolean; threeWay: boolean; sat: boolean };
+  /** Proveedores y facturas del trimestre por regla. */
+  usage: Record<string, RuleUsage>;
 }
 
 type Editor = {
@@ -55,7 +58,7 @@ function ruleTitle(rule: Pick<VendorRuleView, "scope" | "targetLabel" | "targetK
   return `${rule.scope === "category" ? "Categoría" : "Proveedor"}: ${rule.targetLabel ?? rule.targetKey}`;
 }
 
-export function VendorRulesClient({ initialRules, categories, canManage, maxRules, orgThresholdPct, features }: Props) {
+export function VendorRulesClient({ initialRules, categories, canManage, maxRules, orgThresholdPct, features, usage }: Props) {
   const [rules, setRules] = useState(initialRules);
   const [editor, setEditor] = useState<Editor | null>(null);
   const [saving, setSaving] = useState(false);
@@ -71,12 +74,15 @@ export function VendorRulesClient({ initialRules, categories, canManage, maxRule
   const atLimit = rules.length >= maxRules;
 
   function subtitle(rule: VendorRuleView): string {
-    if (rule.scope === "default") return "Todos los demás proveedores";
+    const u = usage[rule.id];
+    const inv = u ? `${u.invoices.toLocaleString("es-MX")} factura${u.invoices === 1 ? "" : "s"} este trimestre` : null;
+    const ven = (n: number) => `${n.toLocaleString("es-MX")} proveedor${n === 1 ? "" : "es"}`;
+    if (rule.scope === "default") return [u ? `${ven(u.vendors)} sin regla propia` : "Todos los demás proveedores", inv].filter(Boolean).join(" · ");
     if (rule.scope === "category") {
-      const n = categoryById.get(rule.targetKey)?.vendorCount;
-      return n != null ? `${n} proveedor${n === 1 ? "" : "es"}` : "Categoría del ERP";
+      const n = u?.vendors ?? categoryById.get(rule.targetKey)?.vendorCount;
+      return ["Categoría", n != null ? ven(n) : null, inv].filter(Boolean).join(" · ");
     }
-    return "Sobrescribe su categoría";
+    return ["Proveedor", inv].filter(Boolean).join(" · ");
   }
 
   function tolerance(c: VendorRuleConfig): string {
@@ -214,6 +220,8 @@ export function VendorRulesClient({ initialRules, categories, canManage, maxRule
       {!features.poMatching && (
         <Notice className="mt-5" tone="warn" title="La relación con órdenes de compra no está activa">Las opciones de OC, recepción y tolerancias se guardan, pero no se aplican hasta activarla.</Notice>
       )}
+
+      {sorted.length > 0 && <RuleFinder />}
 
       {sorted.length === 0 ? (
         <EmptyState className="mt-6" title="Sin reglas todavía"

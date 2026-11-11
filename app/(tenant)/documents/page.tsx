@@ -68,7 +68,7 @@ export default async function DocumentsPage({ searchParams }: {
       db.select({
         id: historyDocuments.id, documentType: historyDocuments.documentType, status: historyDocuments.status,
         vendor: historyDocuments.vendor, numDoc: historyDocuments.numDoc, total: historyDocuments.total,
-        createdAt: historyDocuments.createdAt, approvedBy: historyDocuments.approvedBy, errorMessage: historyDocuments.errorMessage,
+        createdAt: historyDocuments.createdAt, approvedBy: historyDocuments.approvedBy, errorMessage: historyDocuments.errorMessage, isQa: historyDocuments.isQa,
         poInternalId: historyDocuments.poInternalId,
         // Número de OC leído del JSON sin cargar la columna pesada `products`.
         poTranid: sql<string | null>`(${historyDocuments.products}->'ap_checks'->'po'->'comparison'->>'poTranid')`,
@@ -89,6 +89,7 @@ export default async function DocumentsPage({ searchParams }: {
       auto: r.status === "completed" && !r.approvedBy,
       reason: r.errorMessage,
       po: r.poTranid ?? (r.poInternalId ? `#${r.poInternalId}` : null),
+      qa: r.isQa,
     }));
   } catch (err) {
     console.error("[documents]", err);

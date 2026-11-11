@@ -18,7 +18,7 @@ import { CALCULATION_OPERATIONS, type CalculationDefinition } from "./calculatio
 //   validate → "valida esto"            (cross-document rule)
 //   generate → "al final genera esto"   (output template)
 
-export type FlowNodeKind = "intake" | "extract" | "calculate" | "validate" | "reference_lookup" | "generate" | "note";
+export type FlowNodeKind = "intake" | "extract" | "calculate" | "validate" | "reference_lookup" | "generate" | "approval" | "note";
 
 const zPosition = z.object({ x: z.number(), y: z.number() });
 const zField = z.object({
@@ -120,6 +120,25 @@ const zGenerate = z.object({
     }).optional(),
   }),
 });
+// Aprobación por reglas (feature contract_approval_rules): quién decide siempre,
+// condiciones por valor que suman otra aprobación y quién aprueba con excepción.
+// Sin la feature, la etapa se ignora y vale la aprobación de siempre.
+const zApprovers = z.object({ mode: z.enum(["any", "users"]).default("any"), userIds: z.array(z.string().min(1)).max(50).default([]) });
+const zApproval = z.object({
+  id: z.string().min(1), kind: z.literal("approval"), position: zPosition,
+  data: z.object({
+    name: z.string().min(1).default("Aprobación"),
+    base: zApprovers.default({ mode: "any", userIds: [] }),
+    conditions: z.array(z.object({
+      label: z.string().max(120).default(""),
+      docType: z.string().min(1), field: z.string().min(1),
+      op: z.enum(["gt", "gte"]).default("gt"),
+      value: z.number(),
+      approvers: zApprovers,
+    })).max(5).default([]),
+    exceptionUserIds: z.array(z.string().min(1)).max(50).default([]),
+  }),
+});
 // Notes are visual annotations for the team. They are deliberately ignored by
 // compilation, validation and execution.
 const zNote = z.object({
@@ -129,7 +148,7 @@ const zNote = z.object({
   height: z.number().positive().max(520).optional(),
 });
 
-const zNode = z.discriminatedUnion("kind", [zIntake, zExtract, zCalculate, zValidate, zReferenceLookup, zGenerate, zNote]);
+const zNode = z.discriminatedUnion("kind", [zIntake, zExtract, zCalculate, zValidate, zReferenceLookup, zGenerate, zApproval, zNote]);
 const zEdge = z.object({ id: z.string().min(1), source: z.string().min(1), target: z.string().min(1) });
 
 export const flowGraphSchema = z.object({

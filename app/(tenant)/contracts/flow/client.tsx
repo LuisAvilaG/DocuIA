@@ -9,8 +9,9 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import {
-  Loader2, Save, Plus, Trash2, ArrowLeft, X, FileInput, ListChecks, Calculator, ShieldCheck, FileText, FileSearch, ChevronDown, ChevronUp, StickyNote, PencilRuler, Sparkles, BookMarked, FileUp, PanelLeft,
+  Loader2, Save, Plus, Trash2, ArrowLeft, X, ClipboardCheck, FileInput, ListChecks, Calculator, ShieldCheck, FileText, FileSearch, ChevronDown, ChevronUp, StickyNote, PencilRuler, Sparkles, BookMarked, FileUp, PanelLeft,
 } from "lucide-react";
+import { ApprovalForm } from "./approval-form";
 import { btn, StatusPill } from "@/components/kit";
 import { DocEditor } from "./doc-editor";
 import { VisualTrainingWorkspace, type TrainingField } from "./visual-training-workspace";
@@ -26,7 +27,7 @@ function genInitialHtml(data: Record<string, unknown>): string {
 }
 
 // ── Node kinds ────────────────────────────────────────────────────────
-type Kind = "intake" | "extract" | "calculate" | "validate" | "reference_lookup" | "generate" | "note";
+type Kind = "intake" | "extract" | "calculate" | "validate" | "reference_lookup" | "generate" | "approval" | "note";
 
 const KIND_META: Record<Kind, { title: string; hint: string; Icon: typeof FileInput; hasIn: boolean; hasOut: boolean }> = {
   intake:   { title: "Documento esperado", hint: "Qué sube el usuario",       Icon: FileInput,   hasIn: false, hasOut: true },
@@ -35,6 +36,7 @@ const KIND_META: Record<Kind, { title: string; hint: string; Icon: typeof FileIn
   validate: { title: "Control",    hint: "Una regla que se cumple o no",  Icon: ShieldCheck, hasIn: true,  hasOut: true },
   reference_lookup: { title: "Búsqueda en el Archivo", hint: "Documentos que cita el caso", Icon: FileSearch, hasIn: true, hasOut: true },
   generate: { title: "Documento a generar", hint: "Word o PDF al aprobar",            Icon: FileText,    hasIn: true,  hasOut: false },
+  approval: { title: "Aprobación", hint: "Quién decide y cuándo", Icon: ClipboardCheck, hasIn: true, hasOut: true },
   note:     { title: "Nota",       hint: "Comentario para el equipo",  Icon: StickyNote,  hasIn: false, hasOut: false },
 };
 
@@ -53,6 +55,7 @@ function defaultData(kind: Kind): AnyData {
     } };
     case "reference_lookup": return { name: "Rastreo de referencias", severity: "warn" };
     case "generate": return { templateKey: "salida", name: "Documento de salida", body: "", source: "editor" };
+    case "approval": return { name: "Aprobación", base: { mode: "any", userIds: [] }, conditions: [], exceptionUserIds: [] };
     case "note":     return { body: "Escribe aquí la instrucción o comentario para este flujo." };
   }
 }
@@ -668,7 +671,7 @@ function FlowBuilder({ flowId }: { flowId: string }) {
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
-  const nodeTypes = useMemo(() => ({ intake: NodeCard, extract: NodeCard, calculate: NodeCard, validate: NodeCard, reference_lookup: NodeCard, generate: NodeCard, note: NodeCard }), []);
+  const nodeTypes = useMemo(() => ({ intake: NodeCard, extract: NodeCard, calculate: NodeCard, validate: NodeCard, reference_lookup: NodeCard, generate: NodeCard, approval: NodeCard, note: NodeCard }), []);
 
   const setGraph = useCallback((graph: { nodes?: Array<{ id: string; kind: Kind; position: { x: number; y: number }; data: AnyData; width?: number; height?: number }>; edges?: Array<{ id: string; source: string; target: string }> }) => {
     setNodes((graph.nodes ?? []).map((n) => ({ id: n.id, type: n.kind, position: n.position, data: n.data, width: n.width, height: n.height })));
@@ -888,6 +891,7 @@ function FlowBuilder({ flowId }: { flowId: string }) {
                 {selected.type === "validate" && <ValidateForm data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} fieldsByType={fieldsByType} />}
                 {selected.type === "reference_lookup" && <div className="space-y-3"><FieldRow label="Nombre de la etapa"><input className={inp} value={String((selected.data as AnyData).name ?? "")} onChange={(event) => patchSelected({ name: event.target.value })} /></FieldRow><FieldRow label="Si falta el documento citado"><select className={inp} value={String((selected.data as AnyData).severity ?? "warn")} onChange={(event) => patchSelected({ severity: event.target.value })}><option value="info">Informar</option><option value="warn">Advertir</option><option value="block">Bloquear</option></select></FieldRow><p className="text-xs leading-relaxed text-muted-foreground">Detecta códigos en los documentos de entrada, busca su origen en el Archivo y compara si tratan el mismo asunto. Los enlaces dudosos se revisan en Archivo.</p></div>}
                 {selected.type === "generate" && <GenerateForm data={selected.data as AnyData} patch={patchSelected} onOpenEditor={() => setDocEditorOpen(true)} onOpenWordTemplate={() => setWordTemplateOpen(true)} />}
+                {selected.type === "approval" && <ApprovalForm key={selected.id} data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} fieldsByType={fieldsByType} />}
                 {selected.type === "note" && <p className="text-[13px] leading-relaxed text-muted-foreground">Edita el texto directamente en el lienzo y ajusta su tamaño desde los bordes. Una nota no cambia el resultado del caso.</p>}
                 <button type="button" onClick={deleteSelected} className="mt-2 inline-flex items-center gap-1.5 self-start text-[13px] font-semibold text-tone-err hover:underline"><Trash2 className="size-4" />Quitar esta etapa</button>
               </div>

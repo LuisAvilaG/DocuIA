@@ -14,6 +14,7 @@ import { getFeature, isFeatureEnabled } from "@/lib/features";
 import { flowGraphSchema } from "@/lib/contracts/flow";
 import { CaseActivity, type CaseActivityItem } from "./case-activity";
 import { contractStatusLabel } from "@/lib/contracts/status";
+import { caseApprovalRules } from "@/lib/contracts/approval-state";
 import { AiAnalysisResults } from "./ai-analysis-results";
 import { OutputDownloads } from "./output-downloads";
 
@@ -74,6 +75,7 @@ export default async function ContractCasePage({ params, searchParams }: { param
     }),
   ]);
 
+  const approvalRules = await caseApprovalRules(session.orgId, id).catch(() => null);
   const parsedFlow = activeFlow ? flowGraphSchema.safeParse(activeFlow.graphJson) : null;
   const configuredValidations = parsedFlow?.success
     ? parsedFlow.data.nodes.filter((node) => node.kind === "validate" || node.kind === "reference_lookup").length
@@ -268,7 +270,22 @@ export default async function ContractCasePage({ params, searchParams }: { param
 
           {(tab === "dec" || (tab === "checks" && deciding)) && (
             <section className={tab === "checks" ? "border-t border-line-soft pt-4" : ""}>
-              {tab === "dec" && <SectionTitle title="Decisión" className="mb-3" />}
+              {tab === "dec" && <SectionTitle title="Decisión" className="mb-3" aside={approvalRules ? `${approvalRules.done.length} de ${approvalRules.steps.length} aprobaci${approvalRules.steps.length === 1 ? "ón" : "ones"}` : undefined} />}
+              {approvalRules && (
+                <ol className="mb-4 flex flex-col gap-2">
+                  {approvalRules.steps.map((st) => {
+                    const signed = approvalRules.done.find((d) => d.stepKey === st.key);
+                    return (
+                      <li key={st.key} className="flex flex-wrap items-center justify-between gap-2 rounded-[10px] border border-border bg-card px-4 py-2.5 text-[13.5px]">
+                        <span><b className="font-semibold">{st.label}</b><span className="text-muted-foreground"> · {st.approvers.mode === "any" ? "cualquier persona con permiso" : `${st.approvers.userIds.length} persona${st.approvers.userIds.length === 1 ? "" : "s"} asignada${st.approvers.userIds.length === 1 ? "" : "s"}`}</span></span>
+                        {signed
+                          ? <StatusPill tone="ok">Aprobó {userNames.get(signed.byId) ?? signed.byEmail ?? "—"} · {new Date(signed.at).toLocaleString("es-MX", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</StatusPill>
+                          : <StatusPill tone="warn">Pendiente</StatusPill>}
+                      </li>
+                    );
+                  })}
+                </ol>
+              )}
               <CaseActions caseId={kase.id} caseTitle={caseTitle} status={kase.status} verdict={validationsEnabled ? verdict : null} decision={result.decision} hasOutput={Boolean(result.outputKey)} generationEnabled={generationEnabled} approvalEnabled={approvalFeature.isEnabled} allowOverride={approvalFeature.config.allow_override !== false} canManage={canApprove(session.role, "contracts")} />
             </section>
           )}

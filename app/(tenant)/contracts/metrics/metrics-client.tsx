@@ -28,12 +28,14 @@ function countBy(values: string[]) {
   return [...counts.entries()].map(([name, n]) => ({ name, n })).sort((a, b) => b.n - a.n).slice(0, 8);
 }
 
-export function ContractMetricsClient({ referenceDate, cases, documents, validations, flows }: {
+export function ContractMetricsClient({ referenceDate, cases, documents, validations, flows, children }: {
   referenceDate: string;
   cases: CaseItem[];
   documents: Array<{ caseId: string; type: string }>;
   validations: ValidationItem[];
   flows: Array<{ id: string; name: string }>;
+  /** Métricas calculadas en el servidor (no siguen los filtros de arriba). */
+  children?: React.ReactNode;
 }) {
   const [period, setPeriod] = useState("30");
   const [flowId, setFlowId] = useState("");
@@ -116,6 +118,7 @@ export function ContractMetricsClient({ referenceDate, cases, documents, validat
       </div>
       <section className="overflow-hidden rounded-xl border border-border bg-card"><div className="flex items-center justify-between gap-3 border-b border-border px-5 py-3"><div><h2 className="text-sm font-semibold text-foreground">Última actividad</h2><p className="mt-0.5 text-[11px] text-muted-foreground">Los casos más recientes dentro de este alcance.</p></div><span className="text-[11px] text-muted-foreground">{latest.length} visibles</span></div><div className="divide-y divide-border">{latest.map((item) => <div key={item.id} className="grid gap-1 px-5 py-3 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center sm:gap-4"><p className="text-xs font-medium text-foreground">{item.flowId ? flowNames.get(item.flowId) ?? "Flujo eliminado" : "Sin flujo asignado"}</p><span className="text-[11px] text-muted-foreground">{contractStatusLabel(item.status)}</span><time className="text-[11px] tabular-nums text-muted-foreground" dateTime={item.updatedAt}>{new Date(item.updatedAt).toLocaleString("es-MX")}</time></div>)}</div></section>
     </>}
+    {children}
   </div></div>;
 }
 

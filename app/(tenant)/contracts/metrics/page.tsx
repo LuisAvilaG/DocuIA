@@ -6,6 +6,8 @@ import { isFeatureEnabled } from "@/lib/features";
 import { db } from "@/lib/db";
 import { contractCases, contractDocuments, contractFlows, contractValidations } from "@/db/schema";
 import { ContractMetricsClient } from "./metrics-client";
+import { ContractMoreMetrics } from "./more-metrics";
+import { loadContractMetrics } from "@/lib/stats/contract-metrics";
 
 export default async function ContractMetricsPage() {
   const session = await getTenantSession({ area: "contracts" });
@@ -13,7 +15,7 @@ export default async function ContractMetricsPage() {
   if (!(await isProductActive(session.orgId, "contract_intelligence"))) redirect("/dashboard");
   if (!(await isFeatureEnabled(session.orgId, "contract_metrics"))) redirect("/contracts/dashboard");
 
-  const [cases, documents, validations, flows] = await Promise.all([
+  const [cases, documents, validations, flows, more] = await Promise.all([
     db.query.contractCases.findMany({
       where: eq(contractCases.organizationId, session.orgId),
       columns: { id: true, createdAt: true, updatedAt: true, status: true, flowId: true },
@@ -26,6 +28,7 @@ export default async function ContractMetricsPage() {
       .from(contractValidations).innerJoin(contractCases, eq(contractValidations.caseId, contractCases.id))
       .where(eq(contractCases.organizationId, session.orgId)),
     db.query.contractFlows.findMany({ where: eq(contractFlows.organizationId, session.orgId), columns: { id: true, name: true } }),
+    loadContractMetrics(session.orgId).catch((err) => { console.error("[contracts/metrics]", err); return null; }),
   ]);
   // The client uses one stable reference point while the user changes filters.
   const referenceDate = new Date().toISOString();
@@ -36,5 +39,7 @@ export default async function ContractMetricsPage() {
     documents={documents.map((item) => ({ caseId: item.caseId, type: item.type ?? "sin clasificar" }))}
     validations={validations.map((item) => ({ ...item, severity: item.severity ?? "warn" }))}
     flows={flows}
-  />;
+  >
+    {more && <ContractMoreMetrics m={more} />}
+  </ContractMetricsClient>;
 }

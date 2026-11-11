@@ -50,3 +50,9 @@ test("motivos del segundo modelo y rechazos del ERP agrupados", () => {
   assert.equal(erpRejectionBucket("RESTlet timeout", null), "El ERP no respondió");
   assert.equal(erpRejectionBucket("algo raro", null), "Otro error");
 });
+
+test("nombre legible de un campo de contrato", async () => {
+  const { fieldLabel } = await import("../lib/stats/contract-metrics");
+  assert.equal(fieldLabel("valor_total"), "Valor total");
+  assert.equal(fieldLabel("poliza.numero"), "Poliza numero");
+});

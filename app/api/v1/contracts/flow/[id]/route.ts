@@ -8,6 +8,8 @@ import { contractFlows } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
 import { flowGraphSchema, hasCycle, validateFlowReferences } from "@/lib/contracts/flow";
 import { isFeatureEnabled } from "@/lib/features";
+import { flowVersionsConfig, listFlowVersions } from "@/lib/contracts/flow-versions";
+import { diffFlows } from "@/lib/contracts/flow-diff";
 
 async function guard(orgId: string) { return isProductActive(orgId, "contract_intelligence"); }
 
@@ -31,8 +33,19 @@ async function handleGET(_req: NextRequest, { params }: { params: Promise<{ id: 
   if (!row) return NextResponse.json({ error: "Flujo no encontrado" }, { status: 404 });
 
   const parsed = flowGraphSchema.safeParse(row.graphJson);
+  const versions = await flowVersionsConfig(session.orgId);
+  const draft = versions.enabled && row.draftJson ? flowGraphSchema.safeParse(row.draftJson) : null;
   return NextResponse.json({
     flow: { id: row.id, name: row.name, version: row.version, isActive: row.isActive, graph: parsed.success ? parsed.data : { nodes: [], edges: [] }, valid: parsed.success },
+    // Con Versiones de flujo el editor abre el borrador (si hay) y muestra el historial.
+    versions: versions.enabled ? {
+      enabled: true,
+      draft: draft?.success ? draft.data : null,
+      // Hay algo por publicar solo si el borrador cambia etapas o conexiones (mover etapas no cuenta).
+      pending: draft?.success ? diffFlows(parsed.success ? parsed.data : null, draft.data).length > 0 : false,
+      draftUpdatedAt: row.draftUpdatedAt?.toISOString() ?? null,
+      history: await listFlowVersions(session.orgId, row.id, versions.maxVersions),
+    } : { enabled: false },
   });
 }
 
@@ -47,7 +60,7 @@ async function handlePUT(req: NextRequest, { params }: { params: Promise<{ id: s
 
   const existing = await db.query.contractFlows.findFirst({
     where: and(eq(contractFlows.id, id), eq(contractFlows.organizationId, session.orgId)),
-    columns: { id: true, version: true },
+    columns: { id: true, version: true, graphJson: true },
   });
   if (!existing) return NextResponse.json({ error: "Flujo no encontrado" }, { status: 404 });
 
@@ -65,6 +78,14 @@ async function handlePUT(req: NextRequest, { params }: { params: Promise<{ id: s
   if (typeof body?.version === "number" && body.version !== existing.version) return stale;
 
   const name = body?.name?.trim() || "Flujo de contratos";
+  // Con Versiones de flujo, guardar no cambia lo que usan los casos: queda como borrador hasta publicar.
+  if ((await flowVersionsConfig(session.orgId)).enabled) {
+    await db.update(contractFlows).set({ name, draftJson: parsed.data, draftUpdatedAt: new Date() })
+      .where(and(eq(contractFlows.id, id), eq(contractFlows.organizationId, session.orgId)));
+    const published = flowGraphSchema.safeParse(existing.graphJson);
+    const pending = diffFlows(published.success ? published.data : null, parsed.data).length > 0;
+    return NextResponse.json({ ok: true, id, version: existing.version, draft: true, pending });
+  }
   try {
     const saved = await db.update(contractFlows)
       .set({ name, graphJson: parsed.data, version: existing.version + 1, updatedAt: new Date() })

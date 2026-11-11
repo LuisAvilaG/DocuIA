@@ -92,7 +92,10 @@ export default async function ContractCasePage({ params, searchParams }: { param
     decision?: { action?: string; reason?: string | null; byEmail?: string | null; at?: string | null; override?: boolean; support?: { name?: string } } | null;
     calculations?: CalculationOutcome[];
     documentRequest?: { to: string; reason: string; documents: string[]; message?: string; at: string; byEmail?: string | null; emailSent?: boolean };
+    flow?: { snapshot?: { version?: number | null } };
   };
+  // Versión del flujo con la que se analizó el caso (los casos anteriores al historial no la tienen).
+  const flowVersion = typeof result.flow?.snapshot?.version === "number" ? result.flow.snapshot.version : null;
   const calculations = Array.isArray(result.calculations) ? result.calculations : [];
   const docs: CaseDoc[] = documents.map((d) => ({
     id: d.id, originalName: d.originalName, mimeType: d.mimeType, detectedType: d.detectedType,
@@ -193,7 +196,7 @@ export default async function ContractCasePage({ params, searchParams }: { param
           {statusPill}
         </div>
         <p className="mt-1.5 text-[13px] text-muted-foreground">
-          {[activeFlow ? `${activeFlow.name}${configuredValidations !== null ? ` · ${configuredValidations} controles` : ""}` : null, `creado ${new Date(kase.createdAt).toLocaleString("es-MX", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}`, creator ? `por ${creator}` : null].filter(Boolean).join(" · ")}
+          {[activeFlow ? `${activeFlow.name}${flowVersion ? ` v${flowVersion}` : ""}${configuredValidations !== null ? ` · ${configuredValidations} controles` : ""}` : null, `creado ${new Date(kase.createdAt).toLocaleString("es-MX", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}`, creator ? `por ${creator}` : null].filter(Boolean).join(" · ")}
         </p>
         <StageNav className="mt-4.5" label="Etapas del caso" stages={stages} current={tab} aux={[{ key: "activity", label: "Actividad", href: "?etapa=activity", count: activity.length }]} />
       </div>

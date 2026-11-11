@@ -2,7 +2,7 @@ import { db } from "@/lib/db";
 import { contractAiAnalysisResults, contractCases, contractDocuments } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { isFeatureEnabled } from "@/lib/features";
-import { loadCasePlan } from "./plan";
+import { loadCasePlan, type ContractPlan } from "./plan";
 import type { DocsByType, Severity, ValidationResult } from "./validate";
 import { assembleResults, isAiRule, type AnalysisOutcome } from "./assemble";
 import type { AiAnalysisItem, AiAnalysisOutcome } from "./ai-analysis";
@@ -11,6 +11,8 @@ import { caseVerdict } from "./validate";
 
 export interface ContractRevalidation {
   caseId: string;
+  /** Controles con IA del plan que no tienen un análisis guardado (no se evaluaron). */
+  untestedAi: number;
   validations: ValidationResult[];
   verdict: ReturnType<typeof assembleResults>["verdict"];
   resultJson: Record<string, unknown>;
@@ -25,13 +27,14 @@ export interface ContractRevalidation {
 export async function calculateContractRevalidation(
   caseId: string,
   overrides: Record<string, Record<string, unknown>> = {},
+  opts: { plan?: ContractPlan } = {},
 ): Promise<ContractRevalidation> {
   const kase = await db.query.contractCases.findFirst({ where: eq(contractCases.id, caseId) });
   if (!kase) throw new Error("Caso no encontrado");
 
   const [documents, plan, validationsEnabled, storedAnalyses] = await Promise.all([
     db.query.contractDocuments.findMany({ where: eq(contractDocuments.caseId, caseId) }),
-    loadCasePlan(kase),
+    opts.plan ?? loadCasePlan(kase),
     isFeatureEnabled(kase.organizationId, "contract_advanced_validations"),
     db.query.contractAiAnalysisResults.findMany({ where: eq(contractAiAnalysisResults.caseId, caseId) }),
   ]);
@@ -48,7 +51,8 @@ export async function calculateContractRevalidation(
   // Stored rows carry the rule name; the flow's AI nodes give back the node id
   // that calculations use to read analysis items.
   const nodeByRule = new Map(plan.rules.filter(isAiRule).map((rule) => [rule.name, rule.nodeId]));
-  const analyses: AnalysisOutcome[] = storedAnalyses.map((row) => ({
+  // Con otro plan (probar un borrador) solo cuentan los análisis de controles que siguen en él.
+  const analyses: AnalysisOutcome[] = storedAnalyses.filter((row) => !opts.plan || nodeByRule.has(row.ruleName)).map((row) => ({
     nodeId: nodeByRule.get(row.ruleName),
     ruleName: row.ruleName,
     severity: row.severity as Severity,
@@ -71,8 +75,10 @@ export async function calculateContractRevalidation(
   const previousResult = (kase.resultJson && typeof kase.resultJson === "object" && !Array.isArray(kase.resultJson))
     ? kase.resultJson as Record<string, unknown>
     : {};
+  const analyzed = new Set(storedAnalyses.map((row) => row.ruleName));
   return {
     caseId,
+    untestedAi: plan.rules.filter(isAiRule).filter((rule) => !analyzed.has(rule.name)).length,
     validations,
     verdict,
     resultJson: { ...previousResult, validations: validations.length, calculations, calculationValues, verdict },

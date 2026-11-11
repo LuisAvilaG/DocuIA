@@ -101,10 +101,30 @@ export const contractFlows = pgTable("contract_flows", {
   graphJson:      json("graph_json").notNull(), // { nodes: FlowNode[], edges: FlowEdge[] }
   isActive:       boolean("is_active").notNull().default(true),
   version:        integer("version").notNull().default(1),
+  // Con Versiones de flujo: lo que se edita sin afectar los casos hasta publicar.
+  draftJson:      json("draft_json"),
+  draftUpdatedAt: timestamp("draft_updated_at"),
   createdAt:      timestamp("created_at").notNull().defaultNow(),
   updatedAt:      timestamp("updated_at").notNull().defaultNow(),
 }, (t) => [
   index("contract_flows_org_idx").on(t.organizationId),
+]);
+
+// Cada versión publicada de un flujo (feature contract_flow_versions).
+export const contractFlowVersions = pgTable("contract_flow_versions", {
+  id:             bigserial("id", { mode: "number" }).primaryKey(),
+  organizationId: varchar("organization_id", { length: 36 }).notNull(),
+  flowId:         varchar("flow_id", { length: 36 }).notNull(),
+  version:        integer("version").notNull(),
+  name:           varchar("name", { length: 150 }).notNull(),
+  graphJson:      json("graph_json").notNull(),
+  note:           text("note"),
+  changesJson:    json("changes_json"),
+  publishedBy:    varchar("published_by", { length: 36 }),
+  publishedAt:    timestamp("published_at").notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex("contract_flow_versions_flow_version_idx").on(t.flowId, t.version),
+  index("contract_flow_versions_org_idx").on(t.organizationId),
 ]);
 
 // Representative document layouts trained from the visual flow editor. A

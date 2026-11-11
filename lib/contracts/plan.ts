@@ -34,6 +34,8 @@ export async function getContractFlowCount(orgId: string): Promise<number> {
 export interface ContractPlan {
   source:       "flow" | "tables";
   flowId:       string | null;
+  /** Versión del flujo con la que se arma el plan (null si no viene de un flujo). */
+  flowVersion?: number | null;
   flow:         FlowGraph | null;
   docTypes:     Array<{ key: string; name: string; hint: string | null }>;
   fieldsByType: Record<string, FieldDef[]>;
@@ -44,7 +46,7 @@ export interface ContractPlan {
 
 // Resolve a flow to run: the one the client picked (flowId) if it belongs to the
 // org, otherwise the most recently updated flow. Returns null if none parse.
-export async function getActiveFlow(orgId: string, flowId?: string | null, { fallback = true } = {}): Promise<{ id: string; name: string; graph: FlowGraph } | null> {
+export async function getActiveFlow(orgId: string, flowId?: string | null, { fallback = true } = {}): Promise<{ id: string; name: string; graph: FlowGraph; version: number } | null> {
   const row = flowId
     ? await db.query.contractFlows.findFirst({ where: and(eq(contractFlows.id, flowId), eq(contractFlows.organizationId, orgId)) })
     : await db.query.contractFlows.findFirst({
@@ -58,14 +60,15 @@ export async function getActiveFlow(orgId: string, flowId?: string | null, { fal
   }
   const parsed = flowGraphSchema.safeParse(row.graphJson);
   if (!parsed.success) return null;
-  return { id: row.id, name: row.name, graph: parsed.data };
+  return { id: row.id, name: row.name, graph: parsed.data, version: row.version };
 }
 
-function planFromFlow(flowId: string, graph: FlowGraph): ContractPlan {
+export function planFromFlow(flowId: string, graph: FlowGraph, version?: number): ContractPlan {
   const c = compileFlow(graph);
   return {
     source: "flow",
     flowId,
+    flowVersion: version ?? null,
     flow: graph,
     docTypes: c.docTypes,
     fieldsByType: c.fieldsByType,
@@ -76,10 +79,10 @@ function planFromFlow(flowId: string, graph: FlowGraph): ContractPlan {
 }
 
 /** Stored on the case when it is processed (resultJson.flow.snapshot). */
-export interface FlowSnapshot { flowId: string; graph: FlowGraph }
+export interface FlowSnapshot { flowId: string; graph: FlowGraph; version?: number | null }
 
 export function flowSnapshot(plan: ContractPlan): FlowSnapshot | null {
-  return plan.flowId && plan.flow ? { flowId: plan.flowId, graph: plan.flow } : null;
+  return plan.flowId && plan.flow ? { flowId: plan.flowId, graph: plan.flow, version: plan.flowVersion ?? null } : null;
 }
 
 /**
@@ -91,19 +94,19 @@ export async function loadCasePlan(kase: { organizationId: string; flowId: strin
   const snapshot = (kase.resultJson as { flow?: { snapshot?: unknown } } | null)?.flow?.snapshot as Partial<FlowSnapshot> | undefined;
   if (snapshot?.flowId) {
     const parsed = flowGraphSchema.safeParse(snapshot.graph);
-    if (parsed.success) return planFromFlow(snapshot.flowId, parsed.data);
+    if (parsed.success) return planFromFlow(snapshot.flowId, parsed.data, typeof snapshot.version === "number" ? snapshot.version : undefined);
   }
   if (kase.flowId) {
     const active = await getActiveFlow(kase.organizationId, kase.flowId, { fallback: false });
     if (!active) throw new Error("El flujo con el que se procesó este caso ya no existe o no es válido. Vuelve a procesarlo con un flujo vigente.");
-    return planFromFlow(active.id, active.graph);
+    return planFromFlow(active.id, active.graph, active.version);
   }
   return loadContractPlan(kase.organizationId, null);
 }
 
 export async function loadContractPlan(orgId: string, flowId?: string | null): Promise<ContractPlan> {
   const active = await getActiveFlow(orgId, flowId);
-  if (active) return planFromFlow(active.id, active.graph);
+  if (active) return planFromFlow(active.id, active.graph, active.version);
 
   const [config, rules, templates] = await Promise.all([
     getContractConfig(orgId),
@@ -117,6 +120,7 @@ export async function loadContractPlan(orgId: string, flowId?: string | null): P
   return {
     source: "tables",
     flowId: null,
+    flowVersion: null,
     flow: null,
     docTypes: config.docTypes.map((d) => ({ key: d.key, name: d.name, hint: d.hint ?? null })),
     fieldsByType: config.fieldsByType,

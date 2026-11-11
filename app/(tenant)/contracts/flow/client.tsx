@@ -16,6 +16,9 @@ import { btn, StatusPill } from "@/components/kit";
 import { DocEditor } from "./doc-editor";
 import { VisualTrainingWorkspace, type TrainingField } from "./visual-training-workspace";
 import { WordTemplateWorkspace } from "./word-template-workspace";
+import { HistoryDrawer, PublishDrawer, TestDrawer, type FlowTestRow, type FlowVersionRow } from "./versions-panel";
+import { diffFlows } from "@/lib/contracts/flow-diff";
+import type { FlowGraph } from "@/lib/contracts/flow";
 import type { WordTemplateConfig } from "@/lib/contracts/word-template";
 
 // Seed the WYSIWYG editor from stored HTML, else migrate the old text body, else blank.
@@ -670,6 +673,14 @@ function FlowBuilder({ flowId }: { flowId: string }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  // Versiones de flujo: guardar deja un borrador; publicar crea la versión siguiente.
+  const [versioned, setVersioned] = useState(false);
+  const [published, setPublished] = useState<FlowGraph | null>(null);
+  const [hasDraft, setHasDraft] = useState(false);
+  const [history, setHistory] = useState<FlowVersionRow[]>([]);
+  const [panel, setPanel] = useState<null | "publish" | "test" | "history">(null);
+  const [publishChanges, setPublishChanges] = useState<string[]>([]);
+  const [test, setTest] = useState<{ loading: boolean; error: string | null; cases: FlowTestRow[] }>({ loading: false, error: null, cases: [] });
 
   const nodeTypes = useMemo(() => ({ intake: NodeCard, extract: NodeCard, calculate: NodeCard, validate: NodeCard, reference_lookup: NodeCard, generate: NodeCard, approval: NodeCard, note: NodeCard }), []);
 
@@ -678,14 +689,22 @@ function FlowBuilder({ flowId }: { flowId: string }) {
     setEdges((graph.edges ?? []).map((e) => ({ id: e.id, source: e.source, target: e.target })));
   }, [setNodes, setEdges]);
 
+  const fetchFlow = useCallback(() => fetch(`/api/v1/contracts/flow/${flowId}`).then((r) => r.json()), [flowId]);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const applyFlow = useCallback((d: any, applyGraph: boolean) => {
+    if (!d?.flow) return;
+    versionRef.current = d.flow.version ?? null; setVersion(d.flow.version ?? null);
+    const v = d.versions ?? { enabled: false };
+    setVersioned(Boolean(v.enabled));
+    setPublished(d.flow.graph ?? null);
+    setHasDraft(Boolean(v.pending));
+    setHistory(Array.isArray(v.history) ? v.history : []);
+    if (applyGraph) { setName(d.flow.name ?? "Flujo"); setGraph(v.draft ?? d.flow.graph ?? { nodes: [], edges: [] }); }
+  }, [setGraph]);
+
   useEffect(() => {
-    (async () => {
-      try {
-        const d = await fetch(`/api/v1/contracts/flow/${flowId}`).then((r) => r.json());
-        if (d.flow) { setName(d.flow.name ?? "Flujo"); setGraph(d.flow.graph ?? { nodes: [], edges: [] }); versionRef.current = d.flow.version ?? null; setVersion(d.flow.version ?? null); }
-      } finally { setLoading(false); }
-    })();
-  }, [flowId, setGraph]);
+    fetchFlow().then((d) => applyFlow(d, true)).finally(() => setLoading(false));
+  }, [fetchFlow, applyFlow]);
 
   const onConnect = useCallback((c: Connection) =>
     setEdges((eds) => addEdge({ ...c, id: `e_${c.source}_${c.target}_${crypto.randomUUID().slice(0, 6)}` }, eds)), [setEdges]);
@@ -735,9 +754,8 @@ function FlowBuilder({ flowId }: { flowId: string }) {
     });
   };
 
-  async function save() {
-    setSaving(true); setMsg(null);
-    const graph = {
+  function currentGraph() {
+    return {
       nodes: nodes.map((n) => ({
         id: n.id, kind: n.type, position: { x: Math.round(n.position.x), y: Math.round(n.position.y) }, data: n.data,
         ...(n.type === "note" && typeof n.width === "number" && typeof n.height === "number"
@@ -745,14 +763,50 @@ function FlowBuilder({ flowId }: { flowId: string }) {
           : {}),
       })),
       edges: edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
-    };
+    } as FlowGraph;
+  }
+
+  async function save(): Promise<boolean> {
+    setSaving(true); setMsg(null);
+    const graph = currentGraph();
     try {
       const res = await fetch(`/api/v1/contracts/flow/${flowId}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, graph, version: versionRef.current }) });
       const d = await res.json();
       if (res.ok && typeof d.version === "number") { versionRef.current = d.version; setVersion(d.version); }
-      setMsg(res.ok ? { ok: true, text: `Guardado (v${d.version ?? 1})` } : { ok: false, text: d.error ?? "Error al guardar" });
-    } catch { setMsg({ ok: false, text: "Sin conexión" }); }
+      if (res.ok && d.draft) setHasDraft(Boolean(d.pending));
+      setMsg(res.ok ? { ok: true, text: d.draft ? (d.pending ? "Borrador guardado" : "Guardado · nada nuevo por publicar") : `Guardado (v${d.version ?? 1})` } : { ok: false, text: d.error ?? "Error al guardar" });
+      return res.ok;
+    } catch { setMsg({ ok: false, text: "Sin conexión" }); return false; }
     finally { setSaving(false); }
+  }
+
+  async function openPublish() {
+    if (!await save()) return;
+    setPublishChanges(diffFlows(published, currentGraph()));
+    setPanel("publish");
+  }
+
+  async function publish({ note, reanalyze }: { note: string; reanalyze: boolean }): Promise<string | null> {
+    try {
+      const res = await fetch(`/api/v1/contracts/flow/${flowId}/publish`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ note, reanalyze, version: versionRef.current }) });
+      const d = await res.json();
+      if (!res.ok) return d.error ?? "No se pudo publicar";
+      applyFlow(await fetchFlow(), false);
+      setPanel(null);
+      setMsg({ ok: true, text: d.reanalyzed ? `Publicada la versión ${d.version} · ${d.reanalyzed} caso${d.reanalyzed === 1 ? "" : "s"} en análisis` : `Publicada la versión ${d.version}` });
+      return null;
+    } catch { return "Sin conexión"; }
+  }
+
+  async function runTest() {
+    if (!await save()) return;
+    setPanel("test");
+    setTest({ loading: true, error: null, cases: [] });
+    try {
+      const res = await fetch(`/api/v1/contracts/flow/${flowId}/test`, { method: "POST" });
+      const d = await res.json();
+      setTest(res.ok ? { loading: false, error: null, cases: d.cases ?? [] } : { loading: false, error: d.error ?? "No se pudo probar", cases: [] });
+    } catch { setTest({ loading: false, error: "Sin conexión", cases: [] }); }
   }
 
   const selected = nodes.find((n) => n.id === selectedId) ?? null;
@@ -816,12 +870,24 @@ function FlowBuilder({ flowId }: { flowId: string }) {
             className="min-w-[220px] rounded-md border border-transparent bg-transparent px-1.5 py-1 text-[17px] font-semibold tracking-[-0.01em] outline-none hover:border-border focus:border-primary" />
         </label>
         {version !== null && <StatusPill tone="mute">v{version}</StatusPill>}
+        {versioned && hasDraft && <StatusPill tone="warn">Borrador sin publicar</StatusPill>}
         <span className="text-[12.5px] text-muted-foreground">{stageCount} etapa{stageCount === 1 ? "" : "s"}</span>
         <span className="flex-1" />
         {msg && <span role="status" className={`text-[13px] ${msg.ok ? "text-tone-ok" : "text-tone-err"}`}>{msg.text}</span>}
-        <button type="button" onClick={save} disabled={saving} className={btn("primary")}>
-          {saving ? <Loader2 className="animate-spin" /> : <Save />} Guardar flujo
-        </button>
+        {versioned ? (
+          <>
+            <button type="button" onClick={() => setPanel("history")} className={btn("text")}>Versiones</button>
+            <button type="button" onClick={() => void runTest()} disabled={saving} className={btn("secondary")}>Probar con casos anteriores</button>
+            <button type="button" onClick={() => void save()} disabled={saving} className={btn("secondary")}>
+              {saving ? <Loader2 className="animate-spin" /> : <Save />} Guardar borrador
+            </button>
+            <button type="button" onClick={() => void openPublish()} disabled={saving} className={btn("primary")}>Publicar v{(version ?? 0) + 1}</button>
+          </>
+        ) : (
+          <button type="button" onClick={() => void save()} disabled={saving} className={btn("primary")}>
+            {saving ? <Loader2 className="animate-spin" /> : <Save />} Guardar flujo
+          </button>
+        )}
       </header>
 
       <div className="grid min-h-0 flex-1 grid-cols-[216px_minmax(0,1fr)_400px]">
@@ -918,6 +984,9 @@ function FlowBuilder({ flowId }: { flowId: string }) {
           onClose={() => setWordTemplateOpen(false)}
         />
       )}
+      {panel === "publish" && <PublishDrawer nextVersion={(version ?? 0) + 1} changes={publishChanges} onClose={() => setPanel(null)} onPublish={publish} />}
+      {panel === "test" && <TestDrawer {...test} onClose={() => setPanel(null)} />}
+      {panel === "history" && <HistoryDrawer current={version} history={history} onClose={() => setPanel(null)} />}
       {visualTraining && <VisualTrainingWorkspace flowId={flowId} {...visualTraining} onClose={() => setVisualTraining(null)} />}
     </div>
   );

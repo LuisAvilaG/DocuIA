@@ -1,3 +1,4 @@
+import { withAiUsage } from "@/lib/ai/usage";
 import { withApiSecurity } from "@/lib/security/http";
 import { signUploadReceipt } from "@/lib/security/upload-receipt";
 import { matchesFileType } from "@/lib/security/files";
@@ -58,7 +59,7 @@ async function handlePOST(req: NextRequest) {
     // The receipt is stored either way: when OCR is unavailable the person
     // types the data and the file still travels with the expense line.
     try {
-      const ocrResult = await extractExpenseDocument(buffer, file.type, { apiKey });
+      const ocrResult = await withAiUsage({ orgId: session.orgId, source: "gastos" }, () => extractExpenseDocument(buffer, file.type, { apiKey }));
       return NextResponse.json({ ok: true, fileKey, uploadReceipt, ocr: ocrResult });
     } catch (err) {
       console.error("[expenses/ocr] extraction failed", err instanceof Error ? err.message : err);

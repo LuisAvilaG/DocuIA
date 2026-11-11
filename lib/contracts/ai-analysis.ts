@@ -1,3 +1,4 @@
+import { geminiUsage, recordAiUsage } from "@/lib/ai/usage";
 import type { DocsByType, ValidationRule } from "./validate";
 
 export type AiAnalysisRule = Extract<ValidationRule, { kind: "ai_analysis" }>;
@@ -51,6 +52,7 @@ async function requestJson(instruction: string): Promise<Record<string, unknown>
   );
   if (!response.ok) throw new Error(`La IA no pudo completar el análisis (${response.status}).`);
   const payload = await response.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+  recordAiUsage({ model: MODEL, ...geminiUsage(payload) });
   const text = payload.candidates?.flatMap((candidate) => candidate.content?.parts ?? []).find((part) => part.text)?.text;
   if (!text) throw new Error("La IA no devolvió contenido para el análisis.");
   return jsonObject(text);

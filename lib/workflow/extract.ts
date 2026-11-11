@@ -294,9 +294,10 @@ function outputTokenLimit(maxChars: unknown): number {
   return Math.max(1024, Math.min(16000, Math.round(characters / 4)));
 }
 
-async function callModel(model: string, fileName: string, mimeType: string, base64: string, options: ExtractOptions): Promise<{ invoice: ExtractedInvoice; rawJson: string; usage: AiUsage }> {
+async function callModel(model: string, fileName: string, mimeType: string, base64: string, options: ExtractOptions, fallback = false): Promise<{ invoice: ExtractedInvoice; rawJson: string; usage: AiUsage }> {
   const req: AiJsonRequest = {
     model,
+    fallback,
     instruction: getInstruction(),
     parts: [{ kind: "file", base64, mimeType }],
     note: `FILE_NAME: ${normalize(fileName) || "invoice"}`,
@@ -324,7 +325,7 @@ export async function extractFromFile(params: {
   const policy = options.policy ?? {};
 
   if (forceSecondary) {
-    const r = await callModel(secondaryModel, params.fileName, params.mimeType, params.base64Content, options);
+    const r = await callModel(secondaryModel, params.fileName, params.mimeType, params.base64Content, options, true);
     return { invoice: r.invoice, model: secondaryModel, fallbackUsed: true, fallbackReason: "forzado por configuración", rawJson: r.rawJson, promptTokens: r.usage.inputTokens, completionTokens: r.usage.outputTokens, cachedTokens: r.usage.cachedInputTokens };
   }
 
@@ -336,7 +337,7 @@ export async function extractFromFile(params: {
   console.warn(`[extract] ${primaryModel} → ${secondaryModel}: ${reason}`);
   let second: Awaited<ReturnType<typeof callModel>>;
   try {
-    second = await callModel(secondaryModel, params.fileName, params.mimeType, params.base64Content, options);
+    second = await callModel(secondaryModel, params.fileName, params.mimeType, params.base64Content, options, true);
   } catch (error) {
     // The first result still stands; the pipeline's own validation decides its fate.
     console.warn("[extract] secondary model failed, keeping primary:", error instanceof Error ? error.message : error);

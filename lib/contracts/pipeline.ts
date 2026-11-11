@@ -1,3 +1,4 @@
+import { withAiUsage } from "@/lib/ai/usage";
 import { randomUUID } from "crypto";
 import { db } from "@/lib/db";
 import { contractCases, contractDocuments, contractExtractionLearnings, contractValidations, contractVisualTrainingVariants, contractAiAnalysisResults } from "@/db/schema";
@@ -96,7 +97,14 @@ function toSource(buffer: Buffer, mimeType: string | null): { source: ExtractSou
 // Process a case off-thread: classify each doc, extract configured fields with
 // citations, persist, and move the case to "review". Extractor is injectable
 // so the orchestration can be tested without an AI key.
+/** Cada llamada a la IA del caso se carga al cliente (usage_events). */
 export async function processContractCase(caseId: string, injectedDeps?: ContractExtractDeps): Promise<void> {
+  const owner = await db.query.contractCases.findFirst({ where: eq(contractCases.id, caseId), columns: { organizationId: true } });
+  if (!owner) throw new Error(`Contract case ${caseId} not found`);
+  return withAiUsage({ orgId: owner.organizationId, source: "contratos" }, () => processContractCaseInner(caseId, injectedDeps));
+}
+
+async function processContractCaseInner(caseId: string, injectedDeps?: ContractExtractDeps): Promise<void> {
   const kase = await db.query.contractCases.findFirst({ where: eq(contractCases.id, caseId) });
   if (!kase) throw new Error(`Contract case ${caseId} not found`);
 

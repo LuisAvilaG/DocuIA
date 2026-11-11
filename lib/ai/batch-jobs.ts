@@ -11,6 +11,7 @@ import { getFeature } from "@/lib/features";
 import type { PipelineJob } from "@/lib/queue";
 import { extractionRequest, DEFAULT_PRIMARY_MODEL, configuredModel, configuredEffort } from "@/lib/workflow/extract";
 import { batchResults, createBatch, getBatch, providerOf, type AiJsonRequest } from "./provider";
+import { recordAiUsage } from "./usage";
 
 const MAX_ITEMS_PER_BATCH = 500;
 
@@ -93,6 +94,7 @@ export async function pollBatch(batchId: string, enqueue: (job: PipelineJob) => 
     const job = item.jobJson as PipelineJob;
     if (result.ok) {
       const r = result.result;
+      recordAiUsage({ model: r.model, ...r.usage, batch: true, orgId: item.organizationId, source: "facturas" });
       const precomputed = { rawJson: r.rawText, model: r.model, promptTokens: r.usage.inputTokens, completionTokens: r.usage.outputTokens, cachedTokens: r.usage.cachedInputTokens };
       await db.update(aiBatchItems).set({ status: "done", resultJson: precomputed, updatedAt: new Date() }).where(eq(aiBatchItems.id, item.id));
       await enqueue({ ...job, precomputedExtraction: precomputed });

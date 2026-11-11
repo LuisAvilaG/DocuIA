@@ -1,3 +1,4 @@
+import { geminiUsage, recordAiUsage } from "@/lib/ai/usage";
 import { randomUUID } from "node:crypto";
 import { and, eq, ne, or } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -35,7 +36,7 @@ export async function registerUploadedArchiveDocument(input: { organizationId: s
   });
 }
 
-async function assessRelevance(sourceContext: string, targetText: string): Promise<{ assessment: string; reason: string }> {
+async function assessRelevance(sourceContext: string, targetText: string, orgId: string): Promise<{ assessment: string; reason: string }> {
   const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
   if (!apiKey || !targetText.trim()) return { assessment: "uncertain", reason: "No hay texto suficiente para valorar la pertinencia automáticamente." };
   try {
@@ -47,6 +48,7 @@ async function assessRelevance(sourceContext: string, targetText: string): Promi
     });
     if (!response.ok) throw new Error(`Modelo ${response.status}`);
     const json = await response.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+    recordAiUsage({ model: "gemini-2.5-flash", ...geminiUsage(json), orgId, source: "archivo" });
     const answer = JSON.parse(json.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}") as { assessment?: string; reason?: string };
     return { assessment: ["related", "unrelated", "uncertain"].includes(answer.assessment ?? "") ? answer.assessment! : "uncertain", reason: String(answer.reason ?? "Revisar manualmente").slice(0, 1000) };
   } catch {
@@ -70,7 +72,7 @@ export async function reconcileReference(referenceId: string): Promise<void> {
   }
   const pages = await db.query.contractArchivePages.findMany({ where: eq(contractArchivePages.documentId, candidates[0].id), orderBy: [contractArchivePages.pageNumber], columns: { pageNumber: true, text: true } });
   const relevantPages = selectPagesForFields(pages, [{ fieldKey: "asunto", label: reference.context, isList: false }], 3500);
-  const analysis = await assessRelevance(reference.context, relevantPages);
+  const analysis = await assessRelevance(reference.context, relevantPages, reference.organizationId);
   await db.update(contractArchiveReferences).set({ targetDocumentId: candidates[0].id, status: analysis.assessment === "related" ? "related" : analysis.assessment === "unrelated" ? "unrelated" : "review", assessment: analysis.assessment, reason: analysis.reason, updatedAt: new Date() }).where(eq(contractArchiveReferences.id, referenceId));
 }
 

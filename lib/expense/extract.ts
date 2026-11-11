@@ -4,6 +4,8 @@
  * Returns structured fields + per-field confidence + detected document type.
  */
 
+import { geminiUsage, recordAiUsage } from "@/lib/ai/usage";
+
 export type ExpenseDocumentType = "invoice" | "receipt" | "cuenta_cobro" | "documento_equivalente" | "unknown";
 
 export interface ExpenseOcrResult {
@@ -124,6 +126,7 @@ async function callGemini(parts: Record<string, unknown>[], apiKey?: string): Pr
 
   type GeminiReply = { candidates?: Array<{ content?: { parts?: Array<{ text?: unknown }> } }> };
   const json = await res.json() as GeminiReply;
+  recordAiUsage({ model, ...geminiUsage(json) });
   const candidates = Array.isArray(json.candidates) ? json.candidates : [];
   let text = "";
   for (const c of candidates) {

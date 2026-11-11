@@ -9,6 +9,7 @@
 // the platform key.
 
 import Anthropic from "@anthropic-ai/sdk";
+import { recordAiUsage } from "./usage";
 
 export type AiProvider = "gemini" | "anthropic";
 
@@ -46,6 +47,8 @@ export interface AiJsonRequest {
   timeoutMs?: number;
   /** Reasoning depth on Claude (ignored by Gemini). Lower is faster; the model still reasons. */
   effort?: "low" | "medium" | "high";
+  /** Segundo modelo tras una lectura dudosa (para las métricas de uso). */
+  fallback?: boolean;
 }
 
 export interface AiUsage {
@@ -232,7 +235,9 @@ async function claudeJson(req: AiJsonRequest): Promise<AiJsonResult> {
 }
 
 export async function generateJson(req: AiJsonRequest): Promise<AiJsonResult> {
-  return providerOf(req.model) === "anthropic" ? claudeJson(req) : geminiJson(req);
+  const result = providerOf(req.model) === "anthropic" ? await claudeJson(req) : await geminiJson(req);
+  recordAiUsage({ model: result.model, ...result.usage, fallback: req.fallback });
+  return result;
 }
 
 // ── Batches (Claude only) ─────────────────────────────────────────────

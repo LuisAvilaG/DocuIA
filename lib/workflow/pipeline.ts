@@ -6,6 +6,7 @@ import { uploadFile } from "@/lib/storage/minio";
 import { extractFromFile, mapInvoice, configuredEffort } from "./extract";
 import { parseJsonObject } from "@/lib/ai/provider";
 import { mergeDocMetrics } from "./doc-metrics";
+import { withAiUsage } from "@/lib/ai/usage";
 import { buildUiPayload } from "./match";
 import { processInNetSuite } from "./process-ns";
 import { buildNsPayload, draftWithPo } from "./ns-payload";
@@ -86,7 +87,12 @@ export async function createQueuedDocument(input: PipelineInput): Promise<{ docu
   return { documentId: doc.id, storageKey };
 }
 
-export async function runPipeline(input: PipelineInput): Promise<PipelineResult> {
+/** Cada llamada a la IA de esta factura se carga al cliente (usage_events). */
+export function runPipeline(input: PipelineInput): Promise<PipelineResult> {
+  return withAiUsage({ orgId: input.organizationId, source: "facturas" }, () => runPipelineInner(input));
+}
+
+async function runPipelineInner(input: PipelineInput): Promise<PipelineResult> {
   const requestId = randomUUID();
   const t0 = Date.now();
 

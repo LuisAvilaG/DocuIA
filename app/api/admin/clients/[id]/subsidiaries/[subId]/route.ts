@@ -8,6 +8,7 @@ import {
   historyDocuments, exceptionQueue,
 } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
+import { isInvoiceFormat } from "@/lib/subsidiaries/invoice-format";
 
 type Params = { params: Promise<{ id: string; subId: string }> };
 
@@ -35,6 +36,10 @@ async function handlePATCH(req: NextRequest, { params }: Params) {
     }
     if (typeof body.locale === "string") updates.locale = body.locale.trim() || null;
     if (typeof body.isActive === "boolean") updates.isActive = body.isActive;
+    if (body.invoiceFormat !== undefined) {
+      if (!isInvoiceFormat(body.invoiceFormat)) return NextResponse.json({ error: "Formato de factura inválido" }, { status: 400 });
+      updates.invoiceFormat = body.invoiceFormat;
+    }
 
     await db.update(subsidiaries).set(updates).where(eq(subsidiaries.id, subId));
     await logAdminAction(req, session!, { action: "subsidiary.updated", targetOrgId: organizationId, after: { name: (updates.name as string) ?? sub.name, ...updates } });

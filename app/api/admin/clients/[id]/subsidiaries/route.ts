@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import { subsidiaries } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { randomUUID } from "crypto";
+import { isInvoiceFormat, suggestInvoiceFormat } from "@/lib/subsidiaries/invoice-format";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -41,7 +42,7 @@ async function handlePOST(req: NextRequest, { params }: Params) {
     const body = await req.json();
 
     // body.subsidiaries: Array<{ nsSubsidiaryId, name, currency?, locale? }>
-    const incoming: Array<{ nsSubsidiaryId: string; name: string; currency?: string; locale?: string; taxId?: string }> =
+    const incoming: Array<{ nsSubsidiaryId: string; name: string; currency?: string; locale?: string; taxId?: string; invoiceFormat?: string }> =
       body.subsidiaries ?? [];
 
     if (!incoming.length) {
@@ -62,7 +63,7 @@ async function handlePOST(req: NextRequest, { params }: Params) {
       const existingRow = existingByNsId.get(sub.nsSubsidiaryId);
       if (existingRow) {
         await db.update(subsidiaries)
-          .set({ name: sub.name, currency: sub.currency ?? existingRow.currency, taxId: cleanTaxId(sub.taxId) ?? existingRow.taxId, updatedAt: now })
+          .set({ name: sub.name, currency: sub.currency ?? existingRow.currency, taxId: cleanTaxId(sub.taxId) ?? existingRow.taxId, ...(isInvoiceFormat(sub.invoiceFormat) ? { invoiceFormat: sub.invoiceFormat } : {}), updatedAt: now })
           .where(eq(subsidiaries.id, existingRow.id));
         upserted.push(existingRow.id);
       } else {
@@ -75,6 +76,7 @@ async function handlePOST(req: NextRequest, { params }: Params) {
           currency: sub.currency ?? "USD",
           locale: sub.locale ?? "en-US",
           taxId: cleanTaxId(sub.taxId),
+          invoiceFormat: isInvoiceFormat(sub.invoiceFormat) ? sub.invoiceFormat : suggestInvoiceFormat(sub.locale, sub.currency),
           isActive: true,
           createdAt: now,
           updatedAt: now,

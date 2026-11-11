@@ -134,6 +134,13 @@
       "when": 1794368577808,
       "tag": "0018_status_events",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1794403784826,
+      "tag": "0019_subsidiary_invoice_format",
+      "breakpoints": true
     }
   ]
 }

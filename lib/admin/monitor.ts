@@ -2,10 +2,11 @@
 // whether anything looks off, plus the health of the shared machinery.
 import { db } from "@/lib/db";
 import {
-  historyDocuments, contractCases, expenseReports, exceptionQueue, usageDaily, workflowRuntimeLogs,
+  historyDocuments, contractCases, expenseReports, exceptionQueue, usageDaily, workflowRuntimeLogs, orgFeatures,
 } from "@/db/schema";
 import { and, eq, gte, inArray, sql, count, max } from "drizzle-orm";
 import { loadOrgFacts, healthFromFacts } from "./health";
+import { qaModeActive } from "@/lib/features/qa-mode";
 
 export interface MonitorRow {
   id: string;
@@ -21,6 +22,8 @@ export interface MonitorRow {
   /** 12 buckets of one hour each (docs + cases), oldest first. */
   spark: number[];
   status: { label: string; tone: "ok" | "warn" | "err" | "mute" };
+  /** Fecha AAAA-MM-DD hasta la que sigue el modo QA, o null si no está vigente. */
+  qaUntil: string | null;
   href: string;
 }
 
@@ -50,7 +53,7 @@ export async function getTodayMonitor(): Promise<MonitorData> {
   const ids = [...facts.keys()];
   const today = isoDay(new Date());
 
-  const [docs, cases, reports, review, exceptions, usage, errors, hourly] = ids.length ? await Promise.all([
+  const [docs, cases, reports, review, exceptions, usage, errors, hourly, qa] = ids.length ? await Promise.all([
     db.select({ organizationId: historyDocuments.organizationId, n: count(), last: max(historyDocuments.createdAt) }).from(historyDocuments)
       .where(and(inArray(historyDocuments.organizationId, ids), gte(historyDocuments.createdAt, start))).groupBy(historyDocuments.organizationId),
     db.select({ organizationId: contractCases.organizationId, n: count(), last: max(contractCases.createdAt) }).from(contractCases)
@@ -71,10 +74,12 @@ export async function getTodayMonitor(): Promise<MonitorData> {
     db.select({ organizationId: historyDocuments.organizationId, hour: hourAgo, n: count() })
       .from(historyDocuments).where(and(inArray(historyDocuments.organizationId, ids), gte(historyDocuments.createdAt, since12h)))
       .groupBy(historyDocuments.organizationId, hourAgo),
-  ]) : [[], [], [], [], [], [], [], []];
+    db.select({ organizationId: orgFeatures.organizationId, config: orgFeatures.configJson }).from(orgFeatures)
+      .where(and(inArray(orgFeatures.organizationId, ids), eq(orgFeatures.featureId, "qa_mode"), eq(orgFeatures.adminGranted, true))),
+  ]) : [[], [], [], [], [], [], [], [], []];
 
   const one = <T extends { organizationId: string }>(rows: T[]) => new Map(rows.map((r) => [r.organizationId, r]));
-  const docsBy = one(docs), casesBy = one(cases), reportsBy = one(reports), reviewBy = one(review), excBy = one(exceptions), usageBy = one(usage), errBy = one(errors);
+  const docsBy = one(docs), casesBy = one(cases), reportsBy = one(reports), reviewBy = one(review), excBy = one(exceptions), usageBy = one(usage), errBy = one(errors), qaBy = one(qa);
   const sparkBy = new Map<string, number[]>();
   for (const h of hourly) {
     const arr = sparkBy.get(h.organizationId) ?? new Array(12).fill(0);
@@ -97,6 +102,8 @@ export async function getTodayMonitor(): Promise<MonitorData> {
     const errorsToday = Number(errBy.get(f.id)?.n ?? 0);
     const inReview = Number(reviewBy.get(f.id)?.review ?? 0) + Number(reviewBy.get(f.id)?.approvals ?? 0) + Number(excBy.get(f.id)?.n ?? 0);
     const health = healthFromFacts(f);
+    const qaConfig = qaBy.get(f.id)?.config as Record<string, unknown> | undefined;
+    const qaUntil = qaConfig && qaModeActive(true, qaConfig, f.activeNsEnvironment) ? String(qaConfig.expires_on) : null;
     const products = new Set(f.products.filter((p) => p.status !== "disabled").map((p) => p.key));
 
     let status: MonitorRow["status"];
@@ -105,6 +112,7 @@ export async function getTodayMonitor(): Promise<MonitorData> {
     else if (errorsToday > 0) status = { label: `${errorsToday} error${errorsToday === 1 ? "" : "es"} hoy`, tone: "err" };
     else if (health.tone === "err") status = { label: health.label, tone: "err" };
     else if (health.pending && health.pending.key !== "first_run") status = { label: health.label, tone: "warn" };
+    else if (qaUntil) status = { label: `Modo QA hasta ${qaUntil}`, tone: "warn" };
     else if (products.has("ap_automation") && f.activeNsEnvironment === "sandbox") status = { label: "Procesa en sandbox", tone: "warn" };
     else status = { label: "Normal", tone: "ok" };
 
@@ -113,7 +121,7 @@ export async function getTodayMonitor(): Promise<MonitorData> {
       id: f.id, name: f.name, slug: f.slug, docsToday, casesToday, reportsToday, inReview, errorsToday, fallbackPct,
       lastActivityAt: (lastToday ?? f.lastActivityAt)?.toISOString() ?? null,
       spark: sparkBy.get(f.id) ?? new Array(12).fill(0),
-      status, href: `/admin/clients/${f.id}`,
+      status, qaUntil, href: `/admin/clients/${f.id}`,
     });
   }
   // Busiest first, then the ones that need attention, idle ones last.

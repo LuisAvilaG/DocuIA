@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { nsConnections, subsidiaries, catalogItems, catalogVendors, catalogLocations, expenseCategories, catalogDepartments, catalogClasses, orgUsers } from "@/db/schema";
+import type { InvoiceFormat } from "@/lib/subsidiaries/invoice-format";
 import { loadOneOrgFacts } from "@/lib/admin/health";
 import { ErpView, type ConnectionRow, type SubsidiaryRow } from "./erp-view";
 
@@ -42,7 +43,7 @@ export default async function ClientErpPage({ params }: { params: Promise<{ id: 
     processScriptId: c.processScriptId, processDeployId: c.processDeployId, updatedAt: c.updatedAt.toISOString(),
   }));
   const subsidiaryRows: SubsidiaryRow[] = subs.map((s) => ({
-    id: s.id, name: s.name, nsSubsidiaryId: s.nsSubsidiaryId, currency: s.currency, locale: s.locale, taxId: s.taxId, isActive: s.isActive,
+    id: s.id, name: s.name, nsSubsidiaryId: s.nsSubsidiaryId, currency: s.currency, locale: s.locale, taxId: s.taxId, invoiceFormat: s.invoiceFormat as InvoiceFormat, isActive: s.isActive,
     items: im.get(s.id) ?? 0, vendors: vm.get(s.id) ?? 0, locations: lm.get(s.id) ?? 0,
   }));
 

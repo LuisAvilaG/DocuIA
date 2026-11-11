@@ -67,8 +67,14 @@ export function describeAdminAction(row: {
   const str = (v: unknown) => (typeof v === "string" || typeof v === "number" ? String(v) : "");
   switch (row.action) {
     case "toggle_feature":
-    case "feature.updated":
-      return `${after.adminGranted ? "Activó" : "Desactivó"} la feature ${row.targetFeature ?? ""}${after.notes ? ` con nota "${str(after.notes)}"` : ""}.`;
+    case "feature.updated": {
+      const verb = before.adminGranted === after.adminGranted
+        ? "Cambió la configuración de"
+        : after.adminGranted ? "Activó" : "Desactivó";
+      return `${verb} la feature ${row.targetFeature ?? ""}${after.notes ? ` con nota "${str(after.notes)}"` : ""}.`;
+    }
+    case "feature.auto_disabled":
+      return `Se apagó sola la feature ${row.targetFeature ?? ""}${after.reason === "environment_production" ? " al pasar el ERP a producción" : after.reason === "expired" ? " al vencer" : ""}.`;
     case "feature_default.updated":
       return `Cambió el valor por defecto de ${row.targetFeature ?? ""} a ${after.defaultEnabled ? "activo" : "inactivo"}${after.affected !== undefined ? ` (afecta a ${str(after.affected)} clientes)` : ""}.`;
     case "org.created":

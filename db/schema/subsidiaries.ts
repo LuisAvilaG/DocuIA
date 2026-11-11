@@ -17,7 +17,9 @@ export const subsidiaries = pgTable("subsidiaries", {
   locale:         varchar("locale", { length: 10 }).notNull().default("en-US"),
   // Tax id (RFC in Mexico); CFDI receiver must match it.
   taxId:          varchar("tax_id", { length: 20 }),
-  isActive:       boolean("is_active").notNull().default(true),
+  // Formato de las facturas de proveedores: "cfdi" (XML + PDF) o "pdf" (PDF o imagen).
+  invoiceFormat:  varchar("invoice_format", { length: 10 }).notNull().default("pdf"),
+  isActive:      boolean("is_active").notNull().default(true),
   createdAt:      timestamp("created_at").notNull().defaultNow(),
   updatedAt:      timestamp("updated_at").notNull().defaultNow(),
 }, (t) => [

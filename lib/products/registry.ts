@@ -73,6 +73,8 @@ export const FEATURE_PRODUCT: Record<string, ProductKey> = {
   erp_attachments:        "ap_automation",
   ap_advanced_stats:      "ap_automation",
   sandbox_test_send:      "ap_automation",
+  qa_mode:                "ap_automation",
+  manual_upload:          "ap_automation",
   // Expense Management
   expense_management:      "expense_management",
   expense_approval:        "expense_management",
@@ -87,6 +89,9 @@ export const FEATURE_PRODUCT: Record<string, ProductKey> = {
   contract_metrics:              "contract_intelligence",
   contract_reference_archive:    "contract_intelligence",
   contract_large_documents:      "contract_intelligence",
+  contract_flow_versions:        "contract_intelligence",
+  contract_approval_rules:       "contract_intelligence",
+  contract_document_requests:    "contract_intelligence",
 };
 
 // Platform features (product_key = null): webhook_system, api_keys,

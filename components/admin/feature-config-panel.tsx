@@ -8,9 +8,10 @@ import { Field, TextInput, Select, control } from "@/components/admin/form";
 import { Pill } from "@/components/admin/ui";
 import { CustomFormConfig, type CustomFormsConfig } from "@/components/admin/custom-form-config";
 import { cn } from "@/lib/utils";
+import { tenantEditableKeys } from "@/lib/features/tenant-editable";
 
 export interface ConfigParam {
-  key: string; label: string; type: "boolean" | "number" | "string" | "select";
+  key: string; label: string; type: "boolean" | "number" | "string" | "select" | "date";
   min?: number; max?: number; options?: string[]; optionLabels?: Record<string, string>; description?: string;
 }
 
@@ -29,7 +30,8 @@ export function FeatureConfigPanel({ feature, subsidiaries, onClose, onSave }: {
   feature: ConfigurableFeature;
   subsidiaries: Array<{ id: string; name: string }>;
   onClose: () => void;
-  onSave: (config: Record<string, unknown>, notes: string) => Promise<boolean>;
+  /** true si guardó; si no, el mensaje de error. */
+  onSave: (config: Record<string, unknown>, notes: string) => Promise<true | string>;
 }) {
   const [config, setConfig] = useState<Record<string, unknown>>(feature.config ?? {});
   const [notes, setNotes] = useState(feature.notes ?? "");
@@ -43,13 +45,15 @@ export function FeatureConfigPanel({ feature, subsidiaries, onClose, onSave }: {
   }, [onClose, saving]);
 
   const isCustomForms = feature.id === "custom_netsuite_forms";
+  const editableKeys = tenantEditableKeys(feature.id);
+  const editableLabels = (feature.configSchema ?? []).filter((p) => editableKeys.includes(p.key)).map((p) => p.label.toLowerCase());
   const set = (key: string, value: unknown) => setConfig((c) => ({ ...c, [key]: value }));
 
   async function save(next: Record<string, unknown> = config) {
     setSaving(true); setError("");
     const ok = await onSave(next, notes);
     setSaving(false);
-    if (!ok) { setError("No se pudo guardar. Intenta de nuevo."); return false; }
+    if (ok !== true) { setError(ok || "No se pudo guardar. Intenta de nuevo."); return false; }
     onClose();
     return true;
   }
@@ -98,6 +102,7 @@ export function FeatureConfigPanel({ feature, subsidiaries, onClose, onSave }: {
                       <TextInput type="number" min={p.min} max={p.max} value={Number(value ?? 0)} onChange={(e) => set(p.key, Number(e.target.value))} className="tabular-nums" />
                     )}
                     {p.type === "string" && <TextInput value={String(value ?? "")} onChange={(e) => set(p.key, e.target.value)} />}
+                    {p.type === "date" && <TextInput type="date" value={String(value ?? "")} onChange={(e) => set(p.key, e.target.value)} className="tabular-nums" />}
                     {p.type === "select" && p.options && (
                       <Select value={String(value ?? p.options[0])} onChange={(e) => set(p.key, e.target.value)}>
                         {p.options.map((o) => <option key={o} value={o}>{p.optionLabels?.[o] ?? o}</option>)}
@@ -107,6 +112,7 @@ export function FeatureConfigPanel({ feature, subsidiaries, onClose, onSave }: {
                 );
               })}
               {(feature.configSchema ?? []).length === 0 && <p className="text-sm text-muted-foreground sm:col-span-2">Esta feature no tiene parámetros; solo se activa o apaga.</p>}
+              {editableLabels.length > 0 && <p className="text-xs text-muted-foreground sm:col-span-2">El cliente también puede cambiar desde Ajustes: {editableLabels.join(", ")}.</p>}
             </div>
           )}
 

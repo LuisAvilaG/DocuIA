@@ -3,8 +3,9 @@ import { logAdminAction } from "@/lib/audit/admin";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession } from "@/lib/auth/admin";
 import { db } from "@/lib/db";
-import { organizations } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { organizations, orgFeatures } from "@/db/schema";
+import { and, eq } from "drizzle-orm";
+import { setAdminGrant } from "@/lib/features";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -46,6 +47,21 @@ async function handlePATCH(req: NextRequest, { params }: Params) {
       action: "environment.switched", targetOrgId: organizationId, targetOrgName: org.name,
       before: { environment: org.activeNsEnvironment }, after: { environment },
     });
+
+    // El modo QA nunca convive con producción: se apaga solo y queda auditado.
+    if (environment === "production") {
+      const qa = await db.query.orgFeatures.findFirst({
+        where: and(eq(orgFeatures.organizationId, organizationId), eq(orgFeatures.featureId, "qa_mode")),
+        columns: { adminGranted: true, configJson: true, notes: true },
+      });
+      if (qa?.adminGranted) {
+        await setAdminGrant(organizationId, "qa_mode", false, (qa.configJson ?? undefined) as Record<string, unknown> | undefined, session!.sub, qa.notes ?? undefined);
+        await logAdminAction(req, session!, {
+          action: "feature.auto_disabled", targetOrgId: organizationId, targetOrgName: org.name, targetFeature: "qa_mode",
+          before: { adminGranted: true }, after: { adminGranted: false, reason: "environment_production" },
+        });
+      }
+    }
     return NextResponse.json({ ok: true, activeNsEnvironment: environment });
   } catch (err) {
     console.error("[clients/environment PATCH]", err);

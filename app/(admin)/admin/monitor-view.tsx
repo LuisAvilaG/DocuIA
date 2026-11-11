@@ -108,7 +108,7 @@ export function MonitorView({ initial }: { initial: MonitorData | null }) {
               <tbody className="divide-y divide-border/70">
                 {data.rows.map((r: MonitorRow) => (
                   <tr key={r.id} className="hover:bg-card transition-colors">
-                    <td className="px-3 py-3"><Link href={r.href} className="font-semibold hover:text-primary">{r.name}</Link><div className="text-xs text-muted-foreground">{relativeTime(r.lastActivityAt)}</div></td>
+                    <td className="px-3 py-3"><Link href={r.href} className="font-semibold hover:text-primary">{r.name}</Link>{r.qaUntil && r.status.label !== `Modo QA hasta ${r.qaUntil}` && <Pill tone="warn" className="ml-2">Modo QA</Pill>}<div className="text-xs text-muted-foreground">{relativeTime(r.lastActivityAt)}</div></td>
                     <td className="px-3 py-3"><Spark values={r.spark} /></td>
                     <td className="px-3 py-3 text-right tabular-nums">{r.docsToday || "—"}</td>
                     <td className="px-3 py-3 text-right tabular-nums">{r.casesToday || (r.reportsToday ? `${r.reportsToday} inf.` : "—")}</td>

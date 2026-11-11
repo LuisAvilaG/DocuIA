@@ -6,6 +6,7 @@ import { logAudit } from "@/lib/audit/log";
 import { db } from "@/lib/db";
 import { contractCases, contractDocuments, contractExtractionLearnings, contractValidations } from "@/db/schema";
 import { calculateContractRevalidation } from "@/lib/contracts/revalidate";
+import { validationRows } from "@/lib/contracts/validation-rows";
 import { isFeatureEnabled } from "@/lib/features";
 
 const CORRECTABLE: string[] = ["validated", "review"];
@@ -52,6 +53,7 @@ async function handlePATCH(request: NextRequest, { params }: { params: Promise<{
   const originalValue = values[fieldKey] === null || values[fieldKey] === undefined ? null : String(values[fieldKey]);
   values[fieldKey] = value;
   const recalculation = await calculateContractRevalidation(kase.id, { [id]: values });
+  const rows = await validationRows(kase.id, recalculation.validations, recalculation.documentIds);
 
   // The document, optional tenant learning and refreshed verdict are one unit:
   // a migration/write failure must not leave a corrected field with stale rules.
@@ -84,19 +86,7 @@ async function handlePATCH(request: NextRequest, { params }: { params: Promise<{
         });
       }
       await tx.delete(contractValidations).where(eq(contractValidations.caseId, kase.id));
-      if (recalculation.validations.length > 0) {
-        await tx.insert(contractValidations).values(recalculation.validations.map((validation) => ({
-          caseId: kase.id,
-          ruleName: validation.ruleName,
-          severity: validation.severity,
-          subject: validation.subject,
-          status: validation.status,
-          ok: validation.ok,
-          reason: validation.reason,
-          checksJson: validation.checks,
-          citation: validation.citation,
-        })));
-      }
+      if (rows.length > 0) await tx.insert(contractValidations).values(rows);
       await tx.update(contractCases).set({ status: "validated", resultJson: recalculation.resultJson, updatedAt: new Date() }).where(eq(contractCases.id, kase.id));
     });
   } catch {

@@ -11,6 +11,8 @@ import { caseVerdict } from "./validate";
 
 export interface ContractRevalidation {
   caseId: string;
+  /** Documentos del caso (para ubicar la evidencia por página). */
+  documentIds: string[];
   /** Controles con IA del plan que no tienen un análisis guardado (no se evaluaron). */
   untestedAi: number;
   validations: ValidationResult[];
@@ -45,6 +47,7 @@ export async function calculateContractRevalidation(
     (docsByType[document.detectedType] ??= []).push({
       values: overrides[document.id] ?? (document.extractedJson ?? {}) as Record<string, unknown>,
       citations: (document.citationsJson ?? {}) as Record<string, unknown>,
+      documentId: document.id,
     });
   }
 
@@ -78,6 +81,7 @@ export async function calculateContractRevalidation(
   const analyzed = new Set(storedAnalyses.map((row) => row.ruleName));
   return {
     caseId,
+    documentIds: documents.map((document) => document.id),
     untestedAi: plan.rules.filter(isAiRule).filter((rule) => !analyzed.has(rule.name)).length,
     validations,
     verdict,

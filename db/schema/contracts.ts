@@ -216,6 +216,8 @@ export const contractValidations = pgTable("contract_validations", {
   reason:      text("reason"),
   checksJson:  json("checks_json"),
   citation:    text("citation"),
+  // Citas que respaldan el hallazgo: [{documentId, docType, field, quote, page}].
+  evidenceJson: json("evidence_json"),
 }, (t) => [
   index("contract_validations_case_idx").on(t.caseId),
 ]);

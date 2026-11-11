@@ -1,0 +1,1 @@
+ALTER TABLE "contract_validations" ADD COLUMN "evidence_json" json;

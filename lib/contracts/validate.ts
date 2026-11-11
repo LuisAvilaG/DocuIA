@@ -1,4 +1,5 @@
 import { compareContractValues, normalizeContractDate, normalizeContractNumber, textValuesMatch, type ComparisonNormalizer } from "./normalization";
+import { evidenceForFinding, type EvidenceRef } from "./evidence";
 
 // ── Declarative validation engine ─────────────────────────────────────
 // Rules are configured per flow (validate nodes). Each rule is ONE condition
@@ -7,7 +8,7 @@ import { compareContractValues, normalizeContractDate, normalizeContractNumber, 
 
 export type Severity = "info" | "warn" | "block";
 
-export interface DocData { values: Record<string, unknown>; citations: Record<string, unknown> }
+export interface DocData { values: Record<string, unknown>; citations: Record<string, unknown>; documentId?: string }
 export type DocsByType = Record<string, DocData[]>;
 
 export interface ValidationResult {
@@ -19,6 +20,8 @@ export interface ValidationResult {
   reason:   string;
   checks:   Array<{ label: string; ok: boolean | null }>;
   citation: string | null;
+  /** Citas que respaldan el hallazgo (documento y página cuando se conocen). */
+  evidence?: EvidenceRef[];
 }
 
 interface Ref { docType: string; field: string }
@@ -280,7 +283,8 @@ export function runValidations(rules: ConfiguredRule[], docsByType: DocsByType, 
       default: continue;
     }
     const severity = r.severity ?? "warn";
-    for (const f of findings) out.push({ ...f, ruleName: r.name, severity });
+    // Los hallazgos (no los aprobados) llevan las citas de los campos que usa la regla.
+    for (const f of findings) out.push({ ...f, ruleName: r.name, severity, ...(f.ok === true ? {} : { evidence: evidenceForFinding(c, f.subject, docsByType) }) });
   }
   return out;
 }

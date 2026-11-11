@@ -5,15 +5,17 @@ import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
 import { contractAiAnalysisResults, contractArchiveDocuments, contractCases, contractDocuments, contractValidations, contractFlows, orgUsers, tenantAuditLog } from "@/db/schema";
 import { and, eq, asc, inArray } from "drizzle-orm";
-import { CheckCircle2, XCircle, MinusCircle, FileText } from "lucide-react";
+import { FileText } from "lucide-react";
 import { CaseStatusPill, Notice, SectionTitle, StageNav, StatusPill, type Stage } from "@/components/kit";
 import { CaseActions } from "./actions";
 import { CaseDocuments, type CaseDoc } from "./case-documents";
+import { CaseChecks } from "./case-checks-lazy";
+import type { CheckFinding } from "./case-checks";
+import { evidenceFromQuotes, type EvidenceRef } from "@/lib/contracts/evidence";
 import { CaseProcessingRefresh } from "./case-processing-refresh";
 import { getFeature, isFeatureEnabled } from "@/lib/features";
 import { flowGraphSchema } from "@/lib/contracts/flow";
 import { CaseActivity, type CaseActivityItem } from "./case-activity";
-import { contractStatusLabel } from "@/lib/contracts/status";
 import { caseApprovalRules } from "@/lib/contracts/approval-state";
 import { canAccessTenantArea } from "@/lib/auth/permissions";
 import { ResubmitPanel } from "./resubmit-panel";
@@ -22,24 +24,8 @@ import { OutputDownloads } from "./output-downloads";
 
 const pretty = (k: string) => k.replace(/[_.]/g, " ").replace(/\s+/g, " ").trim().replace(/^\w/, (c) => c.toUpperCase());
 
-type ValidationOutcome = { ok: boolean | null; severity: string | null };
 type CalculationItemOutcome = { values: Record<string, string>; value: number | null; status: "ok" | "missing" | "error"; reason?: string };
 type CalculationOutcome = { key: string; label: string; value: number | null; status: "ok" | "missing" | "error"; formula: string; reason?: string; items?: CalculationItemOutcome[] };
-
-/**
- * La severidad sólo describe qué ocurre si la regla falla. El distintivo de la
- * tarjeta debe comunicar primero el resultado que obtuvo en este caso.
- */
-function getRuleOutcomeTag(items: ValidationOutcome[]) {
-  if (items.length > 0 && items.every((item) => item.ok === true)) return { label: "Correcto", tone: "ok" as const };
-  const failedItem = items.find((item) => item.ok === false);
-  if (failedItem) {
-    if (failedItem.severity === "block") return { label: "Bloqueo", tone: "err" as const };
-    if (failedItem.severity === "info") return { label: "Info", tone: "mute" as const };
-    return { label: "A revisar", tone: "warn" as const };
-  }
-  return { label: "Sin verificar", tone: "mute" as const };
-}
 
 export default async function ContractCasePage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ etapa?: string }> }) {
   const { id } = await params;
@@ -115,8 +101,22 @@ export default async function ContractCasePage({ params, searchParams }: { param
     warn:  { text: "Con advertencias" },
     block: { text: "Con bloqueos" },
   };
-  const ruleGroups = new Map<string, typeof validations>();
-  for (const v of validations) { const k = v.ruleName ?? "Validación"; (ruleGroups.get(k) ?? ruleGroups.set(k, []).get(k)!).push(v); }
+  // Hallazgos numerados: bloqueos, luego advertencias, luego lo que no se pudo verificar.
+  const rank = (v: (typeof validations)[number]) => (v.ok === false ? 0 : 2) + (v.severity === "block" ? 0 : 1);
+  const findings: CheckFinding[] = validations
+    .filter((v) => v.ok !== true && !(v.ok === null && v.severity === "info"))
+    .sort((a, b) => rank(a) - rank(b) || a.id - b.id)
+    .map((v) => ({
+      id: v.id, ruleName: v.ruleName ?? "Validación", severity: (v.severity ?? "warn") as CheckFinding["severity"], subject: v.subject, status: v.status,
+      ok: v.ok, reason: v.reason ?? "", ai: v.subject === "Análisis con IA",
+      // Casos anteriores a la evidencia por página: solo la cita en texto.
+      evidence: Array.isArray(v.evidenceJson) ? v.evidenceJson as EvidenceRef[] : evidenceFromQuotes([v.citation]),
+    }));
+  const passedChecks = validations.filter((v) => v.ok === true).map((v) => ({ id: v.id, ruleName: v.ruleName ?? "Validación", subject: v.subject, status: v.status }));
+  const checkDocs = docs.map((d) => ({
+    id: d.id, name: d.originalName || d.detectedType || "Documento",
+    kind: ((d.mimeType ?? "").includes("pdf") ? "pdf" : (d.mimeType ?? "").startsWith("image/") ? "image" : "other") as "pdf" | "image" | "other",
+  }));
 
   const totalFields = docs.reduce((a, d) => a + Object.keys(d.extractedJson).length, 0);
   const userNames = new Map(users.map((user) => [user.id, user.fullName || user.email]));
@@ -196,7 +196,7 @@ export default async function ContractCasePage({ params, searchParams }: { param
           {statusPill}
         </div>
         <p className="mt-1.5 text-[13px] text-muted-foreground">
-          {[activeFlow ? `${activeFlow.name}${flowVersion ? ` v${flowVersion}` : ""}${configuredValidations !== null ? ` · ${configuredValidations} controles` : ""}` : null, `creado ${new Date(kase.createdAt).toLocaleString("es-MX", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}`, creator ? `por ${creator}` : null].filter(Boolean).join(" · ")}
+          {[activeFlow ? `${activeFlow.name}${flowVersion ? ` v${flowVersion}` : ""}${configuredValidations !== null ? ` · ${configuredValidations} control${configuredValidations === 1 ? "" : "es"}` : ""}` : null, `creado ${new Date(kase.createdAt).toLocaleString("es-MX", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}`, creator ? `por ${creator}` : null].filter(Boolean).join(" · ")}
         </p>
         <StageNav className="mt-4.5" label="Etapas del caso" stages={stages} current={tab} aux={[{ key: "activity", label: "Actividad", href: "?etapa=activity", count: activity.length }]} />
       </div>
@@ -256,27 +256,7 @@ export default async function ContractCasePage({ params, searchParams }: { param
               {validations.length === 0 ? (
                 <p className="text-sm text-muted-foreground">Este flujo no tiene controles. Se agregan en el editor del flujo.</p>
               ) : (
-                <ul>
-                  {[...ruleGroups.entries()].sort(([, a], [, b]) => rankGroup(a) - rankGroup(b)).map(([ruleName, items]) => {
-                    const tag = getRuleOutcomeTag(items);
-                    return (
-                      <li key={ruleName} className="border-b border-line-soft py-3.5 last:border-0">
-                        <div className="flex items-center justify-between gap-3"><b className="min-w-0 truncate text-sm font-semibold">{ruleName}</b><StatusPill tone={tag.tone}>{tag.label}</StatusPill></div>
-                        <ul className="mt-1.5 space-y-1">
-                          {items.map((v) => {
-                            const Icon = v.ok === true ? CheckCircle2 : v.ok === false ? XCircle : MinusCircle;
-                            return (
-                              <li key={v.id} className="flex items-start gap-2 text-[13px]">
-                                <Icon aria-hidden className={`mt-0.5 size-4 shrink-0 ${v.ok === true ? "text-tone-ok" : v.ok === false ? "text-tone-err" : "text-muted-foreground"}`} />
-                                <span className="min-w-0"><span className="font-medium">{v.subject}</span>{v.status ? ` · ${contractStatusLabel(v.status)}` : ""}{v.reason && <span className="block text-muted-foreground">{v.reason}</span>}</span>
-                              </li>
-                            );
-                          })}
-                        </ul>
-                      </li>
-                    );
-                  })}
-                </ul>
+                <CaseChecks docs={checkDocs} findings={findings} passed={passedChecks} />
               )}
               <AiAnalysisResults analyses={analyses} />
             </section>
@@ -328,11 +308,4 @@ export default async function ContractCasePage({ params, searchParams }: { param
       </div>
     </div>
   );
-}
-
-function rankGroup(items: ValidationOutcome[]): number {
-  if (items.some((i) => i.ok === false && i.severity === "block")) return 0;
-  if (items.some((i) => i.ok === false)) return 1;
-  if (items.some((i) => i.ok !== true)) return 2;
-  return 3;
 }

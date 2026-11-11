@@ -7,6 +7,7 @@ import { createExtractDeps, DEFAULT_CONTRACT_MODEL, type ContractExtractDeps, ty
 import { AI_MODELS } from "@/lib/ai/provider";
 import { countPdfPages, extractPdfPages } from "./document-pages";
 import type { DocsByType } from "./validate";
+import { validationRows } from "./validation-rows";
 import { flowSnapshot, loadContractPlan } from "./plan";
 import { assembleResults, isAiRule, type AnalysisOutcome } from "./assemble";
 import { buildFlowTrace } from "./trace";
@@ -258,7 +259,7 @@ export async function processContractCase(caseId: string, injectedDeps?: Contrac
         citationsJson: citations,
       }).where(eq(contractDocuments.id, doc.id));
 
-      (docsByType[typeKey] ??= []).push({ values, citations });
+      (docsByType[typeKey] ??= []).push({ values, citations, documentId: doc.id });
       summary.push({
         documentId: doc.id, type: typeKey, typeName, fields: Object.keys(values).length,
         ...(useLocator ? { pages: [...pagesUsed].sort((a, b) => a - b), pageCount: pageCount ?? pages.length } : {}),
@@ -310,23 +311,13 @@ export async function processContractCase(caseId: string, injectedDeps?: Contrac
     // Per-stage trace of the flow run (only when a visual flow is active).
     const stages = plan.flow ? buildFlowTrace(plan.flow, docsByType, summary, !!plan.template, calculations) : null;
 
+    const rows = await validationRows(caseId, validations, docs.map((doc) => doc.id));
+
     // Replace prior results and publish the verdict as one unit: a retry that
     // overlaps (or a crash midway) must not leave duplicated or partial rows.
     await db.transaction(async (tx) => {
       await tx.delete(contractValidations).where(eq(contractValidations.caseId, caseId));
-      if (validations.length > 0) {
-        await tx.insert(contractValidations).values(validations.map((v) => ({
-          caseId,
-          ruleName:   v.ruleName,
-          severity:   v.severity,
-          subject:    v.subject,
-          status:     v.status,
-          ok:         v.ok,
-          reason:     v.reason,
-          checksJson: v.checks,
-          citation:   v.citation,
-        })));
-      }
+      if (rows.length > 0) await tx.insert(contractValidations).values(rows);
 
       await tx.delete(contractAiAnalysisResults).where(eq(contractAiAnalysisResults.caseId, caseId));
       if (analyses.length > 0) {

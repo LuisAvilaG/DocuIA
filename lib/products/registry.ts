@@ -22,7 +22,7 @@ export const PRODUCTS: ProductDef[] = [
     description: "Procesamiento de facturas y órdenes de compra con IA y sincronización a NetSuite.",
     icon: "FileText",
     shortName: "Facturas",
-    routePrefixes: ["/dashboard", "/documents", "/workflow", "/history", "/exceptions", "/mappings", "/vendor-rules", "/catalogs", "/metrics", "/statistics"],
+    routePrefixes: ["/dashboard", "/documents", "/workflow", "/history", "/exceptions", "/mappings", "/vendor-rules", "/catalogs", "/invoice-settings", "/metrics", "/statistics"],
     requiresIntegration: true,
     sortOrder: 10,
   },
@@ -129,6 +129,7 @@ export const PRODUCT_MODULES: Record<ProductKey, NavModule[]> = {
     { href: "/vendor-rules", label: "Reglas de proveedores", icon: "ListChecks", feature: "vendor_rules", adminOnly: true, group: "config" },
     { href: "/mappings",     label: "Mapeos",       icon: "GitMerge",      feature: "auto_mapping", group: "config" },
     { href: "/catalogs",     label: "Catálogos del ERP", icon: "Database", group: "config" },
+    { href: "/invoice-settings", label: "Ajustes de Facturas", icon: "SlidersHorizontal", adminOnly: true, group: "config" },
   ],
   expense_management: [
     { href: "/accounting/expenses", label: "Gastos", icon: "Receipt", feature: "expense_management", roles: ["approver", "accountant"] },

@@ -20,6 +20,8 @@ async function handlePOST(req: NextRequest, { params }: Params) {
 
     const body = await req.json().catch(() => ({})) as Record<string, unknown>;
     const notes = String(body.notes || "").slice(0, 1000);
+    // «Descartar»: el documento no se va a procesar (p. ej. duplicado real o archivo equivocado).
+    const dismiss = body.dismiss === true;
 
     const exception = await db.query.exceptionQueue.findFirst({
       where: and(
@@ -37,15 +39,15 @@ async function handlePOST(req: NextRequest, { params }: Params) {
 
     await db.update(exceptionQueue)
       .set({
-        status: "resolved",
+        status: dismiss ? "dismissed" : "resolved",
         resolvedAt: new Date(),
         resolvedBy: session.sub,
-        resolutionNotes: notes || "Resuelta manualmente",
+        resolutionNotes: notes || (dismiss ? "Descartada manualmente" : "Resuelta manualmente"),
         updatedAt: new Date(),
       })
       .where(eq(exceptionQueue.id, exceptionId));
 
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, status: dismiss ? "dismissed" : "resolved" });
 
   } catch (err) {
     console.error("[exceptions/resolve]", err);

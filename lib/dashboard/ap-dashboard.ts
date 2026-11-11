@@ -19,7 +19,7 @@ export async function getDashboardData(orgId: string, userId: string) {
   const week = startOfWeek();
   const org = eq(historyDocuments.organizationId, orgId);
 
-  const [user, todayRow, waiting, exceptions, exceptionReasons, weekDays, weekRow, learned, recent] = await Promise.all([
+  const [user, todayRow, waiting, exceptions, exceptionReasons, weekDays, weekRow, learned, recent, reviewReasons] = await Promise.all([
     db.query.orgUsers.findFirst({ where: eq(orgUsers.id, userId), columns: { fullName: true } }),
     db.select({
       total: sql<number>`count(*)::int`,
@@ -62,6 +62,11 @@ export async function getDashboardData(orgId: string, userId: string) {
       poInternalId: historyDocuments.poInternalId, errorMessage: historyDocuments.errorMessage,
       poTranid: sql<string | null>`(${historyDocuments.products}->'ap_checks'->'po'->'comparison'->>'poTranid')`,
     }).from(historyDocuments).where(org).orderBy(desc(historyDocuments.createdAt)).limit(6),
+    db.select({ reason: historyDocuments.errorMessage, count: sql<number>`count(*)::int` }).from(historyDocuments)
+      .where(and(org, eq(historyDocuments.status, "review")))
+      .groupBy(historyDocuments.errorMessage)
+      .orderBy(desc(sql`count(*)`))
+      .limit(20),
   ]);
 
   const byStatus = new Map(waiting.map((w) => [w.status, w]));
@@ -75,6 +80,7 @@ export async function getDashboardData(orgId: string, userId: string) {
     review: byStatus.get("review"),
     approval: byStatus.get("pending_approval"),
     receipt: byStatus.get("awaiting_receipt"),
+    reviewReasons,
     exceptions: { count: exceptions[0]?.count ?? 0, reasons: exceptionReasons },
     week: { days, total: weekTotal, autoPct: w?.completed ? Math.round((w.auto / w.completed) * 100) : null, learned: learned[0]?.count ?? 0 },
     recent: recent.map((d) => ({ ...d, poLabel: d.poTranid ?? (d.poInternalId ? `#${d.poInternalId}` : null) })),

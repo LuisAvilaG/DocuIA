@@ -211,6 +211,7 @@ export function FeaturesView({ orgId, products, features, subsidiaries, playbook
                           {f.isBeta && <span className="text-[10px] uppercase tracking-wider text-[oklch(0.50_0.14_80)]">beta</span>}
                           {f.id === "netsuite_dry_run" && f.adminGranted && <Chip>{f.tenantEnabled ? "cliente: activo" : "cliente: apagado"}</Chip>}
                           {f.id === "qa_mode" && f.adminGranted && typeof f.config.expires_on === "string" && <Chip>hasta {f.config.expires_on}</Chip>}
+                          {f.adminGranted && f.config.tenant_off === true && <Chip>cliente: apagada</Chip>}
                           {TENANT_EDITABLE[f.id] && <span className="text-[11px] text-muted-foreground">el cliente lo ajusta</span>}
                           {f.hasOverride && <span className="text-[11px] text-muted-foreground">ajuste propio</span>}
                         </div>

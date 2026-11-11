@@ -6,7 +6,7 @@ import { AUTH_COOKIES, clearAuthCookies, type AuthRealm } from "@/lib/auth/cooki
 
 const TENANT_ROUTES = [
   "/dashboard", "/workflow", "/history", "/documents", "/exceptions",
-  "/mappings", "/vendor-rules", "/catalogs", "/statistics", "/metrics", "/settings",
+  "/mappings", "/vendor-rules", "/catalogs", "/invoice-settings", "/statistics", "/metrics", "/settings",
   "/expenses", "/accounting", "/contracts",
   "/cases",
 ];
@@ -66,6 +66,7 @@ export const config = {
     "/admin/:path*",
     "/dashboard/:path*",
     "/workflow/:path*",
+    "/invoice-settings/:path*",
     "/history/:path*",
     "/documents/:path*",
     "/exceptions/:path*",

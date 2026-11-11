@@ -9,8 +9,10 @@ export interface Stage {
   label: string;
   detail?: string;
   state: StageState;
-  /** Sin href la etapa no es navegable (ej. «Decisión · Pendiente»). */
+  /** Sin href ni onSelect la etapa no es navegable (ej. «Decisión · Pendiente»). */
   href?: string;
+  /** Para etapas que cambian de vista sin navegar (estado que no debe perderse). */
+  onSelect?: () => void;
 }
 
 export interface AuxLink { key: string; label: string; href: string; count?: number }
@@ -46,19 +48,23 @@ export function StageNav({ stages, current, aux = [], label = "Etapas", classNam
               {mark.glyph}
             </span>
             <span className="min-w-0">
-              <span className={cn("block truncate text-[13px] font-semibold leading-tight", !s.href && "font-medium text-muted-foreground")}>{s.label}</span>
+              <span className={cn("block truncate text-[13px] font-semibold leading-tight", !s.href && !s.onSelect && "font-medium text-muted-foreground")}>{s.label}</span>
               {s.detail && <span className="block truncate text-xs text-muted-foreground">{s.detail}</span>}
             </span>
           </>
         );
         const base = "relative flex min-w-0 flex-1 basis-0 items-start gap-2.5 border-r border-line-soft px-3 pt-[11px] pb-[13px]";
+        const active = cn(base, "text-left text-foreground hover:bg-secondary", isCurrent && "bg-white after:absolute after:inset-x-0 after:bottom-0 after:h-[3px] after:bg-foreground");
+        if (s.onSelect) {
+          return <button key={s.key} type="button" onClick={s.onSelect} aria-current={isCurrent ? "page" : undefined} className={active}>{inner}</button>;
+        }
         if (!s.href) return <span key={s.key} className={base}>{inner}</span>;
         return (
           <Link
             key={s.key}
             href={s.href}
             aria-current={isCurrent ? "page" : undefined}
-            className={cn(base, "text-foreground hover:bg-secondary", isCurrent && "bg-white after:absolute after:inset-x-0 after:bottom-0 after:h-[3px] after:bg-foreground")}
+            className={active}
           >
             {inner}
           </Link>

@@ -79,3 +79,15 @@ test("formato de factura sugerido por subsidiaria", () => {
   assert.equal(suggestInvoiceFormat("en-US", "USD"), "pdf");
   assert.equal(isInvoiceFormat("xml"), false);
 });
+
+test("ajustes del cliente: solo campos suyos y con su tipo y rango", async () => {
+  const { validateTenantConfig } = await import("../lib/features/tenant-editable");
+  const schema = (FEATURE_CATALOG.find((f) => f.id === "po_matching")!.configSchema ?? []) as unknown as Parameters<typeof validateTenantConfig>[1];
+  assert.deepEqual(validateTenantConfig("po_matching", schema, { on_mismatch: "warn", suggest_by_total: false }), { ok: true, config: { on_mismatch: "warn", suggest_by_total: false } });
+  assert.equal(validateTenantConfig("po_matching", schema, { on_mismatch: "borrar" }).ok, false);
+  assert.equal(validateTenantConfig("po_matching", schema, { suggest_by_total: "sí" }).ok, false);
+  assert.equal(validateTenantConfig("po_matching", schema, { otra_cosa: 1 }).ok, false);
+  const mapSchema = (FEATURE_CATALOG.find((f) => f.id === "auto_mapping")!.configSchema ?? []) as unknown as Parameters<typeof validateTenantConfig>[1];
+  assert.equal(validateTenantConfig("auto_mapping", mapSchema, { merge_similarity: 0.9 }).ok, false, "campo técnico");
+  assert.equal(validateTenantConfig("ai_model_selection", [], { primary_model: "x" }).ok, false, "feature sin campos del cliente");
+});

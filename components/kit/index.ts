@@ -6,3 +6,6 @@ export { Notice } from "./notice";
 export { EmptyState } from "./empty-state";
 export { TrendLine, StackedBars, Donut, BarList, Legend, type FmtSpec } from "./charts";
 export { SERIES, ONE } from "./palette";
+export { PageFrame } from "./page-frame";
+export { btn, ActionLink, ViewTabs, type BtnVariant, type BtnSize } from "./actions";
+export { Drawer } from "./drawer";

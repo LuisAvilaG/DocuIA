@@ -31,3 +31,57 @@ export function tenantEditableKeys(featureId: string): readonly string[] {
 export function tenantCanToggle(featureId: string): boolean {
   return TENANT_EDITABLE[featureId]?.toggle === true;
 }
+
+/** Clave en la configuración donde se guarda que el cliente apagó la feature por su cuenta. */
+export const TENANT_OFF_KEY = "tenant_off";
+
+export interface SchemaParam {
+  key: string;
+  type: "boolean" | "number" | "string" | "select" | "date";
+  min?: number;
+  max?: number;
+  options?: readonly string[];
+  label?: string;
+}
+
+/**
+ * Valida lo que el cliente quiere cambiar de una feature: solo campos marcados como
+ * editables por el cliente y con el tipo y rango de su configSchema.
+ */
+export function validateTenantConfig(
+  featureId: string,
+  schema: readonly SchemaParam[] | null | undefined,
+  patch: Record<string, unknown>,
+): { ok: true; config: Record<string, unknown> } | { ok: false; error: string } {
+  const allowed = new Set(tenantEditableKeys(featureId));
+  const byKey = new Map((schema ?? []).map((p) => [p.key, p]));
+  const out: Record<string, unknown> = {};
+  for (const [key, raw] of Object.entries(patch)) {
+    const p = byKey.get(key);
+    if (!allowed.has(key) || !p) return { ok: false, error: `«${key}» lo ajusta DocuIA.` };
+    const name = p.label ?? key;
+    switch (p.type) {
+      case "boolean":
+        if (typeof raw !== "boolean") return { ok: false, error: `«${name}» debe ser sí o no.` };
+        out[key] = raw;
+        break;
+      case "number": {
+        const n = typeof raw === "number" ? raw : Number(raw);
+        if (!Number.isFinite(n)) return { ok: false, error: `«${name}» debe ser un número.` };
+        if ((p.min !== undefined && n < p.min) || (p.max !== undefined && n > p.max)) {
+          return { ok: false, error: `«${name}» va de ${p.min ?? "—"} a ${p.max ?? "—"}.` };
+        }
+        out[key] = n;
+        break;
+      }
+      case "select":
+        if (typeof raw !== "string" || !(p.options ?? []).includes(raw)) return { ok: false, error: `«${name}» no es una opción válida.` };
+        out[key] = raw;
+        break;
+      default:
+        if (typeof raw !== "string" || raw.length > 500) return { ok: false, error: `«${name}» no es válido.` };
+        out[key] = raw.trim();
+    }
+  }
+  return { ok: true, config: out };
+}

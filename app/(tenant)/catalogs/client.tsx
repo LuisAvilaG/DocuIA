@@ -4,6 +4,7 @@ import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { Search, Package, Users, MapPin, RefreshCw, Loader2, CheckCircle2, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { btn, PageFrame, ViewTabs } from "@/components/kit";
 import { SubsidiaryPicker } from "@/components/tenant/subsidiary-picker";
 import type { CatalogItem, CatalogVendor, CatalogLocation } from "./page";
 
@@ -103,91 +104,45 @@ export function CatalogsClient({ subsidiaries, selectedSub, items, vendors, loca
   };
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
-      {/* Topbar */}
-      <div className="h-14 border-b border-border px-6 flex items-center justify-between shrink-0">
-        <div>
-          <h1 className="text-sm font-semibold tracking-[-0.01em] text-foreground">Catálogos del ERP</h1>
-          <p className="text-xs text-muted-foreground">Ítems, proveedores y ubicaciones sincronizados</p>
+    <PageFrame>
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div className="max-w-3xl">
+          <p className="text-xs font-semibold uppercase tracking-[0.06em] text-link">Configuración</p>
+          <h1 className="mt-1 text-[26px] font-semibold leading-tight tracking-[-0.025em]">Catálogos del ERP</h1>
+          <p className="mt-1.5 text-sm text-muted-foreground">Ítems, proveedores y ubicaciones que DocuIA usa para leer y enviar facturas. Vienen del ERP.</p>
         </div>
-        {isAdmin && (
-          <div className="flex items-center gap-3">
-            {syncMsg && (
-              <span className={cn(
-                "text-xs flex items-center gap-1.5",
-                syncMsg.ok ? "text-success" : "text-destructive",
-              )}>
-                {syncMsg.ok
-                  ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                  : <AlertTriangle className="w-3.5 h-3.5 shrink-0" />}
-                {syncMsg.text}
-              </span>
-            )}
-            <button
-              onClick={handleSync}
-              disabled={syncing || !selectedSub}
-              className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border border-border text-foreground hover:bg-secondary disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-            >
-              {syncing
-                ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Sincronizando…</>
-                : <><RefreshCw className="w-3.5 h-3.5" /> Sincronizar catálogo</>
-              }
+        <div className="flex flex-wrap items-center gap-3">
+          {subsidiaries.length > 1 && (
+            <SubsidiaryPicker subsidiaries={subsidiaries} value={selectedSub} onChange={(id) => { setSelectedSub(id); setSearch(""); }} />
+          )}
+          {isAdmin && (
+            <button type="button" onClick={handleSync} disabled={syncing || !selectedSub} className={btn("secondary")}>
+              {syncing ? <Loader2 className="animate-spin" /> : <RefreshCw />}{syncing ? "Sincronizando…" : "Sincronizar"}
             </button>
-          </div>
-        )}
-      </div>
-
-      {/* Subsidiary selector */}
-      {subsidiaries.length > 1 && (
-        <div className="border-b border-border px-6 py-2.5 flex items-center gap-3 shrink-0">
-          <span className="text-xs text-muted-foreground">Subsidiaria</span>
-          <SubsidiaryPicker subsidiaries={subsidiaries} value={selectedSub} onChange={(id) => { setSelectedSub(id); setSearch(""); }} />
+          )}
         </div>
+      </div>
+      {syncMsg && (
+        <p role="status" className={cn("mt-3 flex items-center gap-1.5 text-[13px]", syncMsg.ok ? "text-tone-ok" : "text-tone-err")}>
+          {syncMsg.ok ? <CheckCircle2 className="size-4 shrink-0" /> : <AlertTriangle className="size-4 shrink-0" />}{syncMsg.text}
+        </p>
       )}
 
-      {/* Tabs */}
-      <div className="border-b border-border shrink-0 px-6 flex items-center">
-        {TABS.map(t => (
-          <button
-            key={t.id}
-            onClick={() => { setTab(t.id); setSearch(""); }}
-            className={cn(
-              "flex items-center gap-1.5 px-4 py-3 text-xs font-medium transition-all duration-[120ms] border-b-2",
-              tab === t.id
-                ? "border-primary text-foreground"
-                : "border-transparent text-muted-foreground hover:text-foreground"
-            )}
-          >
-            <t.icon className="w-3.5 h-3.5" />
-            {t.label}
-            <span className="ml-1 text-[10px] tabular-nums text-muted-foreground">
-              {tabCount(t.id).toLocaleString("es-MX")}
-            </span>
-          </button>
-        ))}
-      </div>
+      <ViewTabs className="mt-6" items={TABS.map((t) => ({ key: t.id, label: t.label, count: tabCount(t.id), active: tab === t.id, onSelect: () => { setTab(t.id); setSearch(""); } }))} />
 
-      {/* Search */}
-      <div className="px-6 py-3 border-b border-border shrink-0">
-        <div className="relative max-w-xs">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
-          <input
-            type="text"
-            placeholder={placeholders[tab]}
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="w-full pl-9 pr-3 py-[7px] text-xs bg-card border border-border rounded-md text-foreground placeholder:text-muted-foreground/50 outline-none transition-all duration-[120ms] focus:border-primary focus:shadow-[0_0_0_3px_oklch(0.48_0.15_182_/_0.12)]"
-          />
-        </div>
-      </div>
+      <label className="relative mt-4 block w-full sm:w-[300px]">
+        <span className="sr-only">Buscar</span>
+        <Search aria-hidden className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+        <input type="text" placeholder={placeholders[tab]} value={search} onChange={e => setSearch(e.target.value)}
+          className="min-h-10 w-full rounded-lg border border-[#D6D2C8] bg-white pl-9 pr-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20" />
+      </label>
 
-      {/* Content */}
-      <div className="flex-1 overflow-auto">
+      <div className="mt-3.5 overflow-x-auto rounded-xl border border-border bg-card">
         {tab === "items"     && <ItemsTable items={filteredItems} />}
         {tab === "vendors"   && <VendorsTable vendors={filteredVendors} />}
         {tab === "locations" && <LocationsTable locations={filteredLocations} />}
       </div>
-    </div>
+    </PageFrame>
   );
 }
 

@@ -9,10 +9,41 @@ import type { BBox } from "@/lib/workflow/types";
 // dependency (unpkg) as a single point of failure.
 pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 
+/** Número de línea dibujado sobre la página; se toca para elegir esa línea. */
+export interface LineMarker { n: number; bbox: BBox; warn: boolean; active: boolean }
+
 interface DocPreviewProps {
   docId: number;
   activeBbox: BBox | undefined;
   fileExt: string; // pdf | jpeg | png | webp | tiff | xml
+  markers?: LineMarker[];
+  onMarker?: (n: number) => void;
+}
+
+function Markers({ markers, page, onMarker }: { markers?: LineMarker[]; page?: number; onMarker?: (n: number) => void }) {
+  if (!markers?.length) return null;
+  return (
+    <>
+      {markers.filter((m) => page === undefined || !m.bbox.page || m.bbox.page === page).map((m) => (
+        <button
+          key={m.n}
+          type="button"
+          onClick={() => onMarker?.(m.n)}
+          aria-label={`Línea ${m.n}${m.warn ? ", sin ítem del ERP" : ""}`}
+          aria-pressed={m.active}
+          className="absolute flex size-[18px] -translate-x-[120%] items-center justify-center rounded-full text-[10px] font-bold text-white shadow-sm ring-2 ring-white transition-transform hover:scale-110"
+          style={{
+            left: `${Math.max(m.bbox.x1 * 100, 3)}%`,
+            top: `calc(${((m.bbox.y1 + m.bbox.y2) / 2) * 100}% - 9px)`,
+            backgroundColor: m.warn ? "#B07C0E" : "#0E7C70",
+            transform: m.active ? "scale(1.15)" : undefined,
+          }}
+        >
+          {m.n}
+        </button>
+      ))}
+    </>
+  );
 }
 
 function mimeFromExt(ext: string): "pdf" | "image" | "xml" | "unknown" {
@@ -91,7 +122,7 @@ function BboxHighlight({ bbox, page }: { bbox: BBox | undefined; page?: number }
   );
 }
 
-export function DocPreview({ docId, activeBbox, fileExt }: DocPreviewProps) {
+export function DocPreview({ docId, activeBbox, fileExt, markers, onMarker }: DocPreviewProps) {
   const kind = mimeFromExt(fileExt.toLowerCase());
   const fileUrl = `/api/v1/documents/${docId}/file`;
 
@@ -162,6 +193,7 @@ export function DocPreview({ docId, activeBbox, fileExt }: DocPreviewProps) {
                 renderAnnotationLayer={false}
               />
               <BboxHighlight bbox={activeBbox} page={pageNum} />
+              <Markers markers={markers} page={pageNum} onMarker={onMarker} />
             </div>
           </Document>
         )}
@@ -183,6 +215,7 @@ export function DocPreview({ docId, activeBbox, fileExt }: DocPreviewProps) {
               style={{ width: "100%", height: "auto", display: "block" }}
             />
             <BboxHighlight bbox={activeBbox} />
+            <Markers markers={markers} onMarker={onMarker} />
           </div>
         )}
 

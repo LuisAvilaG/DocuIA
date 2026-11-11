@@ -4,10 +4,10 @@ import { TENANT_ROLES, TENANT_ROLE_LABELS, type TenantRole } from "@/lib/auth/pe
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
-  Building2, Users, Server, Shield, Sparkles,
+  Building2, Users, Server, Shield,
   Pencil, Check, X, UserPlus, Copy, CheckCircle2, Loader2,
   Webhook, Plus, Trash2, ToggleLeft, ToggleRight, ExternalLink,
-  Key, ScrollText, FlaskConical, Receipt, AlertCircle, RefreshCw, KeyRound,
+  Key, ScrollText, Receipt, AlertCircle, RefreshCw, KeyRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SubsidiariesTable } from "@/components/tenant/subsidiaries-table";
@@ -77,8 +77,6 @@ interface Props {
   plan: string;
   currentUserRole: string;
   webhooks: WebhookData[];
-  dryRun: boolean;
-  dryRunGranted: boolean;
   expenseData: ExpenseData;
 }
 
@@ -152,7 +150,7 @@ type AuditEntry = {
   createdAt:    string;
 };
 
-export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, currentUserRole, webhooks: initialWebhooks, dryRun: initialDryRun, dryRunGranted: initialDryRunGranted, expenseData: initialExpenseData }: Props) {
+export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, currentUserRole, webhooks: initialWebhooks, expenseData: initialExpenseData }: Props) {
   const router = useRouter();
   const webhookSystem   = useFeature("webhook_system");
   const apiKeysFeat     = useFeature("api_keys");
@@ -174,51 +172,6 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
   const [tab,     setTab]     = useState<Tab>("org");
   const [users,   setUsers]   = useState(initialUsers);
   const isAdmin = currentUserRole === "admin";
-
-  // ── Dry run state ────────────────────────────────────────────────
-  const [dryRunGranted]                   = useState(initialDryRunGranted);
-  const [dryRun,        setDryRun]        = useState(initialDryRun);
-  const [dryRunSaving,  setDryRunSaving]  = useState(false);
-  const [dryRunError,   setDryRunError]   = useState("");
-  const [dryRunSaved,   setDryRunSaved]   = useState(false);
-
-  // Sync from server after router.refresh() — only when not in the middle of saving
-  const [prevInitialDryRun, setPrevInitialDryRun] = useState(initialDryRun);
-  if (initialDryRun !== prevInitialDryRun) {
-    setPrevInitialDryRun(initialDryRun);
-    if (!dryRunSaving) setDryRun(initialDryRun);
-  }
-
-  async function handleToggleDryRun() {
-    const next = !dryRun;
-    setDryRun(next);
-    setDryRunSaving(true);
-    setDryRunError("");
-    setDryRunSaved(false);
-    try {
-      const res  = await fetch("/api/v1/features/dry-run", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ isEnabled: next }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setDryRun(!next);
-        setDryRunError(data.error ?? "Error al guardar");
-      } else {
-        // Use the server-confirmed effective value (adminGranted && tenantEnabled)
-        setDryRun(data.isEnabled);
-        setDryRunSaved(true);
-        setTimeout(() => setDryRunSaved(false), 3000);
-        router.refresh();
-      }
-    } catch {
-      setDryRun(!next);
-      setDryRunError("No se pudo conectar al servidor");
-    } finally {
-      setDryRunSaving(false);
-    }
-  }
 
   // ── Org edit state ──────────────────────────────────────────────
   const [editing,      setEditing]      = useState(false);
@@ -246,32 +199,6 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
       setOrgError("No se pudo conectar al servidor");
     } finally {
       setOrgSaving(false);
-    }
-  }
-
-  // ── Threshold state ─────────────────────────────────────────────
-  const [thresholdPct,    setThresholdPct]    = useState(Math.round(org.autoProcessThreshold * 100));
-  const [thresholdSaving, setThresholdSaving] = useState(false);
-  const [thresholdError,  setThresholdError]  = useState("");
-  const [thresholdSaved,  setThresholdSaved]  = useState(false);
-
-  async function handleSaveThreshold() {
-    setThresholdSaving(true);
-    setThresholdError("");
-    setThresholdSaved(false);
-    try {
-      const res  = await fetch("/api/v1/settings", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ autoProcessThreshold: thresholdPct / 100 }),
-      });
-      const data = await res.json();
-      if (!res.ok) { setThresholdError(data.error ?? "Error al guardar"); return; }
-      setThresholdSaved(true);
-    } catch {
-      setThresholdError("No se pudo conectar al servidor");
-    } finally {
-      setThresholdSaving(false);
     }
   }
 
@@ -779,104 +706,14 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
               </div>
             </div>
 
-            {/* Threshold (solo admins) */}
             {isAdmin && (
-              <div className="bg-card rounded-xl border border-border p-5 space-y-4">
-                <div className="flex items-center gap-2">
-                  <Sparkles className="w-3.5 h-3.5 text-primary" />
-                  <h2 className="text-sm font-semibold tracking-[-0.01em] text-foreground">Procesamiento automático</h2>
-                </div>
-                <div className="space-y-3">
-                  <div>
-                    <p className="text-[0.6875rem] font-medium text-muted-foreground uppercase tracking-[0.06em] mb-1">Umbral de confianza</p>
-                    <p className="text-xs text-muted-foreground mb-3">
-                      Los documentos con confianza igual o mayor se envían automáticamente al ERP.
-                      Por debajo, pasan a revisión manual.
-                    </p>
-                    <div className="flex items-center gap-4">
-                      <input
-                        type="range"
-                        min={50} max={100} step={5}
-                        value={thresholdPct}
-                        onChange={e => { setThresholdPct(Number(e.target.value)); setThresholdSaved(false); }}
-                        className="flex-1 accent-primary h-1.5 cursor-pointer"
-                      />
-                      <span className="text-sm font-semibold text-foreground tabular-nums w-12 text-right">{thresholdPct}%</span>
-                    </div>
-                    <div className="flex justify-between text-[0.6875rem] text-muted-foreground/60 mt-1 px-0.5">
-                      <span>50% — más automático</span>
-                      <span>100% — solo perfecto</span>
-                    </div>
-                  </div>
-                  {thresholdError && <p className="text-xs text-destructive">{thresholdError}</p>}
-                  {thresholdSaved && <p className="text-xs text-success">Umbral guardado correctamente</p>}
-                  <button
-                    onClick={handleSaveThreshold}
-                    disabled={thresholdSaving || thresholdPct === Math.round(org.autoProcessThreshold * 100)}
-                    className="text-xs font-medium px-4 py-2 bg-primary hover:bg-primary/90 disabled:opacity-40 text-primary-foreground rounded-lg transition-all"
-                  >
-                    {thresholdSaving ? "Guardando..." : "Guardar umbral"}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Dry run */}
-            {dryRunGranted && (
-            <div className="bg-card rounded-xl border overflow-hidden"
-              style={{ borderColor: dryRun ? "oklch(0.75 0.12 80 / 0.35)" : undefined }}>
-              <div className="px-5 py-4 flex items-start justify-between gap-4">
-                <div className="flex items-start gap-3 flex-1 min-w-0">
-                  <div className="mt-0.5 p-1.5 rounded-lg shrink-0"
-                    style={{ backgroundColor: dryRun ? "oklch(0.94 0.04 80)" : "oklch(0.96 0 0)" }}>
-                    <FlaskConical className="w-3.5 h-3.5" style={{ color: dryRun ? "oklch(0.55 0.14 80)" : "oklch(0.65 0 0)" }} />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2 mb-0.5">
-                      <p className="text-sm font-semibold text-foreground">Modo prueba (Dry Run)</p>
-                      {dryRun && (
-                        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded"
-                          style={{ backgroundColor: "oklch(0.94 0.04 80)", color: "oklch(0.50 0.14 80)" }}>
-                          Activo
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-xs text-muted-foreground leading-relaxed">
-                      Cuando está activo, los documentos se validan contra el ERP pero no se crean transacciones reales.
-                      Útil para probar integraciones sin afectar datos de producción.
-                    </p>
-                    {dryRunError && <p className="text-xs text-destructive mt-1">{dryRunError}</p>}
-                    {dryRunSaved && (
-                      <p className="text-xs text-success flex items-center gap-1 mt-1">
-                        <CheckCircle2 className="w-3 h-3" />
-                        {dryRun ? "Modo prueba activado" : "Modo prueba desactivado"}
-                      </p>
-                    )}
-                  </div>
-                </div>
-
-                {isAdmin && (
-                  <button
-                    onClick={handleToggleDryRun}
-                    disabled={dryRunSaving}
-                    className={cn(
-                      "shrink-0 flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border transition-all disabled:opacity-50",
-                      dryRun
-                        ? "text-warning border-warning/40 bg-warning/10 hover:bg-warning/20"
-                        : "text-foreground border-border hover:bg-secondary"
-                    )}
-                  >
-                    {dryRunSaving
-                      ? <Loader2 className="w-3 h-3 animate-spin" />
-                      : dryRun
-                        ? <X className="w-3 h-3" />
-                        : <FlaskConical className="w-3 h-3" />
-                    }
-                    {dryRun ? "Desactivar" : "Activar"}
-                  </button>
-                )}
-              </div>
-            </div>
+              <a href="/invoice-settings" className="flex items-center justify-between gap-4 rounded-xl border border-border bg-card px-5 py-4 hover:bg-secondary/40">
+                <span>
+                  <b className="block text-sm font-semibold">Ajustes de Facturas</b>
+                  <span className="text-xs text-muted-foreground">El umbral de confianza, el modo prueba y el resto de opciones de facturas están ahí, por tema.</span>
+                </span>
+                <span className="text-xs font-semibold text-link">Abrir →</span>
+              </a>
             )}
 
             {!isAdmin && (

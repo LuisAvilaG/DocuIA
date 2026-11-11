@@ -6,19 +6,25 @@ import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, FileUp, FileText, Clock, AlertTriangle,
   GitMerge, Database, SlidersHorizontal, BarChart3, Settings, Workflow, ClipboardCheck,
-  LogOut, User, Zap, Crown, Receipt, ScrollText, FolderOpen, BrainCircuit, KeyRound, ListChecks,
+  LogOut, User, Users, Zap, Crown, Receipt, ScrollText, FolderOpen, BrainCircuit, KeyRound, ListChecks,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { ChangePasswordDialog } from "@/components/shared/change-password-dialog";
 import Image from "next/image";
 import { useFeatures } from "@/components/providers/feature-provider";
 import { PRODUCTS, PRODUCT_AREA, PRODUCT_MODULES, PLATFORM_MODULES, productForPath, type ProductKey, type NavModule } from "@/lib/products/registry";
 import { canAccessTenantArea, TENANT_ROLE_LABELS, isTenantRole } from "@/lib/auth/permissions";
 
+const LAST_PRODUCT_KEY = "docuia:product";
+const noopSubscribe = () => () => {};
+function readLastProduct(): ProductKey | null {
+  try { return sessionStorage.getItem(LAST_PRODUCT_KEY) as ProductKey | null; } catch { return null; }
+}
+
 // lucide icon name → component (registry stores names as strings)
 const ICONS: Record<string, React.ElementType> = {
   LayoutDashboard, FileUp, FileText, Clock, AlertTriangle, GitMerge, Database, SlidersHorizontal,
-  BarChart3, Settings, Workflow, ClipboardCheck, Receipt, ScrollText, FolderOpen, BrainCircuit, ListChecks,
+  BarChart3, Settings, Workflow, ClipboardCheck, Receipt, ScrollText, FolderOpen, BrainCircuit, ListChecks, Users,
 };
 
 const PLAN_BADGE: Record<string, string> = {
@@ -61,7 +67,12 @@ export function TenantSidebar({ orgName, plan, userEmail, userRole, activeProduc
   // Rediseño 2026: con más de un producto, un selector arriba y solo el menú del
   // producto actual (el de la ruta; en rutas de plataforma, el primero).
   const routeProduct = productForPath(pathname);
-  const current = products.find((p) => p.key === routeProduct) ?? products[0];
+  // En rutas de plataforma (Ajustes y usuarios) se queda el último producto visitado.
+  const lastProduct = useSyncExternalStore(noopSubscribe, readLastProduct, () => null);
+  useEffect(() => {
+    try { if (routeProduct) sessionStorage.setItem(LAST_PRODUCT_KEY, routeProduct); } catch { /* sin almacenamiento */ }
+  }, [routeProduct]);
+  const current = products.find((p) => p.key === (routeProduct ?? lastProduct)) ?? products[0];
   const sections = current
     ? [
         { name: "", items: current.items.filter((m) => m.group !== "config") },

@@ -84,7 +84,7 @@ export async function cancelUpload(id: string, orgId: string, userId: string) {
   else await deleteFile(upload.storageKey).catch(() => undefined);
 }
 
-export async function createCaseFromUploads(input: { organizationId: string; createdBy: string; title?: string; flowId?: string; uploadIds: string[] }) {
+export async function createCaseFromUploads(input: { organizationId: string; createdBy: string; title?: string; flowId?: string; uploadIds: string[]; /** Tipo fijado por la casilla del caso: uploadId → docTypeKey. */ slotTypes?: Record<string, string> }) {
   if (input.uploadIds.length < 1 || input.uploadIds.length > 10 || new Set(input.uploadIds).size !== input.uploadIds.length) throw new Error("Selecciona de 1 a 10 archivos distintos");
   const uploads = await Promise.all(input.uploadIds.map((id) => getOwnedUpload(id, input.organizationId, input.createdBy)));
   if (uploads.some((upload) => !upload || upload.status !== "completed")) throw new Error("Hay archivos que no terminaron de cargar");
@@ -101,7 +101,7 @@ export async function createCaseFromUploads(input: { organizationId: string; cre
       if (claimed.length !== 1) throw new Error("El archivo ya fue utilizado por otro caso");
     }
     await tx.insert(contractCases).values({ id: caseId, organizationId: input.organizationId, flowId: input.flowId ?? null, title: input.title ?? null, status: "uploaded", createdBy: input.createdBy });
-    await tx.insert(contractDocuments).values(files.map((upload) => ({ id: randomUUID(), caseId, storageKey: upload.storageKey, originalName: upload.originalName, mimeType: upload.mimeType })));
+    await tx.insert(contractDocuments).values(files.map((upload) => ({ id: randomUUID(), caseId, storageKey: upload.storageKey, originalName: upload.originalName, mimeType: upload.mimeType, detectedType: input.slotTypes?.[upload.id]?.slice(0, 60) ?? null })));
   });
   return caseId;
 }

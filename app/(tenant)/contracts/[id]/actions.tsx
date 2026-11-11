@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2, FileDown, CheckCircle2, XCircle, ShieldX, RotateCcw } from "lucide-react";
+import { btn } from "@/components/kit";
 import { DecisionDialog, type CaseDecisionAction } from "../components/decision-dialog";
 
 interface Decision { action?: string; reason?: string | null; byEmail?: string | null; at?: string | null; override?: boolean }
@@ -45,7 +46,7 @@ export function CaseActions({ caseId, caseTitle, status, verdict, decision, hasO
 
   const genBtn = canGenerate ? (
     <button onClick={() => post(`/api/v1/contracts/cases/${caseId}/generate`, "gen")} disabled={!!busy}
-      className="inline-flex items-center gap-2 rounded-lg bg-secondary text-foreground px-3 py-1.5 text-xs font-medium disabled:opacity-60 hover:bg-secondary/70 transition-colors">
+      className={btn("secondary")}>
       {busy === "gen" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileDown className="w-3.5 h-3.5" />} {hasOutput ? "Regenerar documento" : "Generar documento"}
     </button>
   ) : null;
@@ -67,7 +68,7 @@ export function CaseActions({ caseId, caseTitle, status, verdict, decision, hasO
         <div className="flex flex-wrap items-center gap-2">
           {genBtn}
           {approvalEnabled && canManage && <button onClick={() => post(`/api/v1/contracts/cases/${caseId}/reopen`, "reopen")} disabled={!!busy}
-            className="inline-flex items-center gap-2 rounded-lg border border-border text-muted-foreground px-3 py-1.5 text-xs font-medium disabled:opacity-60 hover:text-foreground hover:bg-secondary transition-colors">
+            className={btn("secondary")}>
             {busy === "reopen" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />} Reabrir
           </button>}
           {msg && <span className="text-xs text-destructive">{msg}</span>}
@@ -99,11 +100,11 @@ export function CaseActions({ caseId, caseTitle, status, verdict, decision, hasO
         )}
         {!approvalEnabled && genBtn}
         {approvalEnabled && readyForDecision && (!blocked || allowOverride) && <button onClick={() => { setMsg(null); setDialog("approve"); }} disabled={!!busy}
-          className="inline-flex items-center gap-2 rounded-lg bg-success/15 text-success px-3 py-1.5 text-xs font-medium disabled:opacity-60 hover:bg-success/25 transition-colors">
+          className={btn("primary")}>
           <CheckCircle2 className="w-3.5 h-3.5" /> {blocked ? "Aprobar con excepción" : "Aprobar"}
         </button>}
         {approvalEnabled && readyForDecision && <button onClick={() => { setMsg(null); setDialog("reject"); }} disabled={!!busy}
-          className="inline-flex items-center gap-2 rounded-lg bg-destructive/10 text-destructive px-3 py-1.5 text-xs font-medium disabled:opacity-60 hover:bg-destructive/20 transition-colors">
+          className={btn("danger")}>
           <XCircle className="w-3.5 h-3.5" /> Rechazar
         </button>}
         {msg && !dialog && <span className="text-xs text-destructive">{msg}</span>}

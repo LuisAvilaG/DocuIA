@@ -71,6 +71,8 @@ type ExpenseData = {
 } | null;
 
 interface Props {
+  /** Pestaña con la que abre (ej. «team» desde Contratos › Usuarios). */
+  initialTab?: string;
   org: OrgData;
   users: UserData[];
   subsidiaries: SubData[];
@@ -150,7 +152,7 @@ type AuditEntry = {
   createdAt:    string;
 };
 
-export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, currentUserRole, webhooks: initialWebhooks, expenseData: initialExpenseData }: Props) {
+export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, currentUserRole, webhooks: initialWebhooks, expenseData: initialExpenseData, initialTab }: Props) {
   const router = useRouter();
   const webhookSystem   = useFeature("webhook_system");
   const apiKeysFeat     = useFeature("api_keys");
@@ -169,7 +171,7 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
     [webhookSystem, apiKeysFeat, auditFeat, expenseFeat]
   );
 
-  const [tab,     setTab]     = useState<Tab>("org");
+  const [tab,     setTab]     = useState<Tab>(() => (ALL_TABS.some((t) => t.id === initialTab) ? initialTab as Tab : "org"));
   const [users,   setUsers]   = useState(initialUsers);
   const isAdmin = currentUserRole === "admin";
 

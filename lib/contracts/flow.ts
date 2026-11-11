@@ -70,7 +70,8 @@ const zRule = z.discriminatedUnion("kind", [
 
 const zIntake = z.object({
   id: z.string().min(1), kind: z.literal("intake"), position: zPosition,
-  data: z.object({ docTypeKey: z.string().min(1), name: z.string().min(1), hint: z.string().nullish() }),
+  // `required`: si falta, el caso no se puede crear (por omisión es obligatorio).
+  data: z.object({ docTypeKey: z.string().min(1), name: z.string().min(1), hint: z.string().nullish(), required: z.boolean().nullish() }),
 });
 const zExtract = z.object({
   id: z.string().min(1), kind: z.literal("extract"), position: zPosition,

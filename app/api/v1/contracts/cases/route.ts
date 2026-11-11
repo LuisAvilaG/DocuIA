@@ -58,7 +58,7 @@ async function handlePOST(req: NextRequest) {
 
   try {
     if (req.headers.get("content-type")?.includes("application/json")) {
-      const payload = await req.json() as { title?: unknown; flowId?: unknown; uploadIds?: unknown };
+      const payload = await req.json() as { title?: unknown; flowId?: unknown; uploadIds?: unknown; slotTypes?: unknown };
       const title = typeof payload.title === "string" ? payload.title.slice(0, 255) : undefined;
       const flowId = typeof payload.flowId === "string" ? payload.flowId : undefined;
       if (flowId) {
@@ -66,7 +66,11 @@ async function handlePOST(req: NextRequest) {
         if (!flow?.isActive) return NextResponse.json({ error: "El flujo seleccionado no está activo" }, { status: 400 });
       }
       if (!Array.isArray(payload.uploadIds) || !payload.uploadIds.every((id) => typeof id === "string")) return NextResponse.json({ error: "Archivos inválidos" }, { status: 400 });
-      const caseId = await createCaseFromUploads({ organizationId: session.orgId, createdBy: session.sub, title, flowId, uploadIds: payload.uploadIds });
+      // Casillas del caso: cada archivo trae el tipo de documento de su casilla.
+      const slotTypes = payload.slotTypes && typeof payload.slotTypes === "object" && !Array.isArray(payload.slotTypes)
+        ? Object.fromEntries(Object.entries(payload.slotTypes as Record<string, unknown>).filter((e): e is [string, string] => typeof e[1] === "string" && e[1].length > 0))
+        : undefined;
+      const caseId = await createCaseFromUploads({ organizationId: session.orgId, createdBy: session.sub, title, flowId, uploadIds: payload.uploadIds, slotTypes });
       await logAudit({ orgId: session.orgId, userId: session.sub, userEmail: session.email, action: "contract.case_created", resourceType: "contract_case", resourceId: caseId, metadata: { flowId: flowId ?? null, uploadIds: payload.uploadIds } });
       const uploadedDocuments = await db.query.contractDocuments.findMany({ where: eq(contractDocuments.caseId, caseId), columns: { originalName: true } });
       await logAudit({ orgId: session.orgId, userId: session.sub, userEmail: session.email, action: "contract.documents_uploaded", resourceType: "contract_case", resourceId: caseId, metadata: { files: uploadedDocuments.map((document) => document.originalName) } });

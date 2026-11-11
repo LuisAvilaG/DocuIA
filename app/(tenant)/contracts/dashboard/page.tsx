@@ -1,215 +1,137 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getTenantSession } from "@/lib/auth/jwt";
+import { canAccessTenantArea } from "@/lib/auth/permissions";
 import { isProductActive } from "@/lib/products";
 import { isFeatureEnabled } from "@/lib/features";
-import { db } from "@/lib/db";
-import { contractCases, contractDocuments, contractValidations, contractObligations } from "@/db/schema";
-import { and, eq, desc, count, isNotNull } from "drizzle-orm";
-import { ScrollText, CalendarClock, ArrowRight, Upload, CheckCircle2, TriangleAlert, Clock3 } from "lucide-react";
-import { contractStatusLabel } from "@/lib/contracts/status";
+import { getContractsHome, fmtDuration } from "@/lib/contracts/home";
+import { ActionLink, EmptyState, PageFrame, SectionTitle, StatusPill } from "@/components/kit";
 
-// Classify a rule-defined signer status into a semantic tone.
-function signerTone(status: string): "ok" | "warn" | "bad" {
-  const s = status.toLowerCase();
-  if (/(no_|no-|fail|rechaz|invalid|revoc)/.test(s)) return "bad";
-  if (/(indeterm|duda|unknown|pend|revi)/.test(s)) return "warn";
-  return "ok";
+function ago(iso: string): string {
+  const min = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+  if (min < 60) return `hace ${Math.max(1, min)} min`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `hace ${h} h`;
+  const d = Math.floor(h / 24);
+  return d === 1 ? "ayer" : `hace ${d} días`;
 }
 
-export default async function ContractDashboardPage() {
+const plural = (n: number, one: string, many: string) => `${n.toLocaleString("es-MX")} ${n === 1 ? one : many}`;
+
+export default async function ContractsHomePage() {
   const session = await getTenantSession({ area: "contracts" });
   if (!session) redirect("/login");
   if (!(await isProductActive(session.orgId, "contract_intelligence"))) redirect("/dashboard");
-  const orgId = session.orgId;
 
-  const [extractionEnabled, validationsEnabled, obligationsEnabled] = await Promise.all([
-    isFeatureEnabled(orgId, "contract_ai_extraction"),
-    isFeatureEnabled(orgId, "contract_advanced_validations"),
-    isFeatureEnabled(orgId, "contract_obligation_tracking"),
+  const [extraction, data] = await Promise.all([
+    isFeatureEnabled(session.orgId, "contract_ai_extraction"),
+    getContractsHome(session.orgId),
   ]);
+  const canCreate = extraction && canAccessTenantArea(session.role, { area: "contracts", permission: "write" });
+  const dateLabel = new Date().toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long" });
 
-  const [statusRows, signerRows, docTypeRows, obligations, recent] = await Promise.all([
-    db.select({ status: contractCases.status, n: count() }).from(contractCases).where(eq(contractCases.organizationId, orgId)).groupBy(contractCases.status),
-    db.select({ status: contractValidations.status, n: count() }).from(contractValidations)
-      .innerJoin(contractCases, eq(contractValidations.caseId, contractCases.id))
-      .where(eq(contractCases.organizationId, orgId)).groupBy(contractValidations.status),
-    db.select({ type: contractDocuments.detectedType, n: count() }).from(contractDocuments)
-      .innerJoin(contractCases, eq(contractDocuments.caseId, contractCases.id))
-      .where(eq(contractCases.organizationId, orgId)).groupBy(contractDocuments.detectedType),
-    db.select({ description: contractObligations.description, dueDate: contractObligations.dueDate }).from(contractObligations)
-      .innerJoin(contractCases, eq(contractObligations.caseId, contractCases.id))
-      .where(and(eq(contractCases.organizationId, orgId), eq(contractObligations.status, "open"), isNotNull(contractObligations.dueDate)))
-      .orderBy(contractObligations.dueDate).limit(6),
-    db.query.contractCases.findMany({ where: eq(contractCases.organizationId, orgId), columns: { id: true, title: true, status: true, createdAt: true }, orderBy: [desc(contractCases.createdAt)], limit: 6 }),
-  ]);
+  const parts = [
+    data.waiting ? plural(data.waiting, "caso espera tu decisión", "casos esperan tu decisión") : null,
+    data.analyzing ? plural(data.analyzing, "se está analizando", "se están analizando") : null,
+  ].filter(Boolean);
+  const fullHeadline = parts.length ? `${parts.join(" y ")}.` : "Nada espera tu decisión.";
+  const maxCases = Math.max(1, ...data.byFlow.map((f) => f.cases));
 
-  const statusCount: Record<string, number> = {};
-  for (const r of statusRows) statusCount[r.status] = r.n;
-  const totalCases = Object.values(statusCount).reduce((a, b) => a + b, 0);
-  const done = (statusCount.validated ?? 0) + (statusCount.generated ?? 0) + (statusCount.approved ?? 0);
-  const inProgress = (statusCount.uploaded ?? 0) + (statusCount.processing ?? 0) + (statusCount.review ?? 0);
-  const failed = (statusCount.failed ?? 0) + (statusCount.rejected ?? 0);
-
-  const signers = { ok: 0, warn: 0, bad: 0 };
-  const signerByStatus: Array<{ status: string; n: number; tone: "ok" | "warn" | "bad" }> = [];
-  for (const r of signerRows) { const t = signerTone(r.status); signers[t] += r.n; signerByStatus.push({ status: r.status, n: r.n, tone: t }); }
-  const totalSigners = signers.ok + signers.warn + signers.bad;
-  const flagged = signers.warn + signers.bad;
-
-  const docTypes = docTypeRows.map((r) => ({ type: r.type ?? "sin clasificar", n: r.n })).sort((a, b) => b.n - a.n);
-  const maxDoc = Math.max(1, ...docTypes.map((d) => d.n));
-
-  // Per-request "now" in an async Server Component (intentionally dynamic).
-  // eslint-disable-next-line react-hooks/purity
-  const now = Date.now();
-  const SOON = 30 * 86400_000;
-
-  const statusSegments = [
-    { label: "Validados", n: done, cls: "bg-success" },
-    { label: "En proceso", n: inProgress, cls: "bg-warning" },
-    { label: "Con error", n: failed, cls: "bg-destructive" },
-  ].filter((s) => s.n > 0);
-
-  const toneCls = { ok: "bg-success", warn: "bg-warning", bad: "bg-destructive" } as const;
+  if (data.last30.created === 0 && data.attention.length === 0 && data.analyzing === 0) {
+    return (
+      <PageFrame>
+        <p className="text-xs font-semibold uppercase tracking-[0.06em] text-link first-letter:uppercase">{dateLabel}</p>
+        <h1 className="mt-1 text-[26px] font-semibold leading-tight tracking-[-0.025em]">Todavía no hay casos.</h1>
+        <EmptyState className="mt-8" title="Empieza con tu primer caso"
+          actions={canCreate ? <ActionLink href="/cases?new=1">Nuevo caso</ActionLink> : undefined}>
+          Elige un flujo, sube los documentos que pide y DocuIA los lee, calcula y valida por ti.
+        </EmptyState>
+      </PageFrame>
+    );
+  }
 
   return (
-    <div className="flex-1 overflow-y-auto p-6">
-      <div className="max-w-5xl mx-auto space-y-6">
-        <div className="flex items-end justify-between gap-3">
-          <div>
-            <h1 className="text-base font-semibold tracking-[-0.01em] text-foreground">Panel de contratos</h1>
-            <p className="text-xs text-muted-foreground mt-1">Resumen de casos, validaciones y obligaciones.</p>
-          </div>
-          {extractionEnabled && <Link href="/cases" className="inline-flex items-center gap-1.5 rounded-md bg-primary text-primary-foreground px-3 py-2 text-xs font-medium shadow-[0_1px_3px_oklch(0.48_0.15_182_/_0.3)] hover:bg-primary/90 transition-colors">
-            <Upload className="w-3.5 h-3.5" /> Nuevo caso
-          </Link>}
+    <PageFrame>
+      <header className="flex flex-wrap items-end justify-between gap-5">
+        <div className="max-w-[720px]">
+          <p className="text-xs font-semibold uppercase tracking-[0.06em] text-link first-letter:uppercase">{dateLabel}</p>
+          <h1 className="mt-1 text-[26px] font-semibold leading-tight tracking-[-0.025em] first-letter:uppercase">{fullHeadline}</h1>
         </div>
+        {canCreate && <ActionLink href="/cases?new=1">Nuevo caso</ActionLink>}
+      </header>
 
-        {totalCases === 0 ? (
-          <div className="bg-card border border-border rounded-xl p-10 text-center">
-            <div className="w-11 h-11 rounded-lg bg-primary/10 text-primary flex items-center justify-center mx-auto"><ScrollText className="w-5 h-5" /></div>
-            <p className="text-sm font-medium text-foreground mt-3">Aún no hay casos</p>
-            <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">{extractionEnabled ? "Sube los documentos de un caso y la IA los clasificará, extraerá y validará según tu flujo. Las métricas aparecerán aquí." : "El análisis AI de contratos no está habilitado para este cliente."}</p>
-            {extractionEnabled && <Link href="/cases" className="inline-flex items-center gap-1.5 rounded-md bg-primary text-primary-foreground px-4 py-2 text-xs font-medium mt-4"><Upload className="w-3.5 h-3.5" /> Subir documentos</Link>}
-          </div>
-        ) : (
-          <>
-            <section className="overflow-hidden rounded-xl border border-border bg-card">
-              <div className="flex flex-wrap items-baseline justify-between gap-3 border-b border-border px-5 py-3">
-                <div><h2 className="text-sm font-semibold text-foreground">Pulso operativo</h2><p className="mt-0.5 text-[11px] text-muted-foreground">Una lectura rápida de lo que está listo y lo que requiere seguimiento.</p></div>
-                <span className="text-[11px] text-muted-foreground tabular-nums">{totalCases} casos registrados</span>
-              </div>
-              <div className="grid divide-y divide-border sm:grid-cols-3 sm:divide-x sm:divide-y-0">
-                <div className="px-5 py-4"><div className="flex items-center gap-2 text-xs font-semibold text-success"><CheckCircle2 className="h-3.5 w-3.5" /> Listos para decisión</div><p className="mt-2 text-[11px] leading-relaxed text-muted-foreground"><span className="font-semibold text-foreground tabular-nums">{done}</span> validados, generados o aprobados.</p></div>
-                <div className="px-5 py-4"><div className="flex items-center gap-2 text-xs font-semibold text-warning"><Clock3 className="h-3.5 w-3.5" /> En movimiento</div><p className="mt-2 text-[11px] leading-relaxed text-muted-foreground"><span className="font-semibold text-foreground tabular-nums">{inProgress}</span> esperando proceso o revisión.</p></div>
-                <div className="px-5 py-4"><div className="flex items-center gap-2 text-xs font-semibold text-destructive"><TriangleAlert className="h-3.5 w-3.5" /> Requieren atención</div><p className="mt-2 text-[11px] leading-relaxed text-muted-foreground"><span className="font-semibold text-foreground tabular-nums">{failed + flagged}</span> con error, rechazo o hallazgo.</p></div>
-              </div>
-            </section>
-
-            <div className="grid lg:grid-cols-2 gap-4">
-              {/* Estado de casos */}
-              <div className="bg-card border border-border rounded-xl p-5">
-                <h2 className="text-sm font-semibold text-foreground">Estado de los casos</h2>
-                <div className="flex h-2.5 rounded-full overflow-hidden mt-4 bg-secondary">
-                  {statusSegments.map((s) => (
-                    <div key={s.label} className={s.cls} style={{ width: `${(s.n / totalCases) * 100}%` }} title={`${s.label}: ${s.n}`} />
-                  ))}
-                </div>
-                <div className="flex flex-wrap gap-x-4 gap-y-1.5 mt-3">
-                  {statusSegments.map((s) => (
-                    <div key={s.label} className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                      <span className={`w-2 h-2 rounded-full ${s.cls}`} /> {s.label} <span className="text-foreground font-medium tabular-nums">{s.n}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Validación de firmantes */}
-              {validationsEnabled && <div className="bg-card border border-border rounded-xl p-5">
-                <h2 className="text-sm font-semibold text-foreground">Validación de firmantes</h2>
-                {totalSigners === 0 ? (
-                  <p className="text-xs text-muted-foreground mt-4">Sin validaciones todavía.</p>
-                ) : (
-                  <div className="space-y-2.5 mt-4">
-                    {signerByStatus.sort((a, b) => b.n - a.n).map((s) => (
-                      <div key={s.status}>
-                        <div className="flex items-center justify-between text-[11px] mb-1">
-                          <span className="text-muted-foreground">{contractStatusLabel(s.status)}</span>
-                          <span className="text-foreground font-medium tabular-nums">{s.n}</span>
-                        </div>
-                        <div className="h-1.5 rounded-full bg-secondary overflow-hidden">
-                          <div className={`h-full rounded-full ${toneCls[s.tone]}`} style={{ width: `${(s.n / totalSigners) * 100}%` }} />
-                        </div>
-                      </div>
-                    ))}
+      <div className="mt-9 grid items-start gap-12 lg:grid-cols-[minmax(0,1.65fr)_minmax(280px,1fr)]">
+        <section>
+          <SectionTitle title="Para atender" aside="de lo más urgente a lo menos" />
+          {data.attention.length === 0 ? (
+            <p className="py-6 text-sm text-muted-foreground">Nada pendiente de decisión.</p>
+          ) : (
+            <ul>
+              {data.attention.map((a) => (
+                <li key={a.id} className="grid grid-cols-[96px_minmax(0,1fr)_auto] items-start gap-4 border-b border-line-soft py-4">
+                  <span><StatusPill tone={a.tone}>{a.label}</StatusPill></span>
+                  <div className="min-w-0">
+                    <h3 className="truncate text-[14.5px] font-semibold">{a.title}</h3>
+                    <p className="mt-0.5 line-clamp-2 text-[13.5px] text-foreground/80">{a.detail}</p>
+                    <small className="mt-1 block text-xs text-muted-foreground">{a.flowName} · esperando desde {ago(a.since)}</small>
                   </div>
-                )}
-              </div>}
+                  <ActionLink href={`/contracts/${a.id}`} variant="secondary" size="sm">{a.cta}</ActionLink>
+                </li>
+              ))}
+            </ul>
+          )}
+          {data.analyzing > 0 && (
+            <p className="mt-3.5 text-[13px] text-muted-foreground">
+              Además, {plural(data.analyzing, "caso se está", "casos se están")} analizando ahora. <Link href="/cases?view=analyzing" className="text-link hover:underline">Verlos en Casos</Link>
+            </p>
+          )}
+        </section>
 
-              {/* Documentos por tipo */}
-              <div className="bg-card border border-border rounded-xl p-5">
-                <h2 className="text-sm font-semibold text-foreground">Documentos por tipo</h2>
-                {docTypes.length === 0 ? (
-                  <p className="text-xs text-muted-foreground mt-4">Sin documentos.</p>
-                ) : (
-                  <div className="space-y-2.5 mt-4">
-                    {docTypes.slice(0, 6).map((d) => (
-                      <div key={d.type} className="flex items-center gap-3">
-                        <span className="text-[11px] text-foreground w-40 truncate">{d.type}</span>
-                        <div className="flex-1 h-1.5 rounded-full bg-secondary overflow-hidden">
-                          <div className="h-full rounded-full bg-primary/70" style={{ width: `${(d.n / maxDoc) * 100}%` }} />
-                        </div>
-                        <span className="text-[11px] text-muted-foreground tabular-nums w-6 text-right">{d.n}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
+        <aside>
+          <SectionTitle title="Últimos 30 días" aside="todos los flujos" />
+          <dl className="mt-1 text-[13.5px]">
+            {[
+              ["Casos creados", data.last30.created.toLocaleString("es-MX")],
+              ["Terminados", `${data.last30.done.toLocaleString("es-MX")}${data.last30.created ? ` · ${Math.round((data.last30.done / data.last30.created) * 100)} %` : ""}`],
+              ["Tiempo de análisis (mediana)", fmtDuration(data.last30.medianSec)],
+              ["Con hallazgos", data.last30.findings.toLocaleString("es-MX")],
+            ].map(([k, v]) => (
+              <div key={k} className="flex justify-between gap-3 border-b border-line-soft py-2.5 last:border-0">
+                <dt className="text-muted-foreground">{k}</dt><dd className="font-semibold tabular-nums">{v}</dd>
               </div>
-
-              {/* Obligaciones próximas */}
-              {obligationsEnabled && <div className="bg-card border border-border rounded-xl p-5">
-                <div className="flex items-center gap-2"><CalendarClock className="w-4 h-4 text-muted-foreground" /><h2 className="text-sm font-semibold text-foreground">Obligaciones próximas</h2></div>
-                {obligations.length === 0 ? (
-                  <p className="text-xs text-muted-foreground mt-4">Sin fechas próximas registradas.</p>
-                ) : (
-                  <ul className="mt-4 divide-y divide-border">
-                    {obligations.map((o, i) => {
-                      const due = o.dueDate ? new Date(o.dueDate).getTime() : 0;
-                      const soon = due && due - now < SOON;
-                      return (
-                        <li key={i} className="flex items-center gap-2 py-2 first:pt-0">
-                          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${soon ? "bg-warning" : "bg-muted-foreground/40"}`} />
-                          <span className="text-[11px] text-foreground flex-1 truncate">{o.description ?? "Obligación"}</span>
-                          <span className="text-[11px] text-muted-foreground tabular-nums">{o.dueDate ? new Date(o.dueDate).toLocaleDateString("es-MX") : "—"}</span>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-              </div>}
-            </div>
-
-            {/* Casos recientes */}
-            <div className="bg-card border border-border rounded-xl overflow-hidden">
-              <div className="px-5 py-3 border-b border-border"><h2 className="text-sm font-semibold text-foreground">Casos recientes</h2></div>
-              <div className="divide-y divide-border">
-                {recent.map((c) => (
-                  <Link key={c.id} href={`/cases/${c.id}`} className="flex items-center gap-3 px-5 py-3 hover:bg-secondary/50 transition-colors">
-                    <ScrollText className="w-4 h-4 text-muted-foreground shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-medium text-foreground truncate">{c.title || `Caso ${c.id.slice(0, 8)}`}</p>
-                      <p className="text-[11px] text-muted-foreground tabular-nums">{new Date(c.createdAt).toLocaleString("es-MX")}</p>
-                    </div>
-                    <span className="text-[11px] font-medium text-muted-foreground">{contractStatusLabel(c.status)}</span>
-                    <ArrowRight className="w-3.5 h-3.5 text-muted-foreground/50 shrink-0" />
-                  </Link>
-                ))}
-              </div>
-            </div>
-          </>
-        )}
+            ))}
+          </dl>
+        </aside>
       </div>
-    </div>
+
+      {data.byFlow.length > 0 && (
+        <section className="mt-12">
+          <SectionTitle title="Por flujo" aside="últimos 30 días" />
+          <div className="overflow-x-auto">
+            <table className="w-full text-[13.5px] tabular-nums">
+              <thead>
+                <tr className="border-b border-border">
+                  {["Flujo", "Casos", "Terminados", "Con hallazgos", "Análisis (mediana)", "Volumen"].map((h) => (
+                    <th key={h} scope="col" className="whitespace-nowrap px-3.5 py-2.5 text-left text-[11.5px] font-semibold uppercase tracking-[0.05em] text-muted-foreground">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {data.byFlow.map((f) => (
+                  <tr key={f.flowId ?? "none"} className="border-b border-line-soft last:border-0">
+                    <td className="px-3.5 py-3 font-semibold">{f.name}</td>
+                    <td className="px-3.5 py-3">{f.cases}</td>
+                    <td className="px-3.5 py-3">{f.done}</td>
+                    <td className="px-3.5 py-3">{f.findings}</td>
+                    <td className="px-3.5 py-3">{fmtDuration(f.medianSec)}</td>
+                    <td className="w-[22%] px-3.5 py-3"><div className="h-2 rounded-full bg-secondary"><span className="block h-full rounded-full bg-primary" style={{ width: `${(f.cases / maxCases) * 100}%` }} /></div></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+    </PageFrame>
   );
 }

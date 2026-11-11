@@ -219,7 +219,9 @@ export async function processContractCase(caseId: string, injectedDeps?: Contrac
         : toSource(await getFileBuffer(doc.storageKey), doc.mimeType);
       const { source, mode, text } = prepared;
 
-      const classifiedTypeKey = await deps.classify(source, plan.docTypes, undefined, doc.originalName ?? undefined);
+      // La casilla del caso fija el tipo; sin casilla, la IA lo clasifica.
+      const presetType = doc.detectedType && plan.docTypes.some((type) => type.key === doc.detectedType) ? doc.detectedType : null;
+      const classifiedTypeKey = presetType ?? await deps.classify(source, plan.docTypes, undefined, doc.originalName ?? undefined);
       const typeKey = plan.docTypes.some((type) => type.key === classifiedTypeKey)
         ? classifiedTypeKey
         : inferTypeFromFileName(doc.originalName, plan.docTypes) ?? (plan.docTypes.length === 1 ? plan.docTypes[0].key : "unknown");

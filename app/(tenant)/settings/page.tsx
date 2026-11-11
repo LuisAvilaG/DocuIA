@@ -6,7 +6,8 @@ import { eq, and, count } from "drizzle-orm";
 import { isFeatureEnabled } from "@/lib/features";
 import { SettingsClient } from "./client";
 
-export default async function SettingsPage() {
+export default async function SettingsPage({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
+  const { tab } = await searchParams;
   // Settings is admin-only; other signed-in roles go back to their portal
   // instead of the login form. Data errors surface through the error boundary.
   const session = await getTenantSession();
@@ -95,6 +96,7 @@ export default async function SettingsPage() {
 
   return (
     <SettingsClient
+      initialTab={tab}
       org={{
         id:                   org.id,
         name:                 org.name,

@@ -138,13 +138,12 @@ export const PRODUCT_MODULES: Record<ProductKey, NavModule[]> = {
   contract_intelligence: [
     { href: "/contracts/dashboard",  label: "Hoy",           icon: "LayoutDashboard" },
     { href: "/cases",                label: "Casos",         icon: "ScrollText",      feature: "contract_ai_extraction" },
-    // Historial se une a Casos en la fase 4; mientras tanto sigue visible.
-    { href: "/cases/history",        label: "Historial",     icon: "Clock",           feature: "contract_ai_extraction" },
     { href: "/contracts/approvals",  label: "Aprobaciones",  icon: "ClipboardCheck",  feature: "contract_approval_workflow", roles: ["approver"] },
     { href: "/contracts/archive",    label: "Archivo",       icon: "FolderOpen",      feature: "contract_reference_archive" },
     { href: "/contracts/metrics",    label: "Métricas",      icon: "BarChart3",       feature: "contract_metrics" },
     { href: "/contracts/flow",       label: "Flujos",        icon: "Workflow",        feature: "contract_flow_builder", adminOnly: true, group: "config" },
     { href: "/contracts/quality",    label: "Aprendizajes",  icon: "BrainCircuit",    feature: "contract_ai_extraction", adminOnly: true, group: "config" },
+    { href: "/settings?tab=team",    label: "Usuarios",      icon: "Users",           adminOnly: true, group: "config" },
   ],
 };
 

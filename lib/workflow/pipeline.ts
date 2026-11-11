@@ -6,6 +6,7 @@ import { uploadFile } from "@/lib/storage/minio";
 import { extractFromFile, mapInvoice, configuredEffort } from "./extract";
 import { parseJsonObject } from "@/lib/ai/provider";
 import { mergeDocMetrics } from "./doc-metrics";
+import { reviewReason } from "./review-reason";
 import { withAiUsage } from "@/lib/ai/usage";
 import { buildUiPayload } from "./match";
 import { processInNetSuite } from "./process-ns";
@@ -475,7 +476,15 @@ async function runPipelineInner(input: PipelineInput): Promise<PipelineResult> {
         .set({
           products: payload as unknown,
           poInternalId: poId,
-          errorMessage: decision.next === "review" ? decision.reason : null,
+          // Motivo final, para el lote terminado y la lista de Documentos.
+          errorMessage: reviewReason({
+            decisionReason: decision.next === "review" ? decision.reason : null,
+            vendorSelected: Boolean(payload.document.vendor.selected_internal_id),
+            lines: payload.document.lines,
+            confidence: payload.confidence.overall,
+            threshold,
+            neverAutoProcess: Boolean(rule?.neverAutoProcess),
+          }),
           updatedAt: new Date(),
         })
         .where(eq(historyDocuments.id, docId));

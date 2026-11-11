@@ -127,6 +127,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
       }))}
       plan={sub?.planId ?? "starter"}
       currentUserRole={session.role ?? "operator"}
+      currentUserId={session.sub}
       webhooks={hooks.map(h => ({
         id:              h.id,
         url:             h.url,

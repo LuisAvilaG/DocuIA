@@ -9,6 +9,7 @@ import { getFeature } from "@/lib/features";
 import { logAudit } from "@/lib/audit/log";
 import { sendEmail } from "@/lib/email/send";
 import { buildRequestEmail, isEmail, suggestContractorEmail } from "@/lib/contracts/document-requests";
+import { createUploadLink } from "@/lib/contracts/upload-links";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -64,7 +65,11 @@ async function handlePOST(req: NextRequest, { params }: Params) {
   if (kase.status !== "validated") return NextResponse.json({ error: "Solo se piden documentos de un caso por decidir." }, { status: 409 });
 
   const title = kase.title ?? "Caso";
+  // Enlace para que el contratista suba lo pedido sin cuenta (vence y sirve una vez).
+  const link = feature.config.upload_link === false ? null
+    : await createUploadLink({ orgId: session.orgId, caseId: id, userId: session.sub, documents, reason, days: Number(feature.config.link_days) || undefined });
   const mail = buildRequestEmail({
+    uploadUrl: link?.url ?? null, expiresAt: link?.expiresAt ?? null,
     template: typeof feature.config.email_template === "string" ? feature.config.email_template : null,
     senderName: typeof feature.config.sender_name === "string" ? feature.config.sender_name : null,
     caseTitle: title, message, reason, documents,
@@ -72,7 +77,7 @@ async function handlePOST(req: NextRequest, { params }: Params) {
   const sent = await sendEmail({ to: email, subject: mail.subject, html: mail.html });
 
   const prev = (kase.resultJson ?? {}) as Record<string, unknown>;
-  const request = { to: email, reason, documents, message, byId: session.sub, byEmail: session.email, at: new Date().toISOString(), emailSent: sent.ok };
+  const request = { to: email, reason, documents, message, byId: session.sub, byEmail: session.email, at: new Date().toISOString(), emailSent: sent.ok, linkExpiresAt: link?.expiresAt.toISOString() ?? null };
   const updated = await db.update(contractCases).set({
     status: "awaiting_documents",
     contractorEmail: email,
@@ -82,7 +87,7 @@ async function handlePOST(req: NextRequest, { params }: Params) {
   if (!updated.length) return NextResponse.json({ error: "El caso cambió mientras lo revisabas. Recarga la página." }, { status: 409 });
 
   await logAudit({ orgId: session.orgId, userId: session.sub, userEmail: session.email, action: "contract.documents_requested", resourceType: "contract_case", resourceId: id, metadata: { reason, documents, emailSent: sent.ok } });
-  return NextResponse.json({ ok: true, status: "awaiting_documents", emailSent: sent.ok });
+  return NextResponse.json({ ok: true, status: "awaiting_documents", emailSent: sent.ok, uploadUrl: link?.url ?? null });
 }
 
 export const GET = withApiSecurity(handleGET);

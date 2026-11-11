@@ -68,6 +68,9 @@ const zRule = z.discriminatedUnion("kind", [
   }),
 ]);
 
+/** Controles configurables (lo que valida un nodo «Control»). */
+export const ruleSchema = zRule;
+
 const zIntake = z.object({
   id: z.string().min(1), kind: z.literal("intake"), position: zPosition,
   // `required`: si falta, el caso no se puede crear (por omisión es obligatorio).

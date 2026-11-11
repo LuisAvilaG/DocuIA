@@ -34,3 +34,20 @@ test("el contexto del proceso llega a llamadas anidadas y no se filtra afuera", 
   assert.deepEqual(b, { orgId: "org-2", source: "facturas" });
   assert.equal(currentAiUsage(), undefined);
 });
+
+test("esquemas de respuesta: extracción, análisis y modelo del OCR de gastos", async () => {
+  const { extractionSchema } = await import("../lib/contracts/extract");
+  const { analysisSchema } = await import("../lib/contracts/ai-analysis");
+  const { expenseOcrModel } = await import("../lib/expense/extract");
+  const s = extractionSchema([{ fieldKey: "valor_total", label: "Valor", isList: false }, { fieldKey: "firmantes", label: "Firmantes", isList: true }]);
+  const values = s.properties!.values;
+  assert.deepEqual(values.required, ["valor_total", "firmantes"]);
+  assert.equal(values.properties!.firmantes.type, "array");
+  assert.equal(values.additionalProperties, false);
+  const a = analysisSchema([{ key: "aspecto", label: "Aspecto" }, { key: "cumple", label: "Cumple" }]);
+  assert.deepEqual(a.properties!.items.items!.required, ["aspecto", "cumple", "evidence"]);
+  assert.deepEqual(a.properties!.outcome.enum, ["pass", "review", "block"]);
+  assert.equal(expenseOcrModel("application/pdf"), "claude-haiku-5-5");
+  assert.equal(expenseOcrModel("image/jpeg"), "claude-haiku-5-5");
+  assert.equal(expenseOcrModel("image/heic"), "gemini-2.5-flash", "formatos de foto que Claude no lee van a Gemini");
+});

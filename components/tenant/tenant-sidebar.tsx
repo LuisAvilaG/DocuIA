@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, FileUp, FileText, Clock, AlertTriangle,
   GitMerge, Database, SlidersHorizontal, BarChart3, Settings, Workflow, ClipboardCheck,
-  LogOut, User, Users, Zap, Crown, Receipt, ScrollText, FolderOpen, BrainCircuit, KeyRound, ListChecks,
+  LogOut, User, Users, Zap, Crown, Receipt, ScrollText, FolderOpen, BrainCircuit, KeyRound, ListChecks, Menu, X,
 } from "lucide-react";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { ChangePasswordDialog } from "@/components/shared/change-password-dialog";
@@ -52,6 +52,8 @@ export function TenantSidebar({ orgName, plan, userEmail, userRole, activeProduc
   const router   = useRouter();
   const features = useFeatures();
   const [changingPassword, setChangingPassword] = useState(false);
+  // En pantallas angostas el menú es un panel que se abre desde la barra superior.
+  const [menuOpen, setMenuOpen] = useState(false);
 
   const active = new Set(activeProducts);
   const isVisible = (m: NavModule) =>
@@ -97,7 +99,28 @@ export function TenantSidebar({ orgName, plan, userEmail, userRole, activeProduc
   }
 
   return (
-    <aside className="fixed inset-y-0 left-0 w-56 bg-card border-r border-border flex flex-col z-40">
+    <>
+    <header className="lg:hidden fixed inset-x-0 top-0 z-30 h-12 flex items-center gap-3 border-b border-border bg-card px-3">
+      <button type="button" onClick={() => setMenuOpen(true)} aria-label="Abrir menú" aria-expanded={menuOpen}
+        className="flex size-9 items-center justify-center rounded-lg text-muted-foreground hover:bg-secondary hover:text-foreground">
+        <Menu className="size-5" />
+      </button>
+      <Image src="/logo-icon.png" alt="" width={22} height={22} className="object-contain" />
+      <span className="min-w-0 truncate text-[13px] font-semibold">{orgName}</span>
+    </header>
+    {menuOpen && <div aria-hidden onClick={() => setMenuOpen(false)} className="lg:hidden fixed inset-0 z-40 bg-[oklch(0.18_0.015_258)]/50" />}
+    <aside
+      className={cn(
+        "fixed inset-y-0 left-0 w-64 lg:w-56 bg-card border-r border-border flex flex-col z-50 lg:z-40 transition-transform duration-200 lg:translate-x-0",
+        menuOpen ? "translate-x-0 shadow-xl" : "-translate-x-full",
+      )}
+      // Al elegir una opción del menú en el teléfono, el panel se cierra.
+      onClick={(e) => { if ((e.target as HTMLElement).closest("a")) setMenuOpen(false); }}
+    >
+      <button type="button" onClick={() => setMenuOpen(false)} aria-label="Cerrar menú"
+        className="lg:hidden absolute right-2 top-3 z-10 flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-secondary hover:text-foreground">
+        <X className="size-4" />
+      </button>
       {/* Marca / Org */}
       <div className="h-14 px-4 flex items-center gap-3 border-b border-border shrink-0">
         <div className="w-8 h-8 shrink-0 flex items-center justify-center">
@@ -218,7 +241,8 @@ export function TenantSidebar({ orgName, plan, userEmail, userRole, activeProduc
           Cerrar sesión
         </button>
       </div>
-      <ChangePasswordDialog open={changingPassword} onClose={() => setChangingPassword(false)} userEmail={userEmail} />
     </aside>
+    <ChangePasswordDialog open={changingPassword} onClose={() => setChangingPassword(false)} userEmail={userEmail} />
+    </>
   );
 }

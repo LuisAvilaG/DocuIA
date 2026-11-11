@@ -41,7 +41,7 @@ export default async function TenantLayout({ children }: { children: React.React
   return (
     <FeatureProvider features={featuresMap}>
       <SessionRefresh />
-      <div className="flex h-screen bg-background text-foreground overflow-hidden">
+      <div className="flex h-[100dvh] bg-background text-foreground overflow-hidden">
         <TenantSidebar
           orgName={org.name}
           plan={(subscription?.planId ?? "starter") as "starter" | "growth" | "enterprise"}
@@ -49,7 +49,7 @@ export default async function TenantLayout({ children }: { children: React.React
           userRole={session.role ?? "operator"}
           activeProducts={[...activeProducts]}
         />
-        <main className="flex-1 flex flex-col overflow-hidden ml-56">
+        <main className="flex-1 min-w-0 flex flex-col overflow-hidden pt-12 lg:pt-0 lg:ml-56">
           {dryRunActive && <DryRunBanner isAdmin={session.role === "admin"} />}
           {qaUntil && (
             <div role="status" className="shrink-0 border-b border-[#EBD9AE] bg-tone-warn-bg px-6 py-2 text-[13px] text-tone-warn">

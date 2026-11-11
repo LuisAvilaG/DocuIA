@@ -175,10 +175,11 @@ export default async function StatisticsPage({ searchParams }: { searchParams: P
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      <div className="min-h-14 border-b border-border px-6 py-2 flex flex-wrap items-center gap-3 shrink-0">
-        <div>
-          <h1 className="text-sm font-semibold tracking-[-0.01em] text-foreground">Estadísticas</h1>
-          <p className="text-xs text-muted-foreground first-letter:uppercase">{stats?.range.label ?? ""}{vendor ? ` · ${vendor}` : ""}</p>
+      <div className="px-6 md:px-10 pt-6 pb-4 flex flex-wrap items-end gap-4 shrink-0">
+        <div className="min-w-0">
+          <h1 className="text-[26px] font-semibold leading-tight tracking-[-0.025em] text-foreground">Métricas</h1>
+          <p className="mt-1 text-sm text-muted-foreground">Cuánto pasa solo al ERP, dónde se detiene y quién lo mueve.</p>
+          <p className="mt-0.5 text-xs text-muted-foreground first-letter:uppercase">{stats?.range.label ?? ""}{vendor ? ` · ${vendor}` : ""}</p>
         </div>
         <div className="ml-auto">
           <Suspense>

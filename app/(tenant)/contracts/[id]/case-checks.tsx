@@ -80,7 +80,7 @@ export function CaseChecks({ docs, findings, passed }: { docs: CheckDoc[]; findi
     const found = located[`${f.id}:${i}`];
     if (found) return found;
     const e = f.evidence[i];
-    return e.documentId && e.page ? { docId: e.documentId, page: e.page, box: null } : null;
+    return e.documentId && e.page ? { docId: e.documentId, page: e.page, box: e.box ?? null } : null;
   }, [located]);
 
   const onPdfLoad = useCallback(async (pdf: PdfDoc, forDoc: string) => {
@@ -93,6 +93,7 @@ export function CaseChecks({ docs, findings, passed }: { docs: CheckDoc[]; findi
     for (const f of findings) {
       for (const [i, e] of f.evidence.entries()) {
         if (e.documentId && e.documentId !== forDoc) continue;
+        if (e.box && e.page) continue;
         const pages = e.page && e.documentId === forDoc ? [e.page] : Array.from({ length: Math.min(pdf.numPages, MAX_SCAN_PAGES) }, (_, k) => k + 1);
         for (const n of pages) {
           const box = matchQuote(await words(n), e.quote);
@@ -120,6 +121,24 @@ export function CaseChecks({ docs, findings, passed }: { docs: CheckDoc[]; findi
   const marks = findings.flatMap((f) => f.evidence.map((_, i) => ({ f, at: whereIs(f, i) })))
     .filter((m): m is { f: CheckFinding; at: Located } => !!m.at && m.at.docId === docId && m.at.page === page);
   const inDoc = new Set(findings.filter((f) => f.evidence.some((_, i) => whereIs(f, i)?.docId === docId)).map((f) => f.id)).size;
+
+  // Números de los hallazgos sobre la página visible (PDF o imagen).
+  const markers = marks.map(({ f, at }, k) => {
+                  const n = numberOf.get(f.id)!;
+                  const on = f.id === active;
+                  const color = TONE[toneOf(f)];
+                  const y = at.box ? (at.box.y1 + at.box.y2) / 2 : 0.04 + k * 0.035;
+                  return (
+                    <span key={`${f.id}-${k}`}>
+                      {on && at.box && <span aria-hidden className="pointer-events-none absolute rounded-sm" style={{ left: `${at.box.x1 * 100}%`, top: `${at.box.y1 * 100}%`, width: `${(at.box.x2 - at.box.x1) * 100}%`, height: `${(at.box.y2 - at.box.y1) * 100}%`, background: `${color}22`, outline: `1.5px solid ${color}` }} />}
+                      <button type="button" onClick={() => select(f)} aria-label={`Hallazgo ${n}: ${f.ruleName}`} aria-pressed={on}
+                        className="absolute flex size-[20px] items-center justify-center rounded-full text-[11px] font-bold text-white shadow-sm ring-2 ring-white transition-transform hover:scale-110"
+                        style={{ left: `${Math.max((at.box?.x1 ?? 0.04) * 100, 4)}%`, marginLeft: -26, top: `calc(${y * 100}% - 10px)`, backgroundColor: color, transform: on ? "scale(1.15)" : undefined }}>
+                        {n}
+                      </button>
+                    </span>
+                  );
+                });
 
   return (
     <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
@@ -153,27 +172,15 @@ export function CaseChecks({ docs, findings, passed }: { docs: CheckDoc[]; findi
               error={<p className="p-4 text-[13px] text-muted-foreground">No se pudo mostrar el documento.</p>}>
               <div className="relative mx-auto w-fit shadow-sm">
                 <Page pageNumber={Math.min(page, numPages || page)} width={width - 24} renderAnnotationLayer={false} renderTextLayer={false} />
-                {marks.map(({ f, at }, k) => {
-                  const n = numberOf.get(f.id)!;
-                  const on = f.id === active;
-                  const color = TONE[toneOf(f)];
-                  const y = at.box ? (at.box.y1 + at.box.y2) / 2 : 0.04 + k * 0.035;
-                  return (
-                    <span key={`${f.id}-${k}`}>
-                      {on && at.box && <span aria-hidden className="pointer-events-none absolute rounded-sm" style={{ left: `${at.box.x1 * 100}%`, top: `${at.box.y1 * 100}%`, width: `${(at.box.x2 - at.box.x1) * 100}%`, height: `${(at.box.y2 - at.box.y1) * 100}%`, background: `${color}22`, outline: `1.5px solid ${color}` }} />}
-                      <button type="button" onClick={() => select(f)} aria-label={`Hallazgo ${n}: ${f.ruleName}`} aria-pressed={on}
-                        className="absolute flex size-[20px] items-center justify-center rounded-full text-[11px] font-bold text-white shadow-sm ring-2 ring-white transition-transform hover:scale-110"
-                        style={{ left: `${Math.max((at.box?.x1 ?? 0.04) * 100, 4)}%`, marginLeft: -26, top: `calc(${y * 100}% - 10px)`, backgroundColor: color, transform: on ? "scale(1.15)" : undefined }}>
-                        {n}
-                      </button>
-                    </span>
-                  );
-                })}
+                {markers}
               </div>
             </Document>
           ) : doc.kind === "image" ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={`/api/v1/contracts/documents/${doc.id}/file`} alt={doc.name} className="mx-auto max-w-full shadow-sm" />
+            <div className="relative mx-auto w-fit shadow-sm">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={`/api/v1/contracts/documents/${doc.id}/file`} alt={doc.name} className="block max-w-full" />
+              {markers}
+            </div>
           ) : <p className="p-4 text-[13px] text-muted-foreground">La vista previa no está disponible para este tipo de archivo.</p>}
         </div>
       </div>

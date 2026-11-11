@@ -2,11 +2,11 @@
 
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, Upload } from "lucide-react";
+import { CheckCircle2, Copy, Link2, Loader2, Upload } from "lucide-react";
 import { btn } from "@/components/kit";
 import { uploadContractFile } from "@/lib/contracts/upload-client";
 
-interface Request { to: string; reason: string; documents: string[]; message?: string; at: string; byEmail?: string | null; emailSent?: boolean }
+interface Request { to: string; reason: string; documents: string[]; message?: string; at: string; byEmail?: string | null; emailSent?: boolean; linkExpiresAt?: string | null }
 type Item = { key: string; name: string; status: "uploading" | "done" | "error"; progress: number; uploadId?: string; error?: string; replaces: string };
 
 const ACCEPT = ".pdf,.jpg,.jpeg,.png,.webp,.tiff,.txt,.xml";
@@ -23,6 +23,21 @@ export function ResubmitPanel({ caseId, request, documents, canWrite }: {
   const [items, setItems] = useState<Item[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [link, setLink] = useState<{ url: string; expiresAt: string; copied: boolean } | null>(null);
+  const [linkBusy, setLinkBusy] = useState(false);
+
+  // Enlace nuevo para que el contratista suba los documentos sin cuenta (anula el anterior).
+  async function newLink() {
+    setLinkBusy(true); setError("");
+    try {
+      const res = await fetch(`/api/v1/contracts/cases/${caseId}/upload-link`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setError(data.error ?? "No se pudo crear el enlace."); return; }
+      let copied = false;
+      try { await navigator.clipboard.writeText(data.url); copied = true; } catch { /* se muestra para copiar a mano */ }
+      setLink({ url: data.url, expiresAt: data.expiresAt, copied });
+    } catch { setError("No se pudo conectar con el servidor."); } finally { setLinkBusy(false); }
+  }
 
   function add(files: File[]) {
     const start = items.length;
@@ -70,7 +85,21 @@ export function ResubmitPanel({ caseId, request, documents, canWrite }: {
           <dl className="mt-2 grid grid-cols-[110px_minmax(0,1fr)] gap-x-3 gap-y-1 text-[13px]">
             <dt className="text-muted-foreground">Motivo</dt><dd>{request.reason}</dd>
             {request.documents.length > 0 && <><dt className="text-muted-foreground">Documentos</dt><dd>{request.documents.join(", ")}</dd></>}
+            {request.linkExpiresAt && <><dt className="text-muted-foreground">Enlace</dt><dd>El contratista puede subirlos con el enlace del correo hasta el {new Date(request.linkExpiresAt).toLocaleDateString("es-MX", { day: "numeric", month: "long" })}.</dd></>}
           </dl>
+        )}
+        {canWrite && (
+          <div className="mt-2.5 flex flex-wrap items-center gap-2">
+            <button type="button" onClick={() => void newLink()} disabled={linkBusy} className={btn("secondary", "sm")}>
+              {linkBusy ? <Loader2 className="animate-spin" /> : <Link2 />} Copiar enlace nuevo para el contratista
+            </button>
+            {link && (
+              <span className="flex min-w-0 items-center gap-1.5 text-xs">
+                {link.copied ? <CheckCircle2 className="size-3.5 shrink-0 text-tone-ok" /> : <Copy className="size-3.5 shrink-0" />}
+                <span className="min-w-0 truncate">{link.copied ? "Copiado. " : ""}<code className="select-all">{link.url}</code></span>
+              </span>
+            )}
+          </div>
         )}
       </div>
 

@@ -75,6 +75,7 @@ export default async function ContractCasePage({ params, searchParams }: { param
 
   const result = (kase.resultJson ?? {}) as {
     outputKey?: string; outputMime?: string; outputName?: string; missing?: string[];
+    documents?: Array<{ documentId: string; typeWarning?: string }>;
     decision?: { action?: string; reason?: string | null; byEmail?: string | null; at?: string | null; override?: boolean; support?: { name?: string } } | null;
     calculations?: CalculationOutcome[];
     documentRequest?: { to: string; reason: string; documents: string[]; message?: string; at: string; byEmail?: string | null; emailSent?: boolean };
@@ -154,10 +155,14 @@ export default async function ContractCasePage({ params, searchParams }: { param
   const blocks = failedChecks.filter((v) => v.severity === "block").length;
   const warns = failedChecks.filter((v) => v.severity === "warn").length;
   const unknownDocs = docs.filter((d) => !d.detectedType || d.detectedType === "unknown").length;
+  // Documentos subidos en una casilla que la IA no reconoce como de ese tipo.
+  const typeWarnings = (Array.isArray(result.documents) ? result.documents : [])
+    .filter((d) => d.typeWarning)
+    .map((d) => ({ name: docs.find((x) => x.id === d.documentId)?.originalName ?? "Un documento", text: d.typeWarning! }));
   const deciding = kase.status === "validated" || kase.status === "review";
   const waitingDocs = kase.status === "awaiting_documents";
   const stages: Stage[] = [
-    { key: "docs", label: "Documentos", detail: isProcessing ? "Leyendo…" : `${totalFields} datos · ${docs.length} documento${docs.length === 1 ? "" : "s"}`, state: isProcessing ? "run" : kase.status === "failed" ? "err" : unknownDocs ? "warn" : "ok", href: "?etapa=docs" },
+    { key: "docs", label: "Documentos", detail: isProcessing ? "Leyendo…" : `${totalFields} datos · ${docs.length} documento${docs.length === 1 ? "" : "s"}`, state: isProcessing ? "run" : kase.status === "failed" ? "err" : unknownDocs || typeWarnings.length ? "warn" : "ok", href: "?etapa=docs" },
     calculations.length
       ? { key: "calc", label: "Cálculos", detail: `${calculations.length} resultado${calculations.length === 1 ? "" : "s"}`, state: calculations.every((c) => c.status === "ok") ? "ok" : "warn", href: "?etapa=calc" }
       : { key: "calc", label: "Cálculos", detail: "Sin cálculos", state: "off" },
@@ -225,6 +230,12 @@ export default async function ContractCasePage({ params, searchParams }: { param
               canWrite={canAccessTenantArea(session.role, { area: "contracts", permission: "write" })} />
           )}
 
+          {tab === "docs" && typeWarnings.length > 0 && (
+            <Notice tone="warn" title={typeWarnings.length === 1 ? "Un documento no parece del tipo con que se subió" : `${typeWarnings.length} documentos no parecen del tipo con que se subieron`}>
+              <ul className="mt-1 space-y-0.5">{typeWarnings.map((w) => <li key={w.name}><b className="font-medium">{w.name}:</b> {w.text}</li>)}</ul>
+              <p className="mt-1">Si es el documento equivocado, pide el correcto o crea el caso de nuevo.</p>
+            </Notice>
+          )}
           {tab === "docs" && <CaseDocuments documents={docs} canTrain={session.role === "admin"} />}
 
           {tab === "calc" && (

@@ -8,6 +8,8 @@ export interface EvidenceRef {
   field: string | null;
   quote: string;
   page: number | null;
+  /** Posición en la página (0–1), cuando se calculó en el servidor (páginas escaneadas). */
+  box?: Box | null;
 }
 
 export interface Box { x1: number; y1: number; x2: number; y2: number }

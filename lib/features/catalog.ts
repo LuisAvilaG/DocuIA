@@ -582,9 +582,12 @@ export const FEATURE_CATALOG = [
     category: "contracts" as const,
     featureType: "boolean_config" as const,
     defaultEnabled: true,
-    defaultConfig: { model: "gemini-2.5-flash", locator_min_pages: 25, max_pages_per_call: 20, selected_pages_mode: "auto" },
+    // Claude por defecto: en la comparación con el contrato DJ-2025-0006 y su póliza RC
+    // (nov 2026) extrajo igual de bien, cumplió el formato de fechas y analizó mejor.
+    defaultConfig: { model: "claude-haiku-5-5", analysis_model: "claude-sonnet-5-5", locator_min_pages: 25, max_pages_per_call: 20, selected_pages_mode: "auto" },
     configSchema: [
-      { key: "model", label: "Modelo de extracción", type: "select", options: ["gemini-2.5-flash", "gemini-2.5-pro", "claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"], optionLabels: { "gemini-2.5-flash": "Gemini 2.5 Flash", "gemini-2.5-pro": "Gemini 2.5 Pro", "claude-haiku-5-5": "Claude Haiku 5.5", "claude-sonnet-5-5": "Claude Sonnet 5.5", "claude-opus-5-5": "Claude Opus 5.5" }, description: "Claude usa la clave de la plataforma; la clave propia del cliente aplica a Gemini" },
+      { key: "model", label: "Modelo de extracción", type: "select", options: ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5", "gemini-2.5-flash", "gemini-2.5-pro"], optionLabels: { "claude-haiku-5-5": "Claude Haiku 5.5", "claude-sonnet-5-5": "Claude Sonnet 5.5", "claude-opus-5-5": "Claude Opus 5.5", "gemini-2.5-flash": "Gemini 2.5 Flash", "gemini-2.5-pro": "Gemini 2.5 Pro" }, description: "Clasifica y extrae los datos. Claude usa la clave de la plataforma; la clave propia del cliente aplica a Gemini" },
+      { key: "analysis_model", label: "Modelo del análisis con IA", type: "select", options: ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5", "gemini-2.5-flash", "gemini-2.5-pro"], optionLabels: { "claude-haiku-5-5": "Claude Haiku 5.5", "claude-sonnet-5-5": "Claude Sonnet 5.5", "claude-opus-5-5": "Claude Opus 5.5", "gemini-2.5-flash": "Gemini 2.5 Flash", "gemini-2.5-pro": "Gemini 2.5 Pro" }, description: "Cruza los datos de los documentos en los controles «Análisis con IA». Trabaja con texto, así que un modelo más capaz cuesta poco más" },
       { key: "locator_min_pages", label: "Localizar páginas a partir de", type: "number", min: 5, max: 500, description: "PDFs con esta cantidad de páginas o más se indexan y el modelo recibe solo las páginas relevantes por campo" },
       { key: "max_pages_per_call", label: "Máximo de páginas por llamada", type: "number", min: 4, max: 40, description: "Tope de páginas que se envían al modelo en documentos largos" },
       { key: "selected_pages_mode", label: "Cómo enviar las páginas elegidas", type: "select", options: ["auto", "pdf", "text"], optionLabels: { auto: "PDF si hay escaneo, texto si es digital", pdf: "Siempre como PDF (ve la página)", text: "Siempre como texto (más barato)" } },

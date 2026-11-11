@@ -12,6 +12,7 @@ import {
   Loader2, Save, Plus, Trash2, ArrowLeft, X, ClipboardCheck, FileInput, ListChecks, Calculator, ShieldCheck, FileText, FileSearch, ChevronDown, ChevronUp, StickyNote, PencilRuler, Sparkles, BookMarked, FileUp, PanelLeft,
 } from "lucide-react";
 import { ApprovalForm } from "./approval-form";
+import { RuleFromText } from "./rule-from-text";
 import { btn, StatusPill } from "@/components/kit";
 import { DocEditor } from "./doc-editor";
 import { VisualTrainingWorkspace, type TrainingField } from "./visual-training-workspace";
@@ -488,6 +489,12 @@ function ValidateForm({ data, patch, docTypes, fieldsByType }: { data: AnyData; 
   return (
     <div className="space-y-3">
       <FieldRow label="Nombre / etiqueta"><input className={inp} value={String(data.name ?? "")} onChange={(e) => patch({ name: e.target.value })} placeholder="Ej. Validación de firmantes" /></FieldRow>
+
+      {kind !== "ai_analysis" && (
+        <RuleFromText docTypes={docTypes} fieldsByType={fieldsByType}
+          current={{ name: String(data.name ?? ""), severity, rule }}
+          onApply={(next) => patch({ name: next.name, severity: next.severity, rule: next.rule })} />
+      )}
 
       <FieldRow label="Tipo de validación"><Select value={kind} onChange={(k) => patch({ rule: defaultRule(k) })} options={RULE_KINDS} /></FieldRow>
       <p className="rounded-md bg-secondary/50 border border-border px-2.5 py-2 text-[11px] text-muted-foreground leading-relaxed">{RULE_INFO[kind]}</p>

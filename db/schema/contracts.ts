@@ -240,3 +240,23 @@ export const contractAiAnalysisResults = pgTable("contract_ai_analysis_results",
   index("contract_ai_results_case_idx").on(t.caseId),
 ]);
 
+
+// Enlace para que el contratista suba los documentos pedidos sin cuenta.
+// Solo se guarda el hash del token; vence y sirve para una sola entrega.
+export const contractUploadLinks = pgTable("contract_upload_links", {
+  id:             varchar("id", { length: 36 }).primaryKey(),
+  organizationId: varchar("organization_id", { length: 36 }).notNull(),
+  caseId:         varchar("case_id", { length: 36 }).notNull(),
+  tokenHash:      varchar("token_hash", { length: 64 }).notNull(),
+  documentsJson:  json("documents_json"),
+  reason:         text("reason"),
+  expiresAt:      timestamp("expires_at").notNull(),
+  usedAt:         timestamp("used_at"),
+  revokedAt:      timestamp("revoked_at"),
+  filesJson:      json("files_json"),
+  createdBy:      varchar("created_by", { length: 36 }),
+  createdAt:      timestamp("created_at").notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex("contract_upload_links_token_idx").on(t.tokenHash),
+  index("contract_upload_links_case_idx").on(t.caseId),
+]);

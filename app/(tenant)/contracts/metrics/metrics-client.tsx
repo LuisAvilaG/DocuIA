@@ -91,7 +91,7 @@ export function ContractMetricsClient({ referenceDate, cases, documents, validat
 
   return <div className="flex-1 overflow-y-auto p-6"><div className="mx-auto max-w-6xl space-y-5">
     <div className="flex flex-wrap items-end justify-between gap-3">
-      <div><p className="text-[11px] font-medium uppercase tracking-[0.08em] text-primary">Contratos</p><h1 className="mt-1 text-lg font-semibold tracking-[-0.015em] text-foreground">Métricas</h1><p className="mt-1 text-xs text-muted-foreground">Volumen, calidad y tiempo de respuesta de los casos procesados.</p></div>
+      <div><h1 className="text-[26px] font-semibold leading-tight tracking-[-0.025em] text-foreground">Métricas</h1><p className="mt-1 text-sm text-muted-foreground">Volumen, calidad y tiempo de los casos de contratos.</p></div>
       <p className="text-[11px] text-muted-foreground">Actualizado con cada actividad del caso</p>
     </div>
     <section aria-label="Filtros de métricas" className="flex flex-wrap items-center gap-2 border-y border-border py-3">

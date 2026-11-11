@@ -34,8 +34,12 @@ export interface AiCallUsage {
   source?: AiSource;
 }
 
+/** Quien quiera enterarse de cada llamada (p. ej. las comparaciones de modelos). */
+export const aiUsageListeners = new Set<(u: AiCallUsage) => void>();
+
 /** Guarda la llamada sin bloquear ni romper el proceso si falla. */
 export function recordAiUsage(u: AiCallUsage): void {
+  for (const listen of aiUsageListeners) listen(u);
   const ctx = store.getStore();
   const orgId = u.orgId ?? ctx?.orgId;
   if (!orgId) return;

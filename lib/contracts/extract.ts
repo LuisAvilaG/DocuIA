@@ -1,12 +1,12 @@
 // Contract Intelligence — classification + field extraction on top of the
-// provider layer (Gemini or Claude, chosen per organization). The functions
+// provider layer (Claude by default; Gemini still selectable per organization). The functions
 // here are the REAL implementations; the pipeline accepts them as injectable
 // deps so it can be tested with stubs (no API key required).
 
-import { generateJson, type AiPart } from "@/lib/ai/provider";
+import { generateJson, type AiPart, type JsonSchema } from "@/lib/ai/provider";
 import { visualTrainingPrompt, type VisualTrainingVariant } from "./visual-training";
 
-export const DEFAULT_CONTRACT_MODEL = "gemini-2.5-flash";
+export const DEFAULT_CONTRACT_MODEL = "claude-haiku-5-5";
 // Born-digital text uploads (TXT/XML) are bounded here; PDFs never reach this
 // path whole once they are long enough for the page locator.
 const MAX_TEXT_CHARS = 400_000;
@@ -47,6 +47,27 @@ function buildParts(source: ExtractSource): { parts: AiPart[]; preface: string }
   };
 }
 
+/**
+ * Forma exacta de la extracción: un valor y una cita por campo (listas como
+ * arreglos). Con esquema, el modelo siempre devuelve JSON válido; un dato que
+ * no está va como texto vacío.
+ */
+export function extractionSchema(fields: FieldDef[]): JsonSchema {
+  const shape = (f: FieldDef): JsonSchema => (f.isList ? { type: "array", items: { type: "string" } } : { type: "string" });
+  const obj = (describe: (f: FieldDef) => string): JsonSchema => ({
+    type: "object",
+    properties: Object.fromEntries(fields.map((f) => [f.fieldKey, { ...shape(f), description: describe(f) }])),
+    required: fields.map((f) => f.fieldKey),
+    additionalProperties: false,
+  });
+  return {
+    type: "object",
+    properties: { values: obj((f) => f.label), citations: obj(() => "Cita literal del documento, o vacío") },
+    required: ["values", "citations"],
+    additionalProperties: false,
+  };
+}
+
 /** Real classify/extract functions bound to one model. */
 export function createExtractDeps(options: { model?: string } = {}): ContractExtractDeps {
   const model = options.model || DEFAULT_CONTRACT_MODEL;
@@ -60,7 +81,8 @@ export function createExtractDeps(options: { model?: string } = {}): ContractExt
       `Tipos:\n${options}\n` +
       (fileName ? `El archivo se llama \"${fileName}\". Úsalo como señal adicional, pero confirma siempre con el contenido.\n` : "") +
       'Responde SOLO JSON: {"type_key":"..."}. Si ninguno aplica, usa "unknown".';
-    const { json } = await generateJson({ model, instruction, parts, apiKey, maxOutputTokens: 512 });
+    const schema: JsonSchema = { type: "object", properties: { type_key: { type: "string", enum: [...docTypes.map((d) => d.key), "unknown"] } }, required: ["type_key"], additionalProperties: false };
+    const { json } = await generateJson({ model, instruction, parts, apiKey, maxOutputTokens: 512, schema });
     const key = String(json.type_key ?? json.typeKey ?? "unknown");
     return docTypes.some((d) => d.key === key) ? key : "unknown";
   };
@@ -76,19 +98,21 @@ export function createExtractDeps(options: { model?: string } = {}): ContractExt
     const instruction =
       preface +
       (note ? `${note}\n` : "") +
-      `Extrae los siguientes campos de un documento tipo "${docTypeName}". NO inventes: si un dato no está, usa null.\n` +
+      `Extrae los siguientes campos de un documento tipo "${docTypeName}". NO inventes: si un dato no está, déjalo vacío.\n` +
       `Campos:\n${fieldList}\n` +
       'Devuelve SOLO JSON: {"values":{campo:valor}, "citations":{campo:"cita literal 6-12 palabras"}}.\n' +
       "Para campos [lista], values[campo] es un array y citations[campo] es un array de citas en el mismo orden.\n" +
+      "Formato de valores: fechas como AAAA-MM-DD; montos y porcentajes solo con la cifra y su símbolo (ej. $58.833.600 o 20%), sin repetirlos en letras ni agregar explicación; los demás textos tal como aparecen.\n" +
+      "Las citas deben copiar el texto del documento letra por letra (sin corregir ni resumir), para poder ubicarlas en la página. " +
+      "En tablas, cita solo la celda del dato (o su etiqueta y el dato si están juntos), sin unir celdas vecinas.\n" +
       "IMPORTANTE para campos [lista]: incluye TODOS los elementos que aparezcan en CUALQUIER parte del documento " +
       "(todas las partes contratantes —mandante y contratista—, comparecencia, cláusulas de personería y bloque de firmas), " +
       "sin omitir a ninguno. Para personas, usa el formato \"NOMBRE\" o \"NOMBRE (en representación de SOCIEDAD)\" cuando conste." +
       learningContext + visualTrainingPrompt(visualVariants);
-    const { json } = await generateJson({ model, instruction, parts, apiKey, maxOutputTokens: 8000 });
-    return {
-      values: (json.values ?? {}) as Record<string, unknown>,
-      citations: (json.citations ?? {}) as Record<string, unknown>,
-    };
+    const { json } = await generateJson({ model, instruction, parts, apiKey, maxOutputTokens: 8000, schema: fields.length ? extractionSchema(fields) : undefined });
+    // Vacío = no está: se guarda como null, igual que antes del esquema.
+    const clean = (o: unknown) => Object.fromEntries(Object.entries((o ?? {}) as Record<string, unknown>).map(([k, v]) => [k, v === "" || (Array.isArray(v) && v.length === 0) ? null : v]));
+    return { values: clean(json.values), citations: clean(json.citations) };
   };
 
   return { classify, extract };

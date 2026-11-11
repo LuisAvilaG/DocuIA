@@ -15,7 +15,7 @@ import { buildFlowTrace } from "./trace";
 import { getFeature, isFeatureEnabled } from "@/lib/features";
 import { logAudit } from "@/lib/audit/log";
 import type { VisualTrainingVariant } from "./visual-training";
-import { runAiAnalysis } from "./ai-analysis";
+import { DEFAULT_ANALYSIS_MODEL, runAiAnalysis } from "./ai-analysis";
 import { indexArchiveDocument, registerArchiveDocument } from "./archive";
 import { contractArchivePages } from "@/db/schema";
 import { fieldBatches, locatePages, pagesText, widenPages } from "./page-selection";
@@ -29,6 +29,20 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 /** A value the extraction did not find (null, empty string, empty list). */
+/**
+ * Aviso cuando el documento subido en una casilla no parece de ese tipo: la IA
+ * lo clasifica como otro tipo del flujo, o casi no tiene los datos esperados.
+ * El tipo de la casilla se respeta; solo se avisa (decisión 6 del plan).
+ */
+export function slotTypeWarning(input: { expected: string; detected: string | null | undefined; docTypes: Array<{ key: string; name: string }>; filled: number; total: number }): string | null {
+  const other = input.detected ? input.docTypes.find((t) => t.key === input.detected && t.name !== input.expected) : null;
+  if (other) return `Se subió como ${input.expected}, pero parece ${other.name}.`;
+  if (input.total >= 3 && input.filled / input.total < 0.25) {
+    return `Se subió como ${input.expected}, pero la IA encontró solo ${input.filled} de ${input.total} datos esperados.`;
+  }
+  return null;
+}
+
 function isBlank(value: unknown): boolean {
   return value === null || value === undefined || value === "" || (Array.isArray(value) && value.length === 0);
 }
@@ -118,8 +132,9 @@ async function processContractCaseInner(caseId: string, injectedDeps?: ContractE
   }
 
   // Model and long-document handling are per organization (feature config).
-  const cfg = extractionFeature.config as { model?: unknown; locator_min_pages?: unknown; max_pages_per_call?: unknown; selected_pages_mode?: unknown };
+  const cfg = extractionFeature.config as { model?: unknown; analysis_model?: unknown; locator_min_pages?: unknown; max_pages_per_call?: unknown; selected_pages_mode?: unknown };
   const model = AI_MODELS.some((m) => m.id === cfg.model) ? String(cfg.model) : DEFAULT_CONTRACT_MODEL;
+  const analysisModel = AI_MODELS.some((m) => m.id === cfg.analysis_model) ? String(cfg.analysis_model) : DEFAULT_ANALYSIS_MODEL;
   const locatorMinPages = clamp(Number(cfg.locator_min_pages) || 25, 5, 500);
   const maxPagesPerCall = clamp(Number(cfg.max_pages_per_call) || 20, 4, 40);
   const pagesMode: "auto" | "pdf" | "text" = cfg.selected_pages_mode === "pdf" || cfg.selected_pages_mode === "text" ? cfg.selected_pages_mode : "auto";
@@ -166,7 +181,7 @@ async function processContractCaseInner(caseId: string, injectedDeps?: ContractE
     const learningsByType = new Map<string, typeof learnings>();
     for (const learning of learnings) (learningsByType.get(learning.documentType) ?? learningsByType.set(learning.documentType, []).get(learning.documentType)!).push(learning);
 
-    const summary: Array<{ documentId: string; type: string; typeName: string; fields: number; pages?: number[]; pageCount?: number }> = [];
+    const summary: Array<{ documentId: string; type: string; typeName: string; fields: number; pages?: number[]; pageCount?: number; typeWarning?: string }> = [];
     const docsByType: DocsByType = {};
     const referenceNode = plan.flow?.nodes.find((node) => node.kind === "reference_lookup");
     if (referenceNode) {
@@ -218,6 +233,10 @@ async function processContractCaseInner(caseId: string, injectedDeps?: ContractE
       // La casilla del caso fija el tipo; sin casilla, la IA lo clasifica.
       const presetType = doc.detectedType && plan.docTypes.some((type) => type.key === doc.detectedType) ? doc.detectedType : null;
       const classifiedTypeKey = presetType ?? await deps.classify(source, plan.docTypes, undefined, doc.originalName ?? undefined);
+      // Con casilla, la IA igual clasifica (en paralelo a la extracción) solo para avisar si no coincide.
+      const typeCheck = presetType && plan.docTypes.length > 1
+        ? deps.classify(source, plan.docTypes, undefined, doc.originalName ?? undefined).catch(() => null)
+        : null;
       const typeKey = plan.docTypes.some((type) => type.key === classifiedTypeKey)
         ? classifiedTypeKey
         : inferTypeFromFileName(doc.originalName, plan.docTypes) ?? (plan.docTypes.length === 1 ? plan.docTypes[0].key : "unknown");
@@ -259,6 +278,10 @@ async function processContractCaseInner(caseId: string, injectedDeps?: ContractE
         ({ values, citations } = await deps.extract(source, typeName, fields, undefined, learningsByType.get(typeKey) ?? [], visualByType.get(typeKey) ?? []));
       }
 
+      const typeWarning = presetType
+        ? slotTypeWarning({ expected: typeName, detected: await typeCheck, docTypes: plan.docTypes, filled: fields.filter((f) => !isBlank(values[f.fieldKey])).length, total: fields.length })
+        : null;
+
       await db.update(contractDocuments).set({
         detectedType:  typeKey,
         ocrMode:       mode,
@@ -271,6 +294,7 @@ async function processContractCaseInner(caseId: string, injectedDeps?: ContractE
       summary.push({
         documentId: doc.id, type: typeKey, typeName, fields: Object.keys(values).length,
         ...(useLocator ? { pages: [...pagesUsed].sort((a, b) => a - b), pageCount: pageCount ?? pages.length } : {}),
+        ...(typeWarning ? { typeWarning } : {}),
       });
     }
 
@@ -287,7 +311,7 @@ async function processContractCaseInner(caseId: string, injectedDeps?: ContractE
             ruleName: configured.name,
             severity: configured.severity ?? "warn",
             outputMode: configured.conditionsJson.outputMode ?? "free",
-            response: await runAiAnalysis(configured.conditionsJson, docsByType),
+            response: await runAiAnalysis(configured.conditionsJson, docsByType, analysisModel),
           };
         } catch (error) {
           // A transient model/provider failure must not discard an otherwise

@@ -5,6 +5,7 @@ import { and, eq, ne, sql } from "drizzle-orm";
 import { uploadFile } from "@/lib/storage/minio";
 import { extractFromFile, mapInvoice, configuredEffort } from "./extract";
 import { parseJsonObject } from "@/lib/ai/provider";
+import { mergeDocMetrics } from "./doc-metrics";
 import { buildUiPayload } from "./match";
 import { processInNetSuite } from "./process-ns";
 import { buildNsPayload, draftWithPo } from "./ns-payload";
@@ -340,6 +341,8 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
         // Modo QA: el duplicado se acepta y se anota en el envío QA.
         qaDuplicateOf = existing.id;
       } else if (existing) {
+        // Monto que se habría pagado dos veces (métrica «Duplicados evitados»).
+        await mergeDocMetrics(docId, { duplicate: { of: existing.id, amount: extraction.invoice.total ?? null, currency: extraction.invoice.currency ?? null, at: new Date().toISOString() } }).catch(() => {});
         throw new Error(
           `Factura duplicada: ${extraction.invoice.vendor} #${extraction.invoice.invoiceNumber} ya existe (doc #${existing.id})`
         );
@@ -370,6 +373,12 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
         vendorSimilarityThreshold: autoMapping?.vendor_suggest_similarity,
       },
     });
+    // Líneas asignadas solas por la memoria de mapeos (métrica «Auto-mapeo»).
+    await mergeDocMetrics(docId, { mapping: {
+      lines: payload.document.lines.length,
+      assigned: payload.document.lines.filter((l) => l.selected_item_id).length,
+      fromMemory: payload.document.lines.filter((l) => l.selected_item_id && l.recommendation_source === "memory").length,
+    } }).catch(() => {});
 
     await logWorkflow({
       organizationId: input.organizationId,

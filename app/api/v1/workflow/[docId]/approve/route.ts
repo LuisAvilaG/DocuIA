@@ -10,6 +10,8 @@ import { getActiveNsConnection, nsCredentials } from "@/lib/netsuite/connection"
 import { draftFromReviewBody, storedDraft, type NsDraft } from "@/lib/workflow/ns-payload";
 import { gateDraftAgainstPo, loadFeatureFlags, type ApChecks } from "@/lib/workflow/ap-checks";
 import { postClaimedDocument } from "@/lib/workflow/post-draft";
+import { reviewCorrections } from "@/lib/workflow/review-corrections";
+import { mergeDocMetrics, poAcceptance } from "@/lib/workflow/doc-metrics";
 
 type Params = { params: Promise<{ docId: string }> };
 type WaitingStatus = "review" | "pending_approval";
@@ -88,6 +90,10 @@ async function handlePOST(req: NextRequest, { params }: Params) {
   }
 
   const base = doc.products && typeof doc.products === "object" ? doc.products as Record<string, unknown> : {};
+  // Lo que la persona corrigió respecto de la lectura (métrica «Precisión de lectura»).
+  if (from === "review") {
+    await mergeDocMetrics(docIdNum, { corrections: { fields: reviewCorrections(base, draft), at: new Date().toISOString(), by: session.sub } }).catch(() => {});
+  }
   const park = async (status: "pending_approval" | "awaiting_receipt", reason: string | null, extra: Record<string, unknown> = {}) => {
     const now = new Date();
     const recheckHours = Math.min(48, Math.max(1, Number(flags.getConfig("three_way_match").recheck_hours) || 2));
@@ -125,6 +131,15 @@ async function handlePOST(req: NextRequest, { params }: Params) {
   const gateChecks = gate.comparison && previous?.po
     ? { ap_checks: { ...previous, po: { ...previous.po, selectedPoId: draft.poId, comparison: gate.comparison, outcome: gate.outcome } } }
     : {};
+  // Diferencia con la OC y cómo se acepta (métrica «Diferencias con la OC»).
+  if (gate.comparison && gate.outcome && gate.outcome.kind !== "await_receipt") {
+    const c = gate.comparison;
+    await mergeDocMetrics(docIdNum, { po: {
+      poId: c.poInternalId, invoiceTotal: c.invoiceTotal, poTotal: c.poTotal, difference: c.totalDifference, differencePct: c.totalDifferencePct,
+      withinTolerance: c.totalWithinTolerance, linesWithinTolerance: c.counts.price_within_tolerance ?? 0, outcome: gate.outcome.kind,
+      accepted: poAcceptance(c, gate.outcome.kind), by: session.sub, at: new Date().toISOString(),
+    } }).catch(() => {});
+  }
   if (gate.outcome?.kind === "await_receipt") return park("awaiting_receipt", gate.outcome.reason, gateChecks);
   if ((gate.outcome?.kind === "needs_approval" || gate.outcome?.kind === "blocked") && !approver) {
     // An approver may send it anyway; everyone else hands it to one.

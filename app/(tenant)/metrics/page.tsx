@@ -8,6 +8,8 @@ import { and, count, desc, eq, gte, isNotNull, sql, sum } from "drizzle-orm";
 import { isFeatureEnabled } from "@/lib/features";
 import { loadApStats, type ApStats, type Period } from "@/lib/stats/ap-stats";
 import { StatsFilters } from "./filters";
+import { loadApMetrics, type ApMetrics } from "@/lib/stats/ap-metrics";
+import { MoreMetrics } from "./more-metrics";
 
 type Search = { period?: string; sub?: string; vendor?: string; group?: string; qa?: string };
 
@@ -133,8 +135,13 @@ export default async function StatisticsPage({ searchParams }: { searchParams: P
   const byCategory = categoryStats && sp.group === "category";
 
   let stats: ApStats | null = null;
+  let more: ApMetrics | null = null;
+  const filters = { organizationId: session.orgId, period, subsidiaryId, vendor, includeQa };
   try {
-    stats = await loadApStats({ organizationId: session.orgId, period, subsidiaryId, vendor, includeQa }, { byCategory });
+    [stats, more] = await Promise.all([
+      loadApStats(filters, { byCategory }),
+      loadApMetrics(filters).catch((err) => { console.error("[metrics]", err); return null; }),
+    ]);
   } catch (err) {
     console.error("[statistics]", err);
   }
@@ -335,6 +342,8 @@ export default async function StatisticsPage({ searchParams }: { searchParams: P
                 </div>
               </section>
             )}
+
+            {more && <MoreMetrics m={more} />}
 
             {expense && (
               <>

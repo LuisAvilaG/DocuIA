@@ -183,6 +183,13 @@
       "when": 1794414359666,
       "tag": "0025_validation_evidence",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1794416812824,
+      "tag": "0026_doc_metrics",
+      "breakpoints": true
     }
   ]
 }

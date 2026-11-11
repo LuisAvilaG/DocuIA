@@ -9,8 +9,9 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import {
-  Loader2, Save, Plus, Trash2, FileInput, ListChecks, Calculator, ShieldCheck, FileText, FileSearch, ChevronDown, ChevronUp, StickyNote, PencilRuler, Sparkles, BookMarked, FileUp, PanelLeft,
+  Loader2, Save, Plus, Trash2, ArrowLeft, X, FileInput, ListChecks, Calculator, ShieldCheck, FileText, FileSearch, ChevronDown, ChevronUp, StickyNote, PencilRuler, Sparkles, BookMarked, FileUp, PanelLeft,
 } from "lucide-react";
+import { btn, StatusPill } from "@/components/kit";
 import { DocEditor } from "./doc-editor";
 import { VisualTrainingWorkspace, type TrainingField } from "./visual-training-workspace";
 import { WordTemplateWorkspace } from "./word-template-workspace";
@@ -28,12 +29,12 @@ function genInitialHtml(data: Record<string, unknown>): string {
 type Kind = "intake" | "extract" | "calculate" | "validate" | "reference_lookup" | "generate" | "note";
 
 const KIND_META: Record<Kind, { title: string; hint: string; Icon: typeof FileInput; hasIn: boolean; hasOut: boolean }> = {
-  intake:   { title: "Entrada",    hint: "Qué documento entra",       Icon: FileInput,   hasIn: false, hasOut: true },
-  extract:  { title: "Extracción", hint: "Qué datos saca la IA",       Icon: ListChecks,  hasIn: true,  hasOut: true },
-  calculate:{ title: "Cálculo",    hint: "Valor derivado con fórmula", Icon: Calculator,   hasIn: true,  hasOut: true },
-  validate: { title: "Validación", hint: "Regla de cruce entre docs",  Icon: ShieldCheck, hasIn: true,  hasOut: true },
-  reference_lookup: { title: "Referencias", hint: "Rastrea documentos citados", Icon: FileSearch, hasIn: true, hasOut: true },
-  generate: { title: "Generación", hint: "Documento final",            Icon: FileText,    hasIn: true,  hasOut: false },
+  intake:   { title: "Documento esperado", hint: "Qué sube el usuario",       Icon: FileInput,   hasIn: false, hasOut: true },
+  extract:  { title: "Extracción", hint: "Datos que lee la IA",       Icon: ListChecks,  hasIn: true,  hasOut: true },
+  calculate:{ title: "Cálculo",    hint: "Primas, porcentajes, sumas", Icon: Calculator,   hasIn: true,  hasOut: true },
+  validate: { title: "Control",    hint: "Una regla que se cumple o no",  Icon: ShieldCheck, hasIn: true,  hasOut: true },
+  reference_lookup: { title: "Búsqueda en el Archivo", hint: "Documentos que cita el caso", Icon: FileSearch, hasIn: true, hasOut: true },
+  generate: { title: "Documento a generar", hint: "Word o PDF al aprobar",            Icon: FileText,    hasIn: true,  hasOut: false },
   note:     { title: "Nota",       hint: "Comentario para el equipo",  Icon: StickyNote,  hasIn: false, hasOut: false },
 };
 
@@ -136,6 +137,10 @@ function IntakeForm({ data, patch, order, total, onMove }: { data: AnyData; patc
       <FieldRow label="Nombre del documento"><input className={inp} value={String(data.name ?? "")} onChange={(e) => patch({ name: e.target.value })} placeholder="Contrato" /></FieldRow>
       <FieldRow label="Clave (key)"><input className={`${inp} font-mono`} value={String(data.docTypeKey ?? "")} onChange={(e) => patch({ docTypeKey: e.target.value })} placeholder="contrato" /></FieldRow>
       <FieldRow label="Pista para la IA (opcional)"><textarea rows={2} className={inp} value={String(data.hint ?? "")} onChange={(e) => patch({ hint: e.target.value })} placeholder="acuerdo comercial entre la sociedad y un tercero" /></FieldRow>
+      <label className="flex items-start gap-2 text-[13px]">
+        <input type="checkbox" className="mt-0.5 size-4 accent-primary" checked={data.required !== false} onChange={(e) => patch({ required: e.target.checked })} />
+        <span>Obligatorio al crear el caso<span className="block text-xs text-muted-foreground">Si no lo es, su casilla aparece como «Opcional» y el caso se puede crear sin él.</span></span>
+      </label>
     </div>
   );
 }
@@ -654,6 +659,7 @@ function FlowBuilder({ flowId }: { flowId: string }) {
   // Version loaded from the server; saving sends it back so a concurrent edit
   // by another admin is reported instead of silently overwritten.
   const versionRef = useRef<number | null>(null);
+  const [version, setVersion] = useState<number | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [docEditorOpen, setDocEditorOpen] = useState(false);
   const [wordTemplateOpen, setWordTemplateOpen] = useState(false);
@@ -673,7 +679,7 @@ function FlowBuilder({ flowId }: { flowId: string }) {
     (async () => {
       try {
         const d = await fetch(`/api/v1/contracts/flow/${flowId}`).then((r) => r.json());
-        if (d.flow) { setName(d.flow.name ?? "Flujo"); setGraph(d.flow.graph ?? { nodes: [], edges: [] }); versionRef.current = d.flow.version ?? null; }
+        if (d.flow) { setName(d.flow.name ?? "Flujo"); setGraph(d.flow.graph ?? { nodes: [], edges: [] }); versionRef.current = d.flow.version ?? null; setVersion(d.flow.version ?? null); }
       } finally { setLoading(false); }
     })();
   }, [flowId, setGraph]);
@@ -740,7 +746,7 @@ function FlowBuilder({ flowId }: { flowId: string }) {
     try {
       const res = await fetch(`/api/v1/contracts/flow/${flowId}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, graph, version: versionRef.current }) });
       const d = await res.json();
-      if (res.ok && typeof d.version === "number") versionRef.current = d.version;
+      if (res.ok && typeof d.version === "number") { versionRef.current = d.version; setVersion(d.version); }
       setMsg(res.ok ? { ok: true, text: `Guardado (v${d.version ?? 1})` } : { ok: false, text: d.error ?? "Error al guardar" });
     } catch { setMsg({ ok: false, text: "Sin conexión" }); }
     finally { setSaving(false); }
@@ -794,23 +800,45 @@ function FlowBuilder({ flowId }: { flowId: string }) {
 
   if (loading) return <div className="flex-1 flex items-center justify-center"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>;
 
+  const stageCount = nodes.filter((n) => n.type !== "note").length;
+
   return (
-    <div className="flex-1 flex flex-col min-h-0">
-      <header className="border-b border-border px-5 py-3 shrink-0 flex items-center gap-3 flex-wrap">
-        <div className="mr-auto min-w-0">
-          <Link href="/contracts/flow" className="text-[11px] text-muted-foreground hover:text-foreground">← Flujos</Link>
+    <div className="flex min-h-0 flex-1 flex-col">
+      <header className="flex shrink-0 flex-wrap items-center gap-3 border-b border-border bg-card px-5 py-3">
+        <Link href="/contracts/flow" className="inline-flex items-center gap-1.5 text-[13px] text-link hover:underline"><ArrowLeft className="size-4" />Flujos</Link>
+        <span aria-hidden className="h-6 w-px bg-border" />
+        <label className="min-w-0">
+          <span className="sr-only">Nombre del flujo</span>
           <input value={name} onChange={(e) => setName(e.target.value)}
-            className="block bg-transparent text-base font-semibold tracking-[-0.01em] text-foreground outline-none border-b border-transparent focus:border-border mt-1 min-w-0" />
-        </div>
-        {msg && <span className={`text-xs ${msg.ok ? "text-success" : "text-destructive"}`}>{msg.text}</span>}
-        <button onClick={save} disabled={saving}
-          className="inline-flex items-center gap-2 rounded-md bg-primary text-primary-foreground px-4 py-2 text-xs font-medium shadow-[0_1px_3px_oklch(0.48_0.15_182_/_0.3)] hover:bg-primary/90 disabled:opacity-60 transition-colors">
-          {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />} Guardar flujo
+            className="min-w-[220px] rounded-md border border-transparent bg-transparent px-1.5 py-1 text-[17px] font-semibold tracking-[-0.01em] outline-none hover:border-border focus:border-primary" />
+        </label>
+        {version !== null && <StatusPill tone="mute">v{version}</StatusPill>}
+        <span className="text-[12.5px] text-muted-foreground">{stageCount} etapa{stageCount === 1 ? "" : "s"}</span>
+        <span className="flex-1" />
+        {msg && <span role="status" className={`text-[13px] ${msg.ok ? "text-tone-ok" : "text-tone-err"}`}>{msg.text}</span>}
+        <button type="button" onClick={save} disabled={saving} className={btn("primary")}>
+          {saving ? <Loader2 className="animate-spin" /> : <Save />} Guardar flujo
         </button>
       </header>
 
-      <div className="flex-1 flex min-h-0">
-        <div className="flex-1 min-h-0 bg-background" style={{ minHeight: 480 }} onDrop={onDrop} onDragOver={onDragOver}>
+      <div className="grid min-h-0 flex-1 grid-cols-[216px_minmax(0,1fr)_400px]">
+        <aside aria-label="Etapas disponibles" className="flex min-h-0 flex-col gap-1.5 overflow-y-auto border-r border-border bg-card p-3">
+          <h2 className="px-1.5 pb-1 pt-1 text-xs font-semibold uppercase tracking-[0.06em] text-foreground/75">Agregar etapa</h2>
+          {(Object.keys(KIND_META) as Kind[]).map((k) => {
+            const M = KIND_META[k];
+            return (
+              <button key={k} type="button" onClick={() => addNode(k)} draggable
+                onDragStart={(e) => { e.dataTransfer.setData("application/flowkind", k); e.dataTransfer.effectAllowed = "copy"; }}
+                className="flex w-full cursor-grab items-start gap-2.5 rounded-lg border border-transparent p-2 text-left transition-colors hover:border-border hover:bg-background active:cursor-grabbing">
+                <span className="mt-px flex size-7 shrink-0 items-center justify-center rounded-md bg-tone-info-bg text-tone-info"><M.Icon className="size-4" /></span>
+                <span className="min-w-0"><b className="block text-[13px] font-semibold leading-snug">{M.title}</b><span className="block text-xs leading-snug text-muted-foreground">{M.hint}</span></span>
+              </button>
+            );
+          })}
+          <p className="mt-auto border-t border-line-soft px-1.5 pt-3 text-xs leading-relaxed text-muted-foreground">Arrastra una etapa al lienzo o tócala para agregarla. Conecta del punto derecho de una al izquierdo de la siguiente.</p>
+        </aside>
+
+        <div className="relative min-h-[480px] bg-background" onDrop={onDrop} onDragOver={onDragOver}>
           <ReactFlow
             nodes={displayNodes} edges={edges} nodeTypes={nodeTypes}
             onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect}
@@ -824,8 +852,8 @@ function FlowBuilder({ flowId }: { flowId: string }) {
             deleteKeyCode={["Backspace", "Delete"]}
             defaultEdgeOptions={{
               type: "smoothstep",
-              style: { stroke: "var(--color-muted-foreground)", strokeWidth: 2 },
-              markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: "var(--color-muted-foreground)" },
+              style: { stroke: "#A9A49A", strokeWidth: 1.6 },
+              markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: "#A9A49A" },
             }}
             fitView proOptions={{ hideAttribution: true }}
           >
@@ -833,51 +861,37 @@ function FlowBuilder({ flowId }: { flowId: string }) {
             <Controls showInteractive={false} />
             <MiniMap pannable zoomable nodeColor="var(--color-primary)" maskColor="oklch(0.975 0.006 75 / 0.6)" />
           </ReactFlow>
+          {nodes.length === 0 && (
+            <p className="pointer-events-none absolute left-4 top-4 rounded-lg border border-border bg-card px-3 py-2 text-[12.5px] text-muted-foreground">Empieza con «Documento esperado»: lo que sube el usuario al crear un caso.</p>
+          )}
         </div>
 
-        <aside className="w-80 shrink-0 border-l border-border overflow-y-auto bg-card">
+        <aside aria-label="Configuración de la etapa" className="flex min-h-0 flex-col overflow-y-auto border-l border-border bg-card">
           {!selected ? (
-            <div className="p-5 space-y-4">
-              <div>
-                <h2 className="text-sm font-semibold text-foreground">Agrega una etapa</h2>
-                <p className="text-xs text-muted-foreground mt-1 leading-relaxed"><strong className="text-foreground font-medium">Arrastra</strong> una tarjeta al lienzo (o haz clic para añadirla), luego conecta los nodos arrastrando del punto derecho de uno al izquierdo del siguiente. Orden: Entrada → Extracción → Cálculo → Validación → Generación. La Nota es solo visual y no altera el procesamiento.</p>
-              </div>
-              <div className="space-y-2">
-                {(Object.keys(KIND_META) as Kind[]).map((k, i) => {
-                  const M = KIND_META[k];
-                  return (
-                    <button key={k} onClick={() => addNode(k)} draggable
-                      onDragStart={(e) => { e.dataTransfer.setData("application/flowkind", k); e.dataTransfer.effectAllowed = "copy"; }}
-                      className="w-full flex items-center gap-3 rounded-lg border border-border bg-background hover:border-primary/50 hover:bg-primary/5 p-3 text-left transition-colors cursor-grab active:cursor-grabbing group">
-                      <span className="w-8 h-8 rounded-md bg-primary/10 text-primary flex items-center justify-center shrink-0"><M.Icon className="w-4 h-4" /></span>
-                      <div className="min-w-0">
-                        <p className="text-xs font-medium text-foreground">{k === "note" ? M.title : `${i + 1}. ${M.title}`}</p>
-                        <p className="text-[11px] text-muted-foreground">{M.hint}</p>
-                      </div>
-                      <Plus className="w-3.5 h-3.5 text-muted-foreground ml-auto shrink-0 group-hover:text-primary" />
-                    </button>
-                  );
-                })}
-              </div>
-              <p className="text-[11px] text-muted-foreground leading-relaxed border-t border-border pt-3">Todo lo que el motor hace con un caso sale de este flujo. Haz clic en un nodo para configurarlo.</p>
+            <div className="flex flex-col gap-3 p-5">
+              <h2 className="text-[15px] font-semibold">Elige una etapa</h2>
+              <p className="text-[13px] leading-relaxed text-muted-foreground">Toca una etapa del lienzo para configurarla. El orden de un caso es: documentos esperados → extracción → cálculos → controles → documento a generar. Las notas son solo visuales.</p>
             </div>
           ) : (
-            <div className="p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-foreground">
-                  {(() => { const M = KIND_META[selected.type as Kind]; return M ? <M.Icon className="w-3.5 h-3.5 text-primary" /> : null; })()}
-                  {KIND_META[selected.type as Kind]?.title}
-                </span>
-                <button onClick={deleteSelected} className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-destructive"><Trash2 className="w-3.5 h-3.5" /> Eliminar</button>
+            <>
+              <div className="flex items-start justify-between gap-3 border-b border-line-soft px-5 pb-3.5 pt-4">
+                <div className="min-w-0">
+                  <p className="text-[12.5px] text-muted-foreground">{KIND_META[selected.type as Kind]?.title}</p>
+                  <h2 className="truncate text-[17px] font-semibold tracking-[-0.01em]">{String((selected.data as AnyData).name || (selected.data as AnyData).label || KIND_META[selected.type as Kind]?.title || "Etapa")}</h2>
+                </div>
+                <button type="button" onClick={() => setSelectedId(null)} aria-label="Cerrar" className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-border text-foreground/70 hover:text-foreground"><X className="size-4" /></button>
               </div>
-              {selected.type === "intake"   && <IntakeForm   data={selected.data as AnyData} patch={patchSelected} order={intakeOrder.get(selected.id)} total={intakeOrder.size} onMove={(dir) => moveIntake(selected.id, dir)} />}
-              {selected.type === "extract"  && <ExtractForm  data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} onTrain={setVisualTraining} />}
-              {selected.type === "calculate" && <CalculationForm key={selected.id} data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} fieldsByType={fieldsByType} analysisNodes={analysisNodes} />}
-              {selected.type === "validate" && <ValidateForm data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} fieldsByType={fieldsByType} />}
-              {selected.type === "reference_lookup" && <div className="space-y-3"><FieldRow label="Nombre de la etapa"><input className={inp} value={String((selected.data as AnyData).name ?? "")} onChange={(event) => patchSelected({ name: event.target.value })} /></FieldRow><FieldRow label="Si falta el documento citado"><select className={inp} value={String((selected.data as AnyData).severity ?? "warn")} onChange={(event) => patchSelected({ severity: event.target.value })}><option value="info">Informativo</option><option value="warn">Revisión</option><option value="block">Bloqueante</option></select></FieldRow><p className="text-xs leading-relaxed text-muted-foreground">Detecta códigos en los documentos de entrada, busca su origen en el Archivo y compara la pertinencia del asunto. Los enlaces inciertos se revisan en Archivo.</p></div>}
-              {selected.type === "generate" && <GenerateForm data={selected.data as AnyData} patch={patchSelected} onOpenEditor={() => setDocEditorOpen(true)} onOpenWordTemplate={() => setWordTemplateOpen(true)} />}
-              {selected.type === "note" && <p className="text-xs leading-relaxed text-muted-foreground">Edita el texto directamente en el bloque. Arrastra los controles de sus bordes para ajustar el ancho o alto. Esta nota no crea reglas ni cambia el resultado del caso.</p>}
-            </div>
+              <div className="flex flex-col gap-3 p-5">
+                {selected.type === "intake"   && <IntakeForm   data={selected.data as AnyData} patch={patchSelected} order={intakeOrder.get(selected.id)} total={intakeOrder.size} onMove={(dir) => moveIntake(selected.id, dir)} />}
+                {selected.type === "extract"  && <ExtractForm  data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} onTrain={setVisualTraining} />}
+                {selected.type === "calculate" && <CalculationForm key={selected.id} data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} fieldsByType={fieldsByType} analysisNodes={analysisNodes} />}
+                {selected.type === "validate" && <ValidateForm data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} fieldsByType={fieldsByType} />}
+                {selected.type === "reference_lookup" && <div className="space-y-3"><FieldRow label="Nombre de la etapa"><input className={inp} value={String((selected.data as AnyData).name ?? "")} onChange={(event) => patchSelected({ name: event.target.value })} /></FieldRow><FieldRow label="Si falta el documento citado"><select className={inp} value={String((selected.data as AnyData).severity ?? "warn")} onChange={(event) => patchSelected({ severity: event.target.value })}><option value="info">Informar</option><option value="warn">Advertir</option><option value="block">Bloquear</option></select></FieldRow><p className="text-xs leading-relaxed text-muted-foreground">Detecta códigos en los documentos de entrada, busca su origen en el Archivo y compara si tratan el mismo asunto. Los enlaces dudosos se revisan en Archivo.</p></div>}
+                {selected.type === "generate" && <GenerateForm data={selected.data as AnyData} patch={patchSelected} onOpenEditor={() => setDocEditorOpen(true)} onOpenWordTemplate={() => setWordTemplateOpen(true)} />}
+                {selected.type === "note" && <p className="text-[13px] leading-relaxed text-muted-foreground">Edita el texto directamente en el lienzo y ajusta su tamaño desde los bordes. Una nota no cambia el resultado del caso.</p>}
+                <button type="button" onClick={deleteSelected} className="mt-2 inline-flex items-center gap-1.5 self-start text-[13px] font-semibold text-tone-err hover:underline"><Trash2 className="size-4" />Quitar esta etapa</button>
+              </div>
+            </>
           )}
         </aside>
       </div>

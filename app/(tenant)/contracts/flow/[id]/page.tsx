@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { isProductActive } from "@/lib/products";
 import { isFeatureEnabled } from "@/lib/features";
-import { ContractFlowClient } from "../client";
+import { ContractFlowEditor } from "../editor-lazy";
 
 export default async function ContractFlowEditorPage({ params }: { params: Promise<{ id: string }> }) {
   const session = await getTenantSession({ area: "contracts" });
@@ -11,5 +11,5 @@ export default async function ContractFlowEditorPage({ params }: { params: Promi
   if (!(await isFeatureEnabled(session.orgId, "contract_flow_builder"))) redirect("/contracts/dashboard");
   if (session.role !== "admin") redirect("/cases");
   const { id } = await params;
-  return <ContractFlowClient flowId={id} />;
+  return <ContractFlowEditor flowId={id} />;
 }

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Loader2, Plus, Trash2, Copy, Pencil, Workflow, X, Power, Download, Upload } from "lucide-react";
+import { btn, PageFrame } from "@/components/kit";
 import { referenceDemoGraph } from "@/lib/contracts/reference-demo";
 
 interface FlowRow { id: string; name: string; version: number; isActive: boolean; updatedAt: string }
@@ -121,31 +122,26 @@ export function ContractFlowsListClient() {
   if (loading) return <div className="flex-1 flex items-center justify-center"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>;
 
   return (
-    <div className="flex-1 overflow-y-auto p-6">
-      <div className="max-w-3xl mx-auto space-y-5">
-        <div className="flex items-end justify-between gap-3">
-          <div>
-            <Link href="/cases" className="text-[11px] text-muted-foreground hover:text-foreground">← Casos</Link>
-            <h1 className="text-base font-semibold tracking-[-0.01em] text-foreground mt-1">Flujos de contratos</h1>
-            <p className="text-xs text-muted-foreground mt-0.5">Exporta un flujo para llevarlo a otro cliente. El archivo incluye sus plantillas Word y muestras visuales; al importarlo queda como borrador.</p>
+    <PageFrame>
+      <div className="flex flex-col gap-5">
+        <header className="flex flex-wrap items-end justify-between gap-4">
+          <div className="max-w-2xl">
+            <p className="text-xs font-semibold uppercase tracking-[0.06em] text-link">Configuración</p>
+            <h1 className="mt-1 text-[26px] font-semibold leading-tight tracking-[-0.025em]">Flujos</h1>
+            <p className="mt-1.5 text-sm text-muted-foreground">Cada flujo define qué documentos pide un caso, qué datos lee, qué calcula y qué controla. {flows.length} de {maxFlows} flujos.</p>
           </div>
-          <div className="flex flex-col items-end gap-1 shrink-0">
-            <div className="flex items-center gap-2">
-              <input ref={importInput} type="file" accept=".json,.docuia-flow.json,application/json" className="sr-only" aria-label="Archivo de flujo para importar" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importFlow(file); }} />
-              <button type="button" onClick={() => importInput.current?.click()} disabled={busy || atLimit} title={atLimit ? `Máximo ${maxFlows} flujos` : "Importar un flujo exportado desde otra cuenta"}
-                className="inline-flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-xs font-medium text-foreground hover:bg-secondary disabled:opacity-50 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary">
-                <Upload className="w-3.5 h-3.5" /> Importar
-              </button>
-              <button onClick={create} disabled={busy || atLimit} title={atLimit ? `Máximo ${maxFlows} flujos` : "Crear un flujo"}
-                className="inline-flex items-center gap-2 rounded-md bg-primary text-primary-foreground px-4 py-2 text-xs font-medium shadow-[0_1px_3px_oklch(0.48_0.15_182_/_0.3)] hover:bg-primary/90 disabled:opacity-50 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary">
-                {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />} Nuevo flujo
-              </button>
-            </div>
-            <span className="text-[10px] text-muted-foreground tabular-nums">{flows.length} / {maxFlows} flujos</span>
+          <div className="flex items-center gap-2">
+            <input ref={importInput} type="file" accept=".json,.docuia-flow.json,application/json" className="sr-only" aria-label="Archivo de flujo para importar" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importFlow(file); }} />
+            <button type="button" onClick={() => importInput.current?.click()} disabled={busy || atLimit} title={atLimit ? `Máximo ${maxFlows} flujos` : "Importar un flujo exportado desde otra cuenta"} className={btn("secondary")}>
+              <Upload /> Importar
+            </button>
+            <button type="button" onClick={create} disabled={busy || atLimit} title={atLimit ? `Máximo ${maxFlows} flujos` : "Crear un flujo"} className={btn("primary")}>
+              {busy ? <Loader2 className="animate-spin" /> : <Plus />} Nuevo flujo
+            </button>
           </div>
-        </div>
+        </header>
 
-        {err && <p className="text-xs text-destructive">{err}</p>}
+        {err && <p role="alert" className="text-sm text-tone-err">{err}</p>}
 
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3"><div><p className="text-xs font-semibold">Demo · Rastreo de correspondencia</p><p className="mt-0.5 text-[11px] text-muted-foreground">Entrada → extracción → búsqueda de referencias → informe. Se crea como borrador para que lo revises antes de activarlo.</p></div><button type="button" onClick={createReferenceDemo} disabled={busy || atLimit} className="rounded-md border border-primary/30 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/5 disabled:opacity-50">Crear flujo de demo</button></div>
 
@@ -208,6 +204,6 @@ export function ContractFlowsListClient() {
           </div>
         </div>
       )}
-    </div>
+    </PageFrame>
   );
 }

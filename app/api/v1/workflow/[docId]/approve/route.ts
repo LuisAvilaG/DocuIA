@@ -89,6 +89,13 @@ async function handlePOST(req: NextRequest, { params }: Params) {
     if (poError) return NextResponse.json({ error: poError }, { status: 422 });
   }
 
+  // The review screen blocks this too, but an API client or a stale tab must
+  // not be able to post a standalone bill for a vendor that requires a PO.
+  const previous = storedChecks(doc.products);
+  if (!draft.poId && doc.documentType !== "purchase_order" && flags.isEnabled("po_matching") && previous?.vendorRule?.poRequirement === "required") {
+    return NextResponse.json({ error: "Este proveedor requiere una orden de compra. Elige la OC antes de enviar." }, { status: 422 });
+  }
+
   const base = doc.products && typeof doc.products === "object" ? doc.products as Record<string, unknown> : {};
   // Lo que la persona corrigió respecto de la lectura (métrica «Precisión de lectura»).
   if (from === "review") {
@@ -120,7 +127,6 @@ async function handlePOST(req: NextRequest, { params }: Params) {
   if (requestApproval) return park("pending_approval", "Enviada a aprobación por el revisor");
 
   // Check the (possibly edited) draft against its PO before posting it.
-  const previous = storedChecks(doc.products);
   const gate = await gateDraftAgainstPo({
     organizationId: session.orgId,
     draft,
@@ -128,6 +134,11 @@ async function handlePOST(req: NextRequest, { params }: Params) {
     storedChecks: previous,
     flags,
   });
+  // Without the PO there is nothing to compare against: posting now would skip
+  // tolerances, approval and the receipt check. The automatic path stops too.
+  if (gate.error) {
+    return NextResponse.json({ error: `No se pudo comparar la factura con la OC: ${gate.error}. Inténtalo de nuevo.` }, { status: 502 });
+  }
   const gateChecks = gate.comparison && previous?.po
     ? { ap_checks: { ...previous, po: { ...previous.po, selectedPoId: draft.poId, comparison: gate.comparison, outcome: gate.outcome } } }
     : {};

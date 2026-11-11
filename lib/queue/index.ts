@@ -86,7 +86,10 @@ export async function scheduleBatchCollection(organizationId: string, waitMinute
 async function scheduleBatchPoll(batchId: string, attempt: number, afterSeconds: number): Promise<void> {
   const b = await getBoss();
   await b.send(AI_BATCH_QUEUE, { kind: "poll", batchId, attempt } satisfies AiBatchJob, {
-    singletonKey: `poll:${batchId}`, singletonSeconds: afterSeconds, startAfter: afterSeconds,
+    // One key per attempt: pg-boss dedupes by (key, time slot), and the first
+    // poll (120 s) and the second (300 s) can land in the same slot, which
+    // silently dropped the second and left the batch unread.
+    singletonKey: `poll:${batchId}:${attempt}`, singletonSeconds: afterSeconds, startAfter: afterSeconds,
     retryLimit: 2, retryDelay: 60, expireInSeconds: 30 * 60,
   });
 }

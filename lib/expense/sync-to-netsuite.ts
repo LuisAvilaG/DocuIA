@@ -311,6 +311,17 @@ export async function syncReportToNetsuite(reportId: string, orgId: string): Pro
     }
   }
 
+  // A2b. The Expense Report is posted without a currency per line, so NetSuite
+  // books every amount in the report's currency. Mixed currencies would post
+  // a USD 100 line as 100 of whatever the others are.
+  const personalCurrencies = [...new Set(personalItems.map((item) => (item.currency ?? "").toUpperCase()).filter(Boolean))];
+  if (personalCurrencies.length > 1) {
+    preErrors.push(
+      `El informe mezcla monedas (${personalCurrencies.join(", ")}) en gastos personales y NetSuite los registraría todos en una sola. ` +
+      `Deja una sola moneda por informe o convierte los importes.`
+    );
+  }
+
   // A3. Vendor Bill items need NIT, a reference (documents equivalent receive a
   // deterministic one below), and the category's GL account.
   //     (the expense line on the bill is account-based, not item-based).

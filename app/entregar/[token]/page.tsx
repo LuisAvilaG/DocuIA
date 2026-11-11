@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { readUploadLink, MAX_FILES, MAX_FILE_BYTES } from "@/lib/contracts/upload-links";
+import { readUploadLink, MAX_FILES, MAX_FILE_BYTES, MAX_TOTAL_BYTES } from "@/lib/contracts/upload-links";
 import { DeliveryForm } from "./delivery-form";
 
 export const metadata: Metadata = { title: "Entregar documentos · DocuIA", robots: { index: false, follow: false } };
@@ -43,7 +43,7 @@ export default async function DeliverPage({ params }: { params: Promise<{ token:
                 El enlace vence el {link.expiresAt.toLocaleDateString("es-MX", { day: "numeric", month: "long" })} y sirve para una sola entrega.
               </p>
             </section>
-            <DeliveryForm token={token} maxFiles={MAX_FILES} maxMb={MAX_FILE_BYTES / 1024 / 1024} />
+            <DeliveryForm token={token} maxFiles={MAX_FILES} maxMb={MAX_FILE_BYTES / 1024 / 1024} maxTotalMb={MAX_TOTAL_BYTES / 1024 / 1024} />
           </>
         )}
         <p className="text-center text-xs text-muted-foreground">Enviado con DocuIA</p>

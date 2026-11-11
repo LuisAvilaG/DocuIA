@@ -51,6 +51,19 @@ function truthy(v: unknown): boolean {
   const s = String(v ?? "").trim().toLowerCase();
   return ["true", "1", "si", "sí", "yes", "revocado", "presente", "incluye", "x"].includes(s);
 }
+const CLAUSE_ABSENT = new Set(["", "false", "0", "no", "n/a", "na", "ninguna", "ninguno", "ausente", "no aplica", "no presente"]);
+/**
+ * Whether a clause field says the clause is in the document. The extraction
+ * returns the clause's own text (or null when it is not there), so any text
+ * that is not an explicit "no" counts as present.
+ */
+export function clausePresent(v: unknown): boolean {
+  if (typeof v === "boolean") return v;
+  if (Array.isArray(v)) return v.length > 0;
+  if (v === null || v === undefined) return false;
+  const s = String(v).trim().toLowerCase();
+  return !CLAUSE_ABSENT.has(s) && !/^no (se |hay |aparece|incluye|contiene|existe|figura|consta)/.test(s);
+}
 function toNumber(v: unknown): number | null {
   return normalizeContractNumber(v);
 }
@@ -181,7 +194,7 @@ function runCrossReference(r: Extract<ValidationRule, { kind: "cross_reference" 
 function runFieldMatch(r: Extract<ValidationRule, { kind: "field_match" }>, docs: DocsByType): Finding[] {
   const a = firstValue(docs, r.left), b = firstValue(docs, r.right);
   const subject = `${r.left.field} vs ${r.right.field}`;
-  if (a === undefined || b === undefined) return [unk(subject, "faltante", "Falta uno de los campos a comparar.")];
+  if (!hasValue(a) || !hasValue(b)) return [unk(subject, "faltante", "Falta uno de los campos a comparar.")];
   const equal = compareContractValues({
     left: a,
     right: b,
@@ -197,7 +210,7 @@ function runFieldMatch(r: Extract<ValidationRule, { kind: "field_match" }>, docs
 }
 
 function runClause(r: Extract<ValidationRule, { kind: "clause_presence" }>, docs: DocsByType): Finding[] {
-  const present = truthy(firstValue(docs, { docType: r.docType, field: r.field }));
+  const present = clausePresent(firstValue(docs, { docType: r.docType, field: r.field }));
   const mustExist = r.mustExist !== false;
   return [(mustExist ? present : !present)
     ? pass(r.field, present ? "presente" : "ausente", mustExist ? "La cláusula requerida está presente." : "La cláusula prohibida no aparece.")
@@ -232,6 +245,7 @@ function runDate(r: Extract<ValidationRule, { kind: "date_rule" }>, docs: DocsBy
     const ok = other ? d.getTime() < other.getTime() : null;
     checks.push({ label: `Antes de ${r.before.field}`, ok });
     if (ok === false) return [fail(r.field, "orden inválido", `${r.field} no es anterior a ${r.before.field}.`, checks)];
+    if (ok === null) return [unk(r.field, "sin fecha", `No se pudo leer ${r.before.field} para comparar.`, checks)];
   }
   return [pass(r.field, "válida", "La fecha cumple las condiciones.", checks)];
 }

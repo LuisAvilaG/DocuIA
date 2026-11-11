@@ -28,6 +28,15 @@ const noLiveJob = sql`NOT EXISTS (
     AND j.data->>'documentId' = ${historyDocuments.id}::text
 )`;
 
+// Bulk uploads wait as batch items (no pipeline job) until the provider's batch
+// ends, which can take hours. Past a day the batch is given up on.
+const notWaitingOnBatch = sql`NOT EXISTS (
+  SELECT 1 FROM ai_batch_items i
+  WHERE i.document_id = ${historyDocuments.id}
+    AND i.status IN ('pending', 'submitted')
+    AND i.created_at > now() - interval '26 hours'
+)`;
+
 async function handleGET(req: NextRequest) {
   if (!cronAuth(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -47,7 +56,7 @@ async function handleGET(req: NextRequest) {
       .where(and(
         inArray(historyDocuments.status, [...TRANSIENT_STATES]),
         lt(historyDocuments.updatedAt, cutoff),
-        or(inArray(historyDocuments.status, ["extracting", "processing"]), and(eq(historyDocuments.status, "uploaded"), noLiveJob)),
+        or(inArray(historyDocuments.status, ["extracting", "processing"]), and(eq(historyDocuments.status, "uploaded"), noLiveJob, notWaitingOnBatch)),
       ));
 
     const reaped = (result as unknown as { rowCount?: number }).rowCount ?? 0;

@@ -2,7 +2,7 @@ import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { historyDocuments, orgFeatures } from "@/db/schema";
-import { and, eq, gte, count, inArray, sql } from "drizzle-orm";
+import { and, eq, gte, lt, count, inArray, sql } from "drizzle-orm";
 import { getFeature } from "@/lib/features";
 import { sendEmail } from "@/lib/email/send";
 
@@ -12,17 +12,20 @@ function cronAuth(req: NextRequest): boolean {
   return req.headers.get("x-cron-secret") === secret;
 }
 
-function periodStart(frequency: string): Date {
+/**
+ * The period a report covers: the week or month that just ended. `until` is the
+ * start of the current one, which also identifies the report already sent.
+ */
+function reportWindow(frequency: string, now = new Date()): { from: Date; until: Date } {
   if (frequency === "monthly") {
-    const now = new Date();
-    return new Date(now.getFullYear(), now.getMonth(), 1);
+    return { from: new Date(now.getFullYear(), now.getMonth() - 1, 1), until: new Date(now.getFullYear(), now.getMonth(), 1) };
   }
-  const now = new Date();
   const day = now.getDay() || 7;
   const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day + 1);
-  monday.setHours(0, 0, 0, 0);
-  return monday;
+  return { from: new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() - 7), until: monday };
 }
+
+const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[c]!));
 
 function reportTypes(scope: string): Array<"invoice" | "purchase_order"> {
   if (scope === "invoice") return ["invoice"];
@@ -37,6 +40,7 @@ async function handleGET(req: NextRequest) {
 
   try {
     const orgs = await db.query.organizations.findMany({
+      where: (o, { inArray }) => inArray(o.status, ["active", "trial"]),
       columns: { id: true, name: true, billingEmail: true },
     });
 
@@ -54,10 +58,10 @@ async function handleGET(req: NextRequest) {
       const recipientsRaw = config.recipients ?? org.billingEmail ?? "";
       if (!recipientsRaw) { summary[org.id] = { skipped: "no recipients" }; continue; }
 
-      const since        = periodStart(frequency);
+      const { from: since, until } = reportWindow(frequency);
       const periodKey    = frequency === "monthly"
-        ? `${since.getFullYear()}-${String(since.getMonth() + 1).padStart(2, "0")}`
-        : since.toISOString().slice(0, 10);
+        ? `${until.getFullYear()}-${String(until.getMonth() + 1).padStart(2, "0")}`
+        : until.toISOString().slice(0, 10);
       if (config.last_sent_period === periodKey) {
         summary[org.id] = { skipped: "already sent for current period" };
         continue;
@@ -66,7 +70,7 @@ async function handleGET(req: NextRequest) {
       const periodLabel  = frequency === "monthly" ? "mensual" : "semanal";
       const periodRange  = frequency === "monthly"
         ? since.toLocaleDateString("es-MX", { month: "long", year: "numeric" })
-        : "últimos 7 días";
+        : `${since.toLocaleDateString("es-MX", { day: "numeric", month: "long" })} al ${new Date(until.getTime() - 86_400_000).toLocaleDateString("es-MX", { day: "numeric", month: "long", year: "numeric" })}`;
 
       const byStatus = await db
         .select({ status: historyDocuments.status, cnt: count() })
@@ -74,6 +78,7 @@ async function handleGET(req: NextRequest) {
         .where(and(
           eq(historyDocuments.organizationId, org.id),
           gte(historyDocuments.createdAt, since),
+          lt(historyDocuments.createdAt, until),
           inArray(historyDocuments.documentType, documentTypes),
         ))
         .groupBy(historyDocuments.status);
@@ -88,6 +93,7 @@ async function handleGET(req: NextRequest) {
         .where(and(
           eq(historyDocuments.organizationId, org.id),
           gte(historyDocuments.createdAt, since),
+          lt(historyDocuments.createdAt, until),
           inArray(historyDocuments.documentType, documentTypes),
           eq(historyDocuments.status, "completed"),
         ))
@@ -99,13 +105,13 @@ async function handleGET(req: NextRequest) {
 
       const vendorRows = topVendors
         .map(v => `<tr>
-          <td style="padding:6px 8px;border-bottom:1px solid #eee">${v.vendor ?? "—"}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #eee">${esc(v.vendor ?? "—")}</td>
           <td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right">${v.cnt}</td>
         </tr>`)
         .join("");
 
       const html = `<div style="font-family:sans-serif;max-width:540px;margin:0 auto;padding:24px;color:#111">
-        <h2 style="margin:0 0 4px">Reporte ${periodLabel} — ${org.name}</h2>
+        <h2 style="margin:0 0 4px">Reporte ${periodLabel} — ${esc(org.name)}</h2>
         <p style="color:#888;font-size:13px;margin:0 0 24px">${periodRange}</p>
         <div style="display:flex;gap:16px;margin:0 0 24px">
           <div style="flex:1;background:#f5f5f5;border-radius:8px;padding:16px;text-align:center">
@@ -137,13 +143,17 @@ async function handleGET(req: NextRequest) {
       </div>`;
 
       const recipients = recipientsRaw.split(",").map((s: string) => s.trim()).filter(Boolean);
+      let delivered = 0;
       for (const to of recipients) {
-        await sendEmail({
+        const r = await sendEmail({
           to,
           subject: `Reporte ${periodLabel} — ${org.name}`,
           html,
         });
+        if (r.ok) delivered++;
       }
+      // Nothing went out: leave the period open so tomorrow's run tries again.
+      if (delivered === 0) { summary[org.id] = { sent: false, error: "no se pudo enviar el correo" }; continue; }
 
       const [override] = await db.select({ configJson: orgFeatures.configJson })
         .from(orgFeatures)

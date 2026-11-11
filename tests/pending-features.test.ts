@@ -63,3 +63,23 @@ test("un bloqueante sin verificar queda a revisar, no pasa como correcto", async
   assert.equal(caseVerdict([{ ok: null, severity: "block" }, { ok: false, severity: "block" }]), "block");
   assert.equal(caseVerdict([{ ok: true, severity: "warn" }, { ok: null, severity: "info" }]), "ok");
 });
+
+test("una cláusula con su texto cuenta como presente; vacía o negada, como ausente", async () => {
+  const { clausePresent } = await import("../lib/contracts/validate");
+  assert.equal(clausePresent("El contratista indemnizará a la entidad por todo daño."), true);
+  assert.equal(clausePresent(true), true);
+  assert.equal(clausePresent("sí"), true);
+  assert.equal(clausePresent(null), false);
+  assert.equal(clausePresent(""), false);
+  assert.equal(clausePresent("No"), false);
+  assert.equal(clausePresent("No se encontró la cláusula"), false);
+  assert.equal(clausePresent(false), false);
+});
+
+test("solo el CFDI de ingreso se procesa como factura", async () => {
+  const { cfdiNotInvoiceReason } = await import("../lib/workflow/cfdi-parser");
+  assert.equal(cfdiNotInvoiceReason("I"), null);
+  assert.equal(cfdiNotInvoiceReason(""), null);
+  assert.match(cfdiNotInvoiceReason("E") ?? "", /nota de crédito/);
+  assert.match(cfdiNotInvoiceReason("p") ?? "", /pago/);
+});

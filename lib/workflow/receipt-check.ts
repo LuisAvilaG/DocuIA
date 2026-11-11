@@ -3,8 +3,8 @@
 // for it) or the maximum wait expires.
 
 import { db } from "@/lib/db";
-import { exceptionQueue, historyDocuments } from "@/db/schema";
-import { and, asc, eq, lte } from "drizzle-orm";
+import { exceptionQueue, historyDocuments, organizations } from "@/db/schema";
+import { and, asc, eq, inArray, lte } from "drizzle-orm";
 import { storedDraft } from "./ns-payload";
 import { gateDraftAgainstPo, loadFeatureFlags, type ApChecks } from "./ap-checks";
 import { postClaimedDocument } from "./post-draft";
@@ -102,7 +102,12 @@ export async function recheckAwaitingReceipt(doc: HistoryDocument, approvedBy: s
 /** Cron entry point: due documents across all organizations, oldest first. */
 export async function runReceiptChecks(limit = 50): Promise<{ checked: number; completed: number; waiting: number; moved: number }> {
   const due = await db.query.historyDocuments.findMany({
-    where: and(eq(historyDocuments.status, "awaiting_receipt"), lte(historyDocuments.nextReceiptCheckAt, new Date())),
+    where: and(
+      eq(historyDocuments.status, "awaiting_receipt"),
+      lte(historyDocuments.nextReceiptCheckAt, new Date()),
+      // A suspended or deleted client must not keep posting to its ERP.
+      inArray(historyDocuments.organizationId, db.select({ id: organizations.id }).from(organizations).where(inArray(organizations.status, ["active", "trial"]))),
+    ),
     orderBy: [asc(historyDocuments.nextReceiptCheckAt)],
     limit,
   });

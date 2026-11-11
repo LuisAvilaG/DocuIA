@@ -22,7 +22,7 @@ async function handleGET(req: NextRequest) {
   }
 
   try {
-    const orgs = await db.query.organizations.findMany({ columns: { id: true } });
+    const orgs = await db.query.organizations.findMany({ where: (o, { inArray }) => inArray(o.status, ["active", "trial"]), columns: { id: true } });
     const summary: Record<string, unknown> = {};
 
     for (const org of orgs) {

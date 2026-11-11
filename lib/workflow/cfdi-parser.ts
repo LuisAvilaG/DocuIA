@@ -75,6 +75,19 @@ export function findPoReference(xmlText: string): string {
   return bare ? bare[1].toUpperCase() : "";
 }
 
+const CFDI_TYPES: Record<string, string> = { E: "egreso (nota de crédito)", P: "pago", T: "traslado", N: "nómina" };
+
+/**
+ * Only "I" (ingreso) is a vendor invoice. A credit note posted as a bill would
+ * add to the payable instead of reducing it. Returns why it cannot be
+ * processed, or null when it can (a CFDI without the attribute is let through).
+ */
+export function cfdiNotInvoiceReason(tipoComprobante: string): string | null {
+  const tipo = tipoComprobante.trim().toUpperCase();
+  if (!tipo || tipo === "I") return null;
+  return `El CFDI es de tipo ${CFDI_TYPES[tipo] ?? tipo}, no una factura de ingreso: no se registra como factura de proveedor.`;
+}
+
 export function parseCfdi(xmlText: string): CfdiData {
   const comprobante = /<cfdi:Comprobante[^>]*/i.exec(xmlText)?.[0] ?? xmlText;
   const emisorTag   = extractTag(xmlText, "Emisor");

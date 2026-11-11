@@ -167,7 +167,7 @@ function DocViewer({ doc, canTrain, onClose, onUpdated }: { doc: CaseDoc; canTra
               {entries.map(([k, v]) => {
                 const active = selected === k;
                 return (
-                  <button key={k} onClick={() => setSelected(k)}
+                  <button key={k} onClick={() => { if (saving) return; if (editing && k !== selected) setEditing(false); setSelected(k); }}
                     className={`w-full text-left px-4 py-2.5 border-b border-border/60 transition-colors ${active ? "bg-primary/5" : "hover:bg-secondary/50"}`}>
                     <p className="text-[10px] font-medium uppercase tracking-[0.06em] text-muted-foreground">{pretty(k)}</p>
                     <p className="text-xs text-foreground mt-0.5 break-words">{flat(v)}</p>

@@ -10,6 +10,8 @@ import { uploadFile } from "@/lib/storage/minio";
 export const LINK_DAYS = 14;
 export const MAX_FILES = 10;
 export const MAX_FILE_BYTES = 20 * 1024 * 1024;
+/** Toda la entrega va en una sola petición, que el servidor limita a 61 MB. */
+export const MAX_TOTAL_BYTES = 60 * 1024 * 1024;
 
 export const hashToken = (token: string) => createHash("sha256").update(token).digest("hex");
 const validToken = (token: string) => /^[A-Za-z0-9_-]{32,64}$/.test(token);
@@ -47,9 +49,11 @@ export async function readUploadLink(token: string, now = new Date()): Promise<L
   if (link.expiresAt <= now) return { ok: false, reason: "expired" };
   const [kase, org] = await Promise.all([
     db.query.contractCases.findFirst({ where: and(eq(contractCases.id, link.caseId), eq(contractCases.organizationId, link.organizationId)), columns: { title: true, status: true } }),
-    db.query.organizations.findFirst({ where: eq(organizations.id, link.organizationId), columns: { name: true } }),
+    db.query.organizations.findFirst({ where: eq(organizations.id, link.organizationId), columns: { name: true, status: true } }),
   ]);
   if (!kase || kase.status !== "awaiting_documents") return { ok: false, reason: "closed" };
+  // Un cliente suspendido o eliminado ya no recibe entregas ni gasta análisis.
+  if (!org || (org.status !== "active" && org.status !== "trial")) return { ok: false, reason: "closed" };
   return {
     ok: true, linkId: link.id, orgId: link.organizationId, caseId: link.caseId, orgName: org?.name ?? "",
     caseTitle: kase.title ?? "Caso", documents: Array.isArray(link.documentsJson) ? (link.documentsJson as string[]) : [],
@@ -75,6 +79,7 @@ export async function deliverDocuments(token: string, files: Array<{ name: strin
   const link = await readUploadLink(token);
   if (!link.ok) return { ok: false, status: 410, error: link.reason === "expired" ? "El enlace venció. Pide uno nuevo a quien te lo envió." : "Este enlace ya no está disponible." };
   if (files.length < 1 || files.length > MAX_FILES) return { ok: false, status: 400, error: `Sube de 1 a ${MAX_FILES} archivos.` };
+  if (files.reduce((sum, f) => sum + f.buffer.length, 0) > MAX_TOTAL_BYTES) return { ok: false, status: 400, error: `La entrega pesa más de ${MAX_TOTAL_BYTES / 1024 / 1024} MB en total.` };
   const typed: Array<{ name: string; buffer: Buffer; mime: string }> = [];
   for (const f of files) {
     if (f.buffer.length > MAX_FILE_BYTES) return { ok: false, status: 400, error: `«${f.name}» pesa más de ${MAX_FILE_BYTES / 1024 / 1024} MB.` };

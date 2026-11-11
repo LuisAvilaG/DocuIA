@@ -17,7 +17,7 @@ import { runApChecks } from "./ap-checks";
 import { erpExtras } from "./erp-extras";
 import type { CfdiData } from "./cfdi-parser";
 import { logWorkflow } from "./log";
-import { findPoReference, parseCfdi } from "./cfdi-parser";
+import { cfdiNotInvoiceReason, findPoReference, parseCfdi } from "./cfdi-parser";
 import { deliverWebhooks } from "@/lib/webhooks/deliver";
 import { getAllFeatures, isFeatureEnabled } from "@/lib/features";
 import { validateExtraction, type ExtractionValidationConfig } from "./validation";
@@ -219,6 +219,8 @@ async function runPipelineInner(input: PipelineInput): Promise<PipelineResult> {
       const xmlText  = input.fileBuffer.toString("utf8");
       const cfdiData = parseCfdi(xmlText);
       cfdi = cfdiData;
+      const notInvoice = cfdiNotInvoiceReason(cfdiData.tipoComprobante);
+      if (notInvoice) throw new Error(notInvoice);
       extraction = {
         invoice: {
           format:        "general",

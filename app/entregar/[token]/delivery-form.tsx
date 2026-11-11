@@ -4,7 +4,7 @@ import { useRef, useState } from "react";
 import { CheckCircle2, FileUp, Loader2, X } from "lucide-react";
 import { btn, Notice } from "@/components/kit";
 
-export function DeliveryForm({ token, maxFiles, maxMb }: { token: string; maxFiles: number; maxMb: number }) {
+export function DeliveryForm({ token, maxFiles, maxMb, maxTotalMb }: { token: string; maxFiles: number; maxMb: number; maxTotalMb: number }) {
   const input = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<File[]>([]);
   const [note, setNote] = useState("");
@@ -21,7 +21,15 @@ export function DeliveryForm({ token, maxFiles, maxMb }: { token: string; maxFil
       if (!next.some((x) => x.name === f.name && x.size === f.size)) next.push(f);
     }
     if (next.length > maxFiles) setError(`Puedes subir hasta ${maxFiles} archivos.`);
-    setFiles(next.slice(0, maxFiles));
+    // La entrega viaja en una sola petición: lo que no cabe se deja fuera aquí,
+    // no como un rechazo del servidor sin salida.
+    const kept: File[] = [];
+    let bytes = 0;
+    for (const f of next.slice(0, maxFiles)) {
+      if (bytes + f.size > maxTotalMb * 1024 * 1024) { setError(`La entrega no puede pesar más de ${maxTotalMb} MB en total. «${f.name}» no se agregó.`); continue; }
+      bytes += f.size; kept.push(f);
+    }
+    setFiles(kept);
   }
 
   async function submit() {
@@ -54,7 +62,7 @@ export function DeliveryForm({ token, maxFiles, maxMb }: { token: string; maxFil
         className="flex flex-col items-center gap-2 rounded-lg border-2 border-dashed border-border px-4 py-8 text-center hover:border-primary">
         <FileUp className="size-6 text-muted-foreground" />
         <span className="text-[14px] font-semibold">Elige o arrastra los archivos</span>
-        <span className="text-xs text-muted-foreground">PDF, PNG o JPG · hasta {maxFiles} archivos de {maxMb} MB</span>
+        <span className="text-xs text-muted-foreground">PDF, PNG o JPG · hasta {maxFiles} archivos de {maxMb} MB, {maxTotalMb} MB en total</span>
       </button>
       <input ref={input} type="file" multiple accept="application/pdf,image/png,image/jpeg" className="sr-only" onChange={(e) => { add(e.target.files); e.target.value = ""; }} />
       {files.length > 0 && (

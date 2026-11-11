@@ -28,8 +28,11 @@ async function handlePOST(_req: NextRequest, { params }: { params: Promise<{ id:
   }
 
   const prev = (kase.resultJson ?? {}) as Record<string, unknown>;
-  const decision = prev.decision ? [...((prev.decisionHistory as unknown[]) ?? []), prev.decision] : (prev.decisionHistory ?? []);
-  const { outputKey, missing, generatedAt, ...resultWithoutCurrentOutput } = prev;
+  // The signatures belong to the decision being reopened. Left in place, the
+  // approval rules would see every step as already signed and refuse everyone.
+  const { outputKey, missing, generatedAt, approvals, ...resultWithoutCurrentOutput } = prev;
+  const decided = prev.decision ? { ...(prev.decision as Record<string, unknown>), ...(Array.isArray(approvals) && approvals.length ? { approvals } : {}) } : null;
+  const decision = decided ? [...((prev.decisionHistory as unknown[]) ?? []), decided] : (prev.decisionHistory ?? []);
   const outputHistory = outputKey
     ? [...((prev.outputHistory as unknown[]) ?? []), { outputKey, missing: missing ?? [], generatedAt: generatedAt ?? null }]
     : prev.outputHistory ?? [];

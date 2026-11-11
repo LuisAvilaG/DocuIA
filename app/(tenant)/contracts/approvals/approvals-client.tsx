@@ -21,7 +21,7 @@ export interface ApprovalCase {
   warningCount: number;
   unverified: number;
   findings: { severity: "block" | "warn"; title: string; detail: string }[];
-  decision: { by: string | null; at: string | null; reason: string | null; override: boolean } | null;
+  decision: { by: string | null; at: string | null; reason: string | null; override: boolean; acknowledged: number; supportName: string | null } | null;
   hasOutput: boolean;
   hasWord: boolean;
 }
@@ -143,7 +143,8 @@ export function ApprovalsClient({ cases, allowOverride }: { cases: ApprovalCase[
                   <dl className="grid grid-cols-[120px_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-[13.5px]">
                     <dt className="text-muted-foreground">Decidió</dt><dd>{sel.decision?.by ?? "—"}</dd>
                     <dt className="text-muted-foreground">Cuándo</dt><dd>{when(sel.decision?.at ?? sel.updatedAt)}</dd>
-                    {sel.decision?.override && <><dt className="text-muted-foreground">Excepción</dt><dd>Aprobado pese a {sel.blockerCount || "los"} bloqueo{sel.blockerCount === 1 ? "" : "s"}</dd></>}
+                    {sel.decision?.override && <><dt className="text-muted-foreground">Excepción</dt><dd>Aprobado pese a {sel.blockerCount || "los"} bloqueo{sel.blockerCount === 1 ? "" : "s"}{sel.decision.acknowledged ? ` · ${sel.decision.acknowledged} validaci${sel.decision.acknowledged === 1 ? "ón revisada" : "ones revisadas"}` : ""}</dd></>}
+                    {sel.decision?.supportName && <><dt className="text-muted-foreground">Soporte</dt><dd><a href={`/api/v1/contracts/cases/${sel.id}/support`} className="text-link hover:underline">{sel.decision.supportName}</a></dd></>}
                   </dl>
                   {sel.decision?.reason && (
                     <div className="rounded-[10px] bg-background px-4 py-3">

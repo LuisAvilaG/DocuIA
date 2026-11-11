@@ -148,6 +148,20 @@
       "when": 1794406937074,
       "tag": "0020_qa_mode_documents",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1794411630788,
+      "tag": "0021_retire_obligations",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1794411656362,
+      "tag": "0022_learning_retired_at",
+      "breakpoints": true
     }
   ]
 }

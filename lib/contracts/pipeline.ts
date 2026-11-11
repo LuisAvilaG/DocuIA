@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import { db } from "@/lib/db";
-import { contractCases, contractDocuments, contractExtractionLearnings, contractValidations, contractObligations, contractVisualTrainingVariants, contractAiAnalysisResults } from "@/db/schema";
+import { contractCases, contractDocuments, contractExtractionLearnings, contractValidations, contractVisualTrainingVariants, contractAiAnalysisResults } from "@/db/schema";
 import { and, desc, eq } from "drizzle-orm";
 import { uploadFile, getFileBuffer, getFileSize } from "@/lib/storage/minio";
 import { createExtractDeps, DEFAULT_CONTRACT_MODEL, type ContractExtractDeps, type ExtractSource } from "./extract";
@@ -11,7 +11,6 @@ import { flowSnapshot, loadContractPlan } from "./plan";
 import { assembleResults, isAiRule, type AnalysisOutcome } from "./assemble";
 import { buildFlowTrace } from "./trace";
 import { getFeature, isFeatureEnabled } from "@/lib/features";
-import { normalizeContractDate } from "./normalization";
 import { logAudit } from "@/lib/audit/log";
 import type { VisualTrainingVariant } from "./visual-training";
 import { runAiAnalysis } from "./ai-analysis";
@@ -22,17 +21,6 @@ import { archiveValidationsForCase } from "./archive-validations";
 import { caseVerdict } from "./validate";
 
 export interface CaseFileInput { buffer: Buffer; fileName: string; mimeType: string }
-
-// Dates read from documents are normalized before obligation alerts are created.
-function parseDateLoose(v: unknown): Date | null {
-  const normalized = normalizeContractDate(v);
-  if (!normalized) return null;
-  const [year, month, day] = normalized.split("-").map(Number);
-  return new Date(year, month - 1, day);
-}
-
-// Fields whose value is a key date worth alerting on (renewal / expiry).
-const DATE_FIELD_RE = /(fecha|date|vigencia|termino|término|renov|corte|vencim)/i;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.round(value)));
@@ -132,11 +120,10 @@ export async function processContractCase(caseId: string, injectedDeps?: Contrac
   await logAudit({ orgId: kase.organizationId, action: "contract.processing_started", resourceType: "contract_case", resourceId: caseId, metadata: { model } });
 
   try {
-    const [docs, plan, validationsFeature, obligationsFeature, learnings] = await Promise.all([
+    const [docs, plan, validationsFeature, learnings] = await Promise.all([
       db.query.contractDocuments.findMany({ where: eq(contractDocuments.caseId, caseId) }),
       loadContractPlan(kase.organizationId, kase.flowId),
       isFeatureEnabled(kase.organizationId, "contract_advanced_validations"),
-      getFeature(kase.organizationId, "contract_obligation_tracking"),
       db.query.contractExtractionLearnings.findMany({
         where: and(eq(contractExtractionLearnings.organizationId, kase.organizationId), eq(contractExtractionLearnings.isActive, true)),
         orderBy: [desc(contractExtractionLearnings.createdAt)],
@@ -320,22 +307,6 @@ export async function processContractCase(caseId: string, injectedDeps?: Contrac
       : assembled.validations;
     const verdict = caseVerdict(validations);
 
-    // Derive key-date obligations (renewal/expiry) using the tenant-configured alert lead time.
-    const obligations: Array<{ type: string; description: string; dueDate: Date; alertAt: Date }> = [];
-    if (obligationsFeature.isEnabled) {
-      const days = Math.min(365, Math.max(1, Math.round(Number(obligationsFeature.config.alert_days_before ?? 30))));
-      for (const list of Object.values(docsByType)) {
-        for (const d of list) {
-          for (const [k, val] of Object.entries(d.values)) {
-            if (!DATE_FIELD_RE.test(k)) continue;
-            const due = parseDateLoose(Array.isArray(val) ? val[0] : val);
-            if (!due) continue;
-            obligations.push({ type: k, description: `${k}: ${Array.isArray(val) ? val[0] : val}`, dueDate: due, alertAt: new Date(due.getTime() - days * 86400_000) });
-          }
-        }
-      }
-    }
-
     // Per-stage trace of the flow run (only when a visual flow is active).
     const stages = plan.flow ? buildFlowTrace(plan.flow, docsByType, summary, !!plan.template, calculations) : null;
 
@@ -370,11 +341,6 @@ export async function processContractCase(caseId: string, injectedDeps?: Contrac
           itemsJson: analysis.response.items,
           citationsJson: analysis.response.citations,
         })));
-      }
-
-      await tx.delete(contractObligations).where(eq(contractObligations.caseId, caseId));
-      if (obligations.length > 0) {
-        await tx.insert(contractObligations).values(obligations.map((o) => ({ caseId, type: o.type, description: o.description, dueDate: o.dueDate, alertAt: o.alertAt, status: "open" })));
       }
 
       await tx.update(contractCases).set({

@@ -648,21 +648,6 @@ export const FEATURE_CATALOG = [
     sortOrder: 114,
   },
   {
-    id: "contract_obligation_tracking",
-    name: "Seguimiento de obligaciones",
-    description: "Detecta fechas relevantes, genera obligaciones y activa alertas previas al vencimiento.",
-    category: "contracts" as const,
-    featureType: "boolean_config" as const,
-    defaultEnabled: true,
-    defaultConfig: { alert_days_before: 30 },
-    configSchema: [
-      { key: "alert_days_before", label: "Días de anticipación para alertar", type: "number", min: 1, max: 365 },
-    ],
-    planRequired: "growth" as const,
-    isBeta: false,
-    sortOrder: 115,
-  },
-  {
     id: "contract_metrics",
     name: "Métricas de contratos",
     description: "Muestra tendencias, tiempos de proceso, resultados de validación y desempeño por flujo.",

@@ -6,7 +6,7 @@ import { Loader2, FileDown, CheckCircle2, XCircle, ShieldX, RotateCcw } from "lu
 import { btn } from "@/components/kit";
 import { DecisionDialog, type CaseDecisionAction } from "../components/decision-dialog";
 
-interface Decision { action?: string; reason?: string | null; byEmail?: string | null; at?: string | null; override?: boolean }
+interface Decision { action?: string; reason?: string | null; byEmail?: string | null; at?: string | null; override?: boolean; support?: { name?: string } }
 
 export function CaseActions({ caseId, caseTitle, status, verdict, decision, hasOutput, generationEnabled, approvalEnabled, allowOverride, canManage }: {
   caseId: string;
@@ -64,6 +64,7 @@ export function CaseActions({ caseId, caseTitle, status, verdict, decision, hasO
             {decision?.override && <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-destructive/10 text-destructive">forzado pese a bloqueos</span>}
           </div>
           {decision?.reason && <p className="text-[11px] text-muted-foreground mt-1.5 break-words">“{decision.reason}”</p>}
+          {decision?.support?.name && <p className="mt-1.5 text-[12px]">Soporte: <a href={`/api/v1/contracts/cases/${caseId}/support`} className="text-link hover:underline">{decision.support.name}</a></p>}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {genBtn}

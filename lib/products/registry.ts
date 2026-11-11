@@ -85,7 +85,6 @@ export const FEATURE_PRODUCT: Record<string, ProductKey> = {
   contract_advanced_validations: "contract_intelligence",
   contract_document_generation:  "contract_intelligence",
   contract_approval_workflow:    "contract_intelligence",
-  contract_obligation_tracking:  "contract_intelligence",
   contract_metrics:              "contract_intelligence",
   contract_reference_archive:    "contract_intelligence",
   contract_large_documents:      "contract_intelligence",

@@ -10,7 +10,7 @@ import {
   expenseCategories, catalogDepartments, catalogClasses, expenseTaxRules, expenseApprovalChains, expenseReports, expenseItems, expenseDocuments,
   contractDocTypes, contractFieldSchemas, contractValidationRules, contractAiAnalysisTemplates, contractOutputTemplates, contractFlows,
   contractVisualTrainingVariants, contractCases, contractDocuments, contractExtractionLearnings, contractValidations, contractAiAnalysisResults,
-  contractObligations, contractArchiveDocuments, contractArchivePages, contractArchiveReferences, contractLargeUploads,
+  contractArchiveDocuments, contractArchivePages, contractArchiveReferences, contractLargeUploads,
 } from "@/db/schema";
 import { eq, inArray, lt, and, isNotNull } from "drizzle-orm";
 import { deleteFile } from "@/lib/storage/minio";
@@ -89,7 +89,6 @@ export async function purgeOrganization(orgId: string): Promise<PurgeSummary> {
     if (caseIds.length) {
       await run(tx.delete(contractValidations).where(inArray(contractValidations.caseId, caseIds)));
       await run(tx.delete(contractAiAnalysisResults).where(inArray(contractAiAnalysisResults.caseId, caseIds)));
-      await run(tx.delete(contractObligations).where(inArray(contractObligations.caseId, caseIds)));
       await run(tx.delete(contractDocuments).where(inArray(contractDocuments.caseId, caseIds)));
     }
     await run(tx.delete(contractCases).where(eq(contractCases.organizationId, orgId)));

@@ -85,7 +85,7 @@ export default async function ContractCasePage({ params, searchParams }: { param
 
   const result = (kase.resultJson ?? {}) as {
     outputKey?: string; outputMime?: string; outputName?: string; missing?: string[];
-    decision?: { action?: string; reason?: string | null; byEmail?: string | null; at?: string | null; override?: boolean } | null;
+    decision?: { action?: string; reason?: string | null; byEmail?: string | null; at?: string | null; override?: boolean; support?: { name?: string } } | null;
     calculations?: CalculationOutcome[];
   };
   const calculations = Array.isArray(result.calculations) ? result.calculations : [];

@@ -174,7 +174,9 @@ export const contractExtractionLearnings = pgTable("contract_extraction_learning
   correctedValue: text("corrected_value").notNull(),
   citation:       text("citation"),
   createdBy:      varchar("created_by", { length: 36 }),
+  // Activo = se usa; en pausa = isActive false sin retiredAt; retirado = retiredAt.
   isActive:       boolean("is_active").notNull().default(true),
+  retiredAt:      timestamp("retired_at"),
   createdAt:      timestamp("created_at").notNull().defaultNow(),
 }, (t) => [
   index("contract_learning_org_type_idx").on(t.organizationId, t.documentType, t.fieldKey),
@@ -214,15 +216,3 @@ export const contractAiAnalysisResults = pgTable("contract_ai_analysis_results",
   index("contract_ai_results_case_idx").on(t.caseId),
 ]);
 
-export const contractObligations = pgTable("contract_obligations", {
-  id:          bigserial("id", { mode: "number" }).primaryKey(),
-  caseId:      varchar("case_id", { length: 36 }).notNull(),
-  type:        varchar("type", { length: 60 }),
-  description: text("description"),
-  dueDate:     timestamp("due_date"),
-  alertAt:     timestamp("alert_at"),
-  status:      varchar("status", { length: 30 }).notNull().default("open"),
-}, (t) => [
-  index("contract_obligations_case_idx").on(t.caseId),
-  index("contract_obligations_alert_idx").on(t.alertAt),
-]);

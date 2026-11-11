@@ -8,7 +8,7 @@ import { contractCases, contractDocuments, contractFlows, contractValidations, o
 import { and, desc, eq, gte, inArray } from "drizzle-orm";
 import { ApprovalsClient, type ApprovalCase } from "./approvals-client";
 
-type Decision = { action?: string; reason?: string | null; byEmail?: string | null; byId?: string | null; at?: string | null; override?: boolean };
+type Decision = { action?: string; reason?: string | null; byEmail?: string | null; byId?: string | null; at?: string | null; override?: boolean; acknowledged?: number[]; support?: { name?: string } };
 
 export default async function ContractApprovalsPage() {
   const session = await getTenantSession({ area: "contracts" });
@@ -73,6 +73,8 @@ export default async function ContractApprovalsPage() {
         at: decision.at ?? null,
         reason: decision.reason ?? null,
         override: decision.override === true,
+        acknowledged: Array.isArray(decision.acknowledged) ? decision.acknowledged.length : 0,
+        supportName: decision.support?.name ?? null,
       } : null,
       hasOutput: Boolean(result.outputKey),
       hasWord: result.outputMime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document",

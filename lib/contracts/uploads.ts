@@ -95,13 +95,17 @@ export async function createCaseFromUploads(input: { organizationId: string; cre
   }
   if (files.reduce((total, upload) => total + upload.sizeBytes, 0) > 300 * 1024 * 1024) throw new Error("El caso supera 300 MB en total");
   const caseId = randomUUID();
+  const documents = files.map((upload) => ({ id: randomUUID(), caseId, storageKey: upload.storageKey, originalName: upload.originalName, mimeType: upload.mimeType, detectedType: input.slotTypes?.[upload.id]?.slice(0, 60) ?? null }));
+  // Las casillas se guardan aparte (resultJson.slots): detected_type también lo
+  // escribe la clasificación de la IA y en un reproceso no se distinguirían.
+  const slots = Object.fromEntries(documents.filter((d) => d.detectedType).map((d) => [d.id, d.detectedType as string]));
   await db.transaction(async (tx) => {
     for (const upload of files) {
       const claimed = await tx.update(contractLargeUploads).set({ status: "claimed", claimedBy: caseId }).where(and(eq(contractLargeUploads.id, upload.id), eq(contractLargeUploads.organizationId, input.organizationId), eq(contractLargeUploads.status, "completed"), isNull(contractLargeUploads.claimedBy))).returning({ id: contractLargeUploads.id });
       if (claimed.length !== 1) throw new Error("El archivo ya fue utilizado por otro caso");
     }
-    await tx.insert(contractCases).values({ id: caseId, organizationId: input.organizationId, flowId: input.flowId ?? null, title: input.title ?? null, status: "uploaded", createdBy: input.createdBy });
-    await tx.insert(contractDocuments).values(files.map((upload) => ({ id: randomUUID(), caseId, storageKey: upload.storageKey, originalName: upload.originalName, mimeType: upload.mimeType, detectedType: input.slotTypes?.[upload.id]?.slice(0, 60) ?? null })));
+    await tx.insert(contractCases).values({ id: caseId, organizationId: input.organizationId, flowId: input.flowId ?? null, title: input.title ?? null, status: "uploaded", createdBy: input.createdBy, ...(Object.keys(slots).length ? { resultJson: { slots } } : {}) });
+    await tx.insert(contractDocuments).values(documents);
   });
   return caseId;
 }
@@ -120,10 +124,12 @@ export async function addCorrectedDocuments(input: { organizationId: string; use
   if (files.some((u) => u.sizeBytes > MAX_OTHER_BYTES) && !await isFeatureEnabled(input.organizationId, "contract_large_documents")) throw new Error("Documentos extensos no habilitados");
 
   await db.transaction(async (tx) => {
-    const [kase] = await tx.select({ status: contractCases.status }).from(contractCases)
+    const [kase] = await tx.select({ status: contractCases.status, resultJson: contractCases.resultJson }).from(contractCases)
       .where(and(eq(contractCases.id, input.caseId), eq(contractCases.organizationId, input.organizationId))).for("update");
     if (!kase) throw new Error("Caso no encontrado");
     if (kase.status !== "awaiting_documents") throw new Error("El caso no está esperando documentos");
+    const result = (kase.resultJson && typeof kase.resultJson === "object" && !Array.isArray(kase.resultJson) ? kase.resultJson : {}) as Record<string, unknown>;
+    const slots: Record<string, string> = { ...((result.slots && typeof result.slots === "object" ? result.slots : {}) as Record<string, string>) };
     const existing = await tx.select({ id: contractDocuments.id, detectedType: contractDocuments.detectedType }).from(contractDocuments).where(eq(contractDocuments.caseId, input.caseId));
     const byId = new Map(existing.map((d) => [d.id, d]));
     for (const [i, upload] of files.entries()) {
@@ -133,8 +139,14 @@ export async function addCorrectedDocuments(input: { organizationId: string; use
       if (claimed.length !== 1) throw new Error("El archivo ya fue utilizado por otro caso");
       const replaced = input.items[i].replaces ? byId.get(input.items[i].replaces!) : undefined;
       if (replaced) await tx.delete(contractDocuments).where(and(eq(contractDocuments.id, replaced.id), eq(contractDocuments.caseId, input.caseId)));
-      await tx.insert(contractDocuments).values({ id: randomUUID(), caseId: input.caseId, storageKey: upload.storageKey, originalName: upload.originalName, mimeType: upload.mimeType, detectedType: replaced?.detectedType ?? null });
+      const newId = randomUUID();
+      await tx.insert(contractDocuments).values({ id: newId, caseId: input.caseId, storageKey: upload.storageKey, originalName: upload.originalName, mimeType: upload.mimeType, detectedType: replaced?.detectedType ?? null });
+      // Quien reemplaza un documento le fija el tipo del que sustituye.
+      if (replaced) {
+        delete slots[replaced.id];
+        if (replaced.detectedType) slots[newId] = replaced.detectedType;
+      }
     }
-    await tx.update(contractCases).set({ status: "uploaded", errorMessage: null, updatedAt: new Date() }).where(eq(contractCases.id, input.caseId));
+    await tx.update(contractCases).set({ status: "uploaded", errorMessage: null, resultJson: { ...result, slots }, updatedAt: new Date() }).where(eq(contractCases.id, input.caseId));
   });
 }

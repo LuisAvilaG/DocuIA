@@ -1,3 +1,4 @@
+import { findingLevel } from "@/lib/contracts/validate";
 import { redirect } from "next/navigation";
 import { canApprove } from "@/lib/auth/permissions";
 import { getTenantSession } from "@/lib/auth/jwt";
@@ -53,7 +54,7 @@ export default async function ContractApprovalsPage() {
       : decision?.action === "approve" || row.status === "approved" ? "approved" : null;
     if (!group) return [];
     const checks = validationsEnabled ? validations.filter((v) => v.caseId === row.id) : [];
-    const failing = checks.filter((v) => v.ok === false && (v.severity === "block" || v.severity === "warn"));
+    const failing = checks.filter((v) => findingLevel(v) !== null);
     return [{
       id: row.id,
       group,
@@ -63,11 +64,11 @@ export default async function ContractApprovalsPage() {
       createdBy: row.createdBy ? userNames.get(row.createdBy) ?? null : null,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
-      blockerCount: failing.filter((v) => v.severity === "block").length,
-      warningCount: failing.filter((v) => v.severity === "warn").length,
+      blockerCount: failing.filter((v) => findingLevel(v) === "block").length,
+      warningCount: failing.filter((v) => findingLevel(v) === "warn").length,
       unverified: checks.filter((v) => v.ok === null).length,
-      findings: failing.sort((a, b) => (a.severity === "block" ? 0 : 1) - (b.severity === "block" ? 0 : 1)).slice(0, 6)
-        .map((v) => ({ severity: v.severity === "block" ? "block" as const : "warn" as const, title: v.ruleName ?? v.subject, detail: v.reason ?? v.subject })),
+      findings: failing.sort((a, b) => (findingLevel(a) === "block" ? 0 : 1) - (findingLevel(b) === "block" ? 0 : 1)).slice(0, 6)
+        .map((v) => ({ severity: findingLevel(v) === "block" ? "block" as const : "warn" as const, title: v.ruleName ?? v.subject, detail: v.reason ?? v.subject })),
       decision: decision ? {
         by: decision.byEmail ?? (decision.byId ? userNames.get(decision.byId) ?? null : null),
         at: decision.at ?? null,

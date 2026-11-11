@@ -1,5 +1,6 @@
+import { findingLevel } from "@/lib/contracts/validate";
 import { redirect } from "next/navigation";
-import { and, desc, eq, exists, gte, ilike, inArray, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, exists, gte, ilike, inArray, sql, type SQL, or, isNull } from "drizzle-orm";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { canAccessTenantArea } from "@/lib/auth/permissions";
 import { isProductActive } from "@/lib/products";
@@ -23,7 +24,7 @@ const PERIOD_DAYS: Record<string, number | null> = { "30": 30, "90": 90, "365": 
 
 const hasFindings = exists(
   db.select({ one: sql`1` }).from(contractValidations)
-    .where(and(eq(contractValidations.caseId, contractCases.id), eq(contractValidations.ok, false), inArray(contractValidations.severity, ["warn", "block"]))),
+    .where(and(eq(contractValidations.caseId, contractCases.id), or(eq(contractValidations.ok, false), isNull(contractValidations.ok)), inArray(contractValidations.severity, ["warn", "block"]))),
 );
 
 export default async function CasesPage({ searchParams }: {
@@ -69,8 +70,8 @@ export default async function CasesPage({ searchParams }: {
   const ids = rows.map((r) => r.id);
   const [docs, validations] = ids.length ? await Promise.all([
     db.select({ caseId: contractDocuments.caseId, type: contractDocuments.detectedType }).from(contractDocuments).where(inArray(contractDocuments.caseId, ids)),
-    db.select({ caseId: contractValidations.caseId, severity: contractValidations.severity, reason: contractValidations.reason, ruleName: contractValidations.ruleName })
-      .from(contractValidations).where(and(inArray(contractValidations.caseId, ids), eq(contractValidations.ok, false))),
+    db.select({ caseId: contractValidations.caseId, ok: contractValidations.ok, severity: contractValidations.severity, reason: contractValidations.reason, ruleName: contractValidations.ruleName })
+      .from(contractValidations).where(and(inArray(contractValidations.caseId, ids), or(eq(contractValidations.ok, false), isNull(contractValidations.ok)))),
   ]) : [[], []];
 
   const statusN = new Map(byStatus.map((r) => [r.status, Number(r.n)]));
@@ -86,8 +87,8 @@ export default async function CasesPage({ searchParams }: {
     const types = docs.filter((d) => d.caseId === r.id).map((d) => (d.type ? typeName.get(d.type) ?? d.type : "Sin clasificar"));
     const chips = [...new Map(types.map((t) => [t, types.filter((x) => x === t).length])).entries()].map(([t, n]) => (n > 1 ? `${t} ×${n}` : t));
     const fails = validations.filter((v) => v.caseId === r.id);
-    const blocks = fails.filter((v) => v.severity === "block");
-    const warns = fails.filter((v) => v.severity === "warn");
+    const blocks = fails.filter((v) => findingLevel(v) === "block");
+    const warns = fails.filter((v) => findingLevel(v) === "warn");
     const first = blocks[0] ?? warns[0];
     return {
       id: r.id,

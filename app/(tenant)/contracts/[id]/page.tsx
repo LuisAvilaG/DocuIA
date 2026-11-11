@@ -1,3 +1,4 @@
+import { caseVerdict, findingLevel } from "@/lib/contracts/validate";
 import { redirect, notFound } from "next/navigation";
 import { canApprove } from "@/lib/auth/permissions";
 import Link from "next/link";
@@ -92,11 +93,7 @@ export default async function ContractCasePage({ params, searchParams }: { param
   }));
 
   // Verdict from validations.
-  let verdict: "ok" | "warn" | "block" | null = validations.length ? "ok" : null;
-  for (const v of validations) {
-    if (v.ok === false && v.severity === "block") { verdict = "block"; break; }
-    if (v.ok !== true && v.severity === "warn" && verdict === "ok") verdict = "warn";
-  }
+  const verdict: "ok" | "warn" | "block" | null = validations.length ? caseVerdict(validations) : null;
   const VERDICT = {
     ok:    { text: "Sin observaciones" },
     warn:  { text: "Con advertencias" },
@@ -151,9 +148,8 @@ export default async function ContractCasePage({ params, searchParams }: { param
   // ── Etapas: son la navegación del caso; Actividad va aparte ─────────────
   const decided = result.decision?.action === "approve" || result.decision?.action === "reject" || kase.status === "approved" || kase.status === "rejected";
   const rejected = result.decision?.action === "reject" || kase.status === "rejected";
-  const failedChecks = validations.filter((v) => v.ok === false);
-  const blocks = failedChecks.filter((v) => v.severity === "block").length;
-  const warns = failedChecks.filter((v) => v.severity === "warn").length;
+  const blocks = validations.filter((v) => findingLevel(v) === "block").length;
+  const warns = validations.filter((v) => findingLevel(v) === "warn").length;
   const unknownDocs = docs.filter((d) => !d.detectedType || d.detectedType === "unknown").length;
   // Documentos subidos en una casilla que la IA no reconoce como de ese tipo.
   const typeWarnings = (Array.isArray(result.documents) ? result.documents : [])

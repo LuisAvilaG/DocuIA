@@ -1,5 +1,5 @@
 // Recordatorio a quien debe decidir un caso (feature contract_approval_rules).
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { contractCases, orgFeatures, orgUsers } from "@/db/schema";
 import { sendEmail } from "@/lib/email/send";
@@ -60,8 +60,11 @@ export async function sendApprovalReminders(now = new Date()): Promise<{ checked
     const results = await Promise.all(to.map((email) => sendEmail({ to: email, subject: `Un caso espera tu decisión: ${title}`, html })));
     if (results.some((r) => r.ok)) {
       sent++;
-      await db.update(contractCases).set({ resultJson: { ...(c.resultJson as Record<string, unknown> ?? {}), lastReminderAt: now.toISOString() } })
-        .where(eq(contractCases.id, c.id));
+      // Solo se toca la marca del recordatorio, sobre el valor actual: el caso pudo
+      // recibir una firma o una decisión mientras se enviaban los correos.
+      await db.update(contractCases)
+        .set({ resultJson: sql`(coalesce(${contractCases.resultJson}::jsonb, '{}'::jsonb) || ${JSON.stringify({ lastReminderAt: now.toISOString() })}::jsonb)::json` })
+        .where(and(eq(contractCases.id, c.id), eq(contractCases.status, "validated")));
     }
   }
   return { checked: cases.length, sent };

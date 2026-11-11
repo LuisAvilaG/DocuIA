@@ -182,6 +182,8 @@ async function processContractCaseInner(caseId: string, injectedDeps?: ContractE
     for (const learning of learnings) (learningsByType.get(learning.documentType) ?? learningsByType.set(learning.documentType, []).get(learning.documentType)!).push(learning);
 
     const summary: Array<{ documentId: string; type: string; typeName: string; fields: number; pages?: number[]; pageCount?: number; typeWarning?: string }> = [];
+    const previousResult = (kase.resultJson && typeof kase.resultJson === "object" && !Array.isArray(kase.resultJson) ? kase.resultJson : {}) as Record<string, unknown>;
+    const slots = (previousResult.slots && typeof previousResult.slots === "object" ? previousResult.slots : {}) as Record<string, string>;
     const docsByType: DocsByType = {};
     const referenceNode = plan.flow?.nodes.find((node) => node.kind === "reference_lookup");
     if (referenceNode) {
@@ -231,7 +233,10 @@ async function processContractCaseInner(caseId: string, injectedDeps?: ContractE
       const { source, mode, text } = prepared;
 
       // La casilla del caso fija el tipo; sin casilla, la IA lo clasifica.
-      const presetType = doc.detectedType && plan.docTypes.some((type) => type.key === doc.detectedType) ? doc.detectedType : null;
+      // Solo cuenta la casilla elegida al subir (resultJson.slots): detected_type
+      // también guarda lo que la IA clasificó en un análisis anterior.
+      const slotType = slots[doc.id];
+      const presetType = slotType && plan.docTypes.some((type) => type.key === slotType) ? slotType : null;
       const classifiedTypeKey = presetType ?? await deps.classify(source, plan.docTypes, undefined, doc.originalName ?? undefined);
       // Con casilla, la IA igual clasifica (en paralelo a la extracción) solo para avisar si no coincide.
       const typeCheck = presetType && plan.docTypes.length > 1
@@ -366,12 +371,18 @@ async function processContractCaseInner(caseId: string, injectedDeps?: ContractE
         })));
       }
 
+      // El análisis reemplaza el resultado, pero no lo que no le pertenece: las
+      // casillas del caso y el historial de documentos pedidos al contratista.
+      const [current] = await tx.select({ resultJson: contractCases.resultJson }).from(contractCases).where(eq(contractCases.id, caseId)).for("update");
+      const stored = (current?.resultJson && typeof current.resultJson === "object" && !Array.isArray(current.resultJson) ? current.resultJson : {}) as Record<string, unknown>;
+      const kept = Object.fromEntries(["slots", "documentRequest", "documentRequests"].filter((key) => stored[key] !== undefined).map((key) => [key, stored[key]]));
       await tx.update(contractCases).set({
         status: "validated",
         // Pin the flow actually used; generation and corrections replay this
         // snapshot even if the live flow changes or disappears.
         flowId: plan.flowId,
         resultJson: {
+          ...kept,
           documents: summary,
           validations: validations.length,
           analyses: analyses.length,

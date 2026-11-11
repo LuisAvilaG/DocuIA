@@ -66,7 +66,7 @@ export async function loadAdminAiMetrics(days = 30): Promise<AdminAiMetrics> {
       from organizations o`),
     rows<{ org: string; name: string }>(sql`
       select o.id as org, o.name from org_features f join organizations o on o.id = f.organization_id
-      where f.feature_id = 'qa_mode' and f.is_enabled`),
+      where f.feature_id = 'qa_mode' and f.admin_granted and o.deleted_at is null`),
   ]);
 
   const unpriced = new Set<string>();

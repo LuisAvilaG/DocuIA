@@ -1,8 +1,9 @@
 // Datos de «Hoy» en Contratos: lo que espera una decisión, los últimos 30 días y
 // el uso por flujo. Sin vencimientos (se revisan con el control Fecha y vigencia).
+import { findingLevel } from "./validate";
 import { db } from "@/lib/db";
 import { contractCases, contractFlows, contractValidations, statusEvents } from "@/db/schema";
-import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, sql, or, isNull } from "drizzle-orm";
 
 export type AttentionTone = "err" | "warn" | "ok";
 
@@ -25,14 +26,15 @@ const DONE = ["approved", "generated", "rejected"] as const;
 /** Resumen de validaciones de cada caso: bloqueos y advertencias que no pasaron, y la primera razón. */
 async function findingsByCase(caseIds: string[]) {
   if (caseIds.length === 0) return new Map<string, { blocks: number; warns: number; first: string | null }>();
-  const rows = await db.select({ caseId: contractValidations.caseId, severity: contractValidations.severity, subject: contractValidations.subject, reason: contractValidations.reason, ruleName: contractValidations.ruleName })
+  const rows = await db.select({ caseId: contractValidations.caseId, ok: contractValidations.ok, severity: contractValidations.severity, subject: contractValidations.subject, reason: contractValidations.reason, ruleName: contractValidations.ruleName })
     .from(contractValidations)
-    .where(and(inArray(contractValidations.caseId, caseIds), eq(contractValidations.ok, false)));
+    .where(and(inArray(contractValidations.caseId, caseIds), or(eq(contractValidations.ok, false), isNull(contractValidations.ok))));
   const out = new Map<string, { blocks: number; warns: number; first: string | null }>();
   for (const r of rows) {
     const cur = out.get(r.caseId) ?? { blocks: 0, warns: 0, first: null };
-    if (r.severity === "block") { cur.blocks++; cur.first = r.reason ?? r.ruleName ?? r.subject; }
-    else if (r.severity === "warn") { cur.warns++; cur.first ??= r.reason ?? r.ruleName ?? r.subject; }
+    const level = findingLevel(r);
+    if (level === "block") { cur.blocks++; cur.first = r.reason ?? r.ruleName ?? r.subject; }
+    else if (level === "warn") { cur.warns++; cur.first ??= r.reason ?? r.ruleName ?? r.subject; }
     out.set(r.caseId, cur);
   }
   return out;

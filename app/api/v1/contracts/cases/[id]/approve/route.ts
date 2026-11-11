@@ -1,3 +1,4 @@
+import { findingLevel } from "@/lib/contracts/validate";
 import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
@@ -60,16 +61,20 @@ async function handlePOST(req: NextRequest, { params }: { params: Promise<{ id: 
     if (blocked && !reason) return { error: "Escribe el motivo para aprobar pese a los bloqueos.", status: 400 };
     if (blocked && !allowOverride) return { error: "Este cliente no permite aprobar casos con bloqueos.", status: 409 };
     // Con excepción, cada validación sin resolver debe estar marcada como revisada.
-    const open = validationsEnabled ? vals.filter((v) => v.ok === false && (v.severity === "block" || v.severity === "warn")) : [];
+    const open = validationsEnabled ? vals.filter((v) => findingLevel(v) !== null) : [];
     if (blocked && open.some((v) => !acknowledged.has(v.id))) {
       return { error: "Marca como revisadas todas las validaciones sin resolver antes de aprobar con excepción.", status: 400 };
     }
-    if (support) {
+    // El soporte se consume solo cuando la firma ya pasó todas las reglas: un
+    // rechazo no debe dejarlo marcado como usado.
+    const claimSupport = async (): Promise<boolean> => {
+      if (!support) return true;
       const claimed = await tx.update(contractLargeUploads).set({ status: "claimed", claimedBy: id })
         .where(and(eq(contractLargeUploads.id, support.id), eq(contractLargeUploads.status, "completed"), isNull(contractLargeUploads.claimedBy)))
         .returning({ id: contractLargeUploads.id });
-      if (claimed.length !== 1) return { error: "El soporte ya se usó en otro caso.", status: 409 };
-    }
+      return claimed.length === 1;
+    };
+    const supportRef = support ? { storageKey: support.storageKey, name: support.originalName, mimeType: support.mimeType } : null;
 
     const prev = (kase.resultJson ?? {}) as Record<string, unknown>;
     const now = new Date().toISOString();
@@ -83,20 +88,24 @@ async function handlePOST(req: NextRequest, { params }: { params: Promise<{ id: 
         blocked, exceptionUserIds: rules.node.exceptionUserIds,
       });
       if (!check.ok) return { error: check.reason, status: 403 };
-      approvals = [...done, { stepKey: check.step.key, label: check.step.label, byId: session.sub, byEmail: session.email, at: now, reason: reason || null }];
+      if (!await claimSupport()) return { error: "El soporte ya se usó en otro caso.", status: 409 };
+      // El soporte queda con la firma que lo adjuntó, sea o no la última.
+      approvals = [...done, { stepKey: check.step.key, label: check.step.label, byId: session.sub, byEmail: session.email, at: now, reason: reason || null, ...(supportRef ? { support: supportRef } : {}) }];
       if (!check.last) {
         // Falta otra aprobación: el caso sigue por decidir con el registro de esta firma.
         await tx.update(contractCases).set({ resultJson: { ...prev, approvals }, updatedAt: new Date() }).where(eq(contractCases.id, id));
         const next = rules.steps.find((st) => st.key !== check.step.key && !done.some((d) => d.stepKey === st.key));
         return { blocked, pending: next?.label ?? "otra aprobación" };
       }
+    } else if (!await claimSupport()) {
+      return { error: "El soporte ya se usó en otro caso.", status: 409 };
     }
     await tx.update(contractCases).set({
       status: "approved",
       resultJson: { ...prev, ...(approvals ? { approvals } : {}), decision: {
         action: "approve", reason: reason || null, byId: session.sub, byEmail: session.email, at: new Date().toISOString(), override: blocked,
         ...(blocked ? { acknowledged: [...acknowledged] } : {}),
-        ...(support ? { support: { storageKey: support.storageKey, name: support.originalName, mimeType: support.mimeType } } : {}),
+        ...(supportRef ? { support: supportRef } : {}),
       } },
       updatedAt: new Date(),
     }).where(eq(contractCases.id, id));

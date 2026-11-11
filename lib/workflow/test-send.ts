@@ -4,7 +4,7 @@
 // document's own status and is refused outright outside sandbox.
 import { db } from "@/lib/db";
 import { historyDocuments, organizations, subsidiaries } from "@/db/schema";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { getFeature, isFeatureEnabled } from "@/lib/features";
 import { resolveCustomFormId } from "@/lib/netsuite/custom-forms";
 import { processInNetSuite } from "./process-ns";
@@ -89,12 +89,13 @@ export async function sendTestToSandbox(opts: { doc: HistoryDocument; draft: NsD
     internalId: result.internalId, recordUrl: result.recordUrl,
   };
   // Keep the record on the document without touching its workflow state.
-  const base = doc.products && typeof doc.products === "object" && !Array.isArray(doc.products)
-    ? (doc.products as Record<string, unknown>) : null;
-  if (base) {
-    await db.update(historyDocuments)
-      .set({ products: { ...base, test_sends: [...previous, entry] } as unknown, updatedAt: new Date() })
-      .where(eq(historyDocuments.id, doc.id));
-  }
+  // The entry is appended to the current value in the database: the document
+  // may have been approved or sent while the ERP call was in flight.
+  await db.update(historyDocuments)
+    .set({
+      products: sql`jsonb_set(${historyDocuments.products}::jsonb, '{test_sends}', coalesce(${historyDocuments.products}::jsonb->'test_sends', '[]'::jsonb) || ${JSON.stringify([entry])}::jsonb)::json`,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(historyDocuments.id, doc.id), sql`jsonb_typeof(${historyDocuments.products}::jsonb) = 'object'`));
   return entry;
 }

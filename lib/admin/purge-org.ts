@@ -11,9 +11,11 @@ import {
   contractDocTypes, contractFieldSchemas, contractValidationRules, contractAiAnalysisTemplates, contractOutputTemplates, contractFlows,
   contractVisualTrainingVariants, contractCases, contractDocuments, contractExtractionLearnings, contractValidations, contractAiAnalysisResults,
   contractArchiveDocuments, contractArchivePages, contractArchiveReferences, contractLargeUploads,
+  contractFlowVersions, contractUploadLinks, aiBatches, aiBatchItems, statusEvents,
 } from "@/db/schema";
 import { eq, inArray, lt, and, isNotNull } from "drizzle-orm";
 import { deleteFile } from "@/lib/storage/minio";
+import { isOrgWordTemplateKey } from "@/lib/security/storage-key";
 
 export const PURGE_AFTER_DAYS = 30;
 
@@ -50,6 +52,13 @@ async function removeFiles(keys: Array<string | null | undefined>): Promise<numb
   return n;
 }
 
+/** Storage keys of the Word templates a flow graph points at. */
+function wordTemplateKeys(graph: unknown): unknown[] {
+  const nodes = (graph as { nodes?: unknown } | null)?.nodes;
+  if (!Array.isArray(nodes)) return [];
+  return nodes.map((node) => (node as { data?: { wordTemplate?: { storageKey?: unknown } } } | null)?.data?.wordTemplate?.storageKey);
+}
+
 export async function purgeOrganization(orgId: string): Promise<PurgeSummary> {
   const subs = await db.select({ id: subsidiaries.id }).from(subsidiaries).where(eq(subsidiaries.organizationId, orgId));
   const subIds = subs.map((s) => s.id);
@@ -69,10 +78,24 @@ export async function purgeOrganization(orgId: string): Promise<PurgeSummary> {
     db.select({ k: contractLargeUploads.storageKey }).from(contractLargeUploads).where(eq(contractLargeUploads.organizationId, orgId)),
     itemIds.length ? db.select({ k: expenseDocuments.fileKey }).from(expenseDocuments).where(inArray(expenseDocuments.itemId, itemIds)) : Promise.resolve([] as Array<{ k: string | null }>),
   ]);
-  const files = await removeFiles([
+  // Flow assets: visual training samples, Word templates referenced by any
+  // published, draft or versioned graph, and files delivered through upload links.
+  const [variantFiles, flowGraphs, versionGraphs, linkFiles] = await Promise.all([
+    db.select({ k: contractVisualTrainingVariants.storageKey }).from(contractVisualTrainingVariants).where(eq(contractVisualTrainingVariants.organizationId, orgId)),
+    db.select({ g: contractFlows.graphJson, d: contractFlows.draftJson }).from(contractFlows).where(eq(contractFlows.organizationId, orgId)),
+    db.select({ g: contractFlowVersions.graphJson }).from(contractFlowVersions).where(eq(contractFlowVersions.organizationId, orgId)),
+    db.select({ f: contractUploadLinks.filesJson }).from(contractUploadLinks).where(eq(contractUploadLinks.organizationId, orgId)),
+  ]);
+  // Keys read out of JSON are only deleted when they sit under this organization's own prefix.
+  const templateKeys = [...flowGraphs.flatMap((r) => [r.g, r.d]), ...versionGraphs.map((r) => r.g)].flatMap(wordTemplateKeys)
+    .filter((key): key is string => isOrgWordTemplateKey(key, orgId));
+  const deliveredKeys = linkFiles.flatMap((r) => (Array.isArray(r.f) ? r.f : []).map((f) => (f as { key?: unknown } | null)?.key))
+    .filter((key): key is string => typeof key === "string" && key.startsWith(`contracts/${orgId}/`) && !key.includes(".."));
+  const files = await removeFiles([...new Set([
     ...docFiles.flatMap((r) => [r.k, r.a]), ...excFiles.map((r) => r.k), ...contractFiles.map((r) => r.k),
     ...archiveFiles.map((r) => r.k), ...uploadFiles.map((r) => r.k), ...expenseFiles.map((r) => r.k),
-  ]);
+    ...variantFiles.map((r) => r.k), ...templateKeys, ...deliveredKeys,
+  ])]);
 
   let tables = 0;
   await db.transaction(async (tx) => {
@@ -94,6 +117,8 @@ export async function purgeOrganization(orgId: string): Promise<PurgeSummary> {
     await run(tx.delete(contractCases).where(eq(contractCases.organizationId, orgId)));
     await run(tx.delete(contractExtractionLearnings).where(eq(contractExtractionLearnings.organizationId, orgId)));
     await run(tx.delete(contractVisualTrainingVariants).where(eq(contractVisualTrainingVariants.organizationId, orgId)));
+    await run(tx.delete(contractFlowVersions).where(eq(contractFlowVersions.organizationId, orgId)));
+    await run(tx.delete(contractUploadLinks).where(eq(contractUploadLinks.organizationId, orgId)));
     await run(tx.delete(contractFlows).where(eq(contractFlows.organizationId, orgId)));
     await run(tx.delete(contractOutputTemplates).where(eq(contractOutputTemplates.organizationId, orgId)));
     await run(tx.delete(contractAiAnalysisTemplates).where(eq(contractAiAnalysisTemplates.organizationId, orgId)));
@@ -125,6 +150,9 @@ export async function purgeOrganization(orgId: string): Promise<PurgeSummary> {
     await run(tx.delete(notificationPreferences).where(eq(notificationPreferences.organizationId, orgId)));
     await run(tx.delete(impersonationSessions).where(eq(impersonationSessions.organizationId, orgId)));
     await run(tx.delete(onboardingProgress).where(eq(onboardingProgress.organizationId, orgId)));
+    await run(tx.delete(aiBatchItems).where(eq(aiBatchItems.organizationId, orgId)));
+    await run(tx.delete(aiBatches).where(eq(aiBatches.organizationId, orgId)));
+    await run(tx.delete(statusEvents).where(eq(statusEvents.organizationId, orgId)));
     await run(tx.delete(usageEvents).where(eq(usageEvents.organizationId, orgId)));
     await run(tx.delete(usageDaily).where(eq(usageDaily.organizationId, orgId)));
     await run(tx.delete(orgFeatures).where(eq(orgFeatures.organizationId, orgId)));

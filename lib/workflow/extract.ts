@@ -329,7 +329,18 @@ export async function extractFromFile(params: {
     return { invoice: r.invoice, model: secondaryModel, fallbackUsed: true, fallbackReason: "forzado por configuración", rawJson: r.rawJson, promptTokens: r.usage.inputTokens, completionTokens: r.usage.outputTokens, cachedTokens: r.usage.cachedInputTokens };
   }
 
-  const first = await callModel(primaryModel, params.fileName, params.mimeType, params.base64Content, options);
+  let first: Awaited<ReturnType<typeof callModel>>;
+  try {
+    first = await callModel(primaryModel, params.fileName, params.mimeType, params.base64Content, options);
+  } catch (error) {
+    // The first model did not answer at all (provider down, timeout, cut-off or
+    // unreadable response): the second one gets the document instead of failing it.
+    if (!fallbackEnabled || secondaryModel === primaryModel) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[extract] ${primaryModel} failed, using ${secondaryModel}: ${message}`);
+    const r = await callModel(secondaryModel, params.fileName, params.mimeType, params.base64Content, options, true);
+    return { invoice: r.invoice, model: secondaryModel, fallbackUsed: true, fallbackReason: `el modelo primario falló: ${message.slice(0, 160)}`, rawJson: r.rawJson, promptTokens: r.usage.inputTokens, completionTokens: r.usage.outputTokens, cachedTokens: r.usage.cachedInputTokens };
+  }
   const reason = secondaryReason(first.invoice, validation, policy);
   const primaryResult: ExtractionResult = { invoice: first.invoice, model: primaryModel, fallbackUsed: false, fallbackReason: null, rawJson: first.rawJson, promptTokens: first.usage.inputTokens, completionTokens: first.usage.outputTokens, cachedTokens: first.usage.cachedInputTokens };
   if (!reason || !fallbackEnabled || secondaryModel === primaryModel) return primaryResult;

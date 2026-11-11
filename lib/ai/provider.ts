@@ -192,11 +192,19 @@ export function anthropic(): Anthropic {
   return anthropicClient;
 }
 
+const CLAUDE_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+
+/** Whether Claude can take this file as-is (PDF or one of its image formats). */
+export function claudeReadsFile(mimeType: string): boolean {
+  return mimeType === "application/pdf" || CLAUDE_IMAGE_TYPES.has(mimeType);
+}
+
 /** The Messages request for one JSON task; shared by direct calls and batches. */
 export function claudeParams(req: AiJsonRequest): Anthropic.MessageCreateParamsNonStreaming {
   const content: Anthropic.ContentBlockParam[] = req.parts.map((p) => {
     if (p.kind === "text") return { type: "text", text: p.text };
     if (p.mimeType === "application/pdf") return { type: "document", source: { type: "base64", media_type: "application/pdf", data: p.base64 } };
+    if (!CLAUDE_IMAGE_TYPES.has(p.mimeType)) throw new Error(`Claude no lee archivos ${p.mimeType}: conviértelo a PDF, PNG o JPG`);
     return { type: "image", source: { type: "base64", media_type: p.mimeType as "image/png" | "image/jpeg" | "image/webp" | "image/gif", data: p.base64 } };
   });
   // Documents first, then the per-document note: the model reads the material before the ask.

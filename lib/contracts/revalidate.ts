@@ -78,6 +78,14 @@ export async function calculateContractRevalidation(
   const previousResult = (kase.resultJson && typeof kase.resultJson === "object" && !Array.isArray(kase.resultJson))
     ? kase.resultJson as Record<string, unknown>
     : {};
+  // Las firmas parciales valen para los datos que se firmaron: si se corrige un
+  // campo o cambia el veredicto (p. ej. por una referencia del Archivo), se piden de nuevo.
+  const carried: Record<string, unknown> = { ...previousResult };
+  const changed = Object.keys(overrides).length > 0 || (previousResult.verdict !== undefined && previousResult.verdict !== verdict);
+  if (changed && Array.isArray(carried.approvals) && carried.approvals.length > 0) {
+    carried.approvalsReset = { at: new Date().toISOString(), count: carried.approvals.length };
+    delete carried.approvals;
+  }
   const analyzed = new Set(storedAnalyses.map((row) => row.ruleName));
   return {
     caseId,
@@ -85,6 +93,6 @@ export async function calculateContractRevalidation(
     untestedAi: plan.rules.filter(isAiRule).filter((rule) => !analyzed.has(rule.name)).length,
     validations,
     verdict,
-    resultJson: { ...previousResult, validations: validations.length, calculations, calculationValues, verdict },
+    resultJson: { ...carried, validations: validations.length, calculations, calculationValues, verdict },
   };
 }

@@ -51,3 +51,15 @@ test("posición de la cita en una página escaneada (TSV de tesseract)", async (
   assert.ok(Math.abs(box.x1 - 0.1) < 1e-9 && Math.abs(box.x2 - 0.7) < 1e-9 && Math.abs(box.y1 - 0.2) < 1e-9);
   assert.deepEqual(parseTesseractTsv("sin cabecera"), []);
 });
+
+test("un bloqueante sin verificar queda a revisar, no pasa como correcto", async () => {
+  const { caseVerdict, findingLevel } = await import("../lib/contracts/validate");
+  assert.equal(findingLevel({ ok: null, severity: "block" }), "warn");
+  assert.equal(findingLevel({ ok: false, severity: "block" }), "block");
+  assert.equal(findingLevel({ ok: null, severity: "warn" }), "warn");
+  assert.equal(findingLevel({ ok: false, severity: "info" }), null);
+  assert.equal(findingLevel({ ok: true, severity: "block" }), null);
+  assert.equal(caseVerdict([{ ok: true, severity: "block" }, { ok: null, severity: "block" }]), "warn");
+  assert.equal(caseVerdict([{ ok: null, severity: "block" }, { ok: false, severity: "block" }]), "block");
+  assert.equal(caseVerdict([{ ok: true, severity: "warn" }, { ok: null, severity: "info" }]), "ok");
+});

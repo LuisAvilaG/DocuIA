@@ -13,7 +13,11 @@ async function handleGET(_req: NextRequest, { params }: { params: Promise<{ id: 
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   const { id } = await params;
   const kase = await db.query.contractCases.findFirst({ where: and(eq(contractCases.id, id), eq(contractCases.organizationId, session.orgId)), columns: { resultJson: true } });
-  const support = (kase?.resultJson as { decision?: { support?: { storageKey?: string; name?: string; mimeType?: string } } } | null)?.decision?.support;
+  type SupportRef = { storageKey?: string; name?: string; mimeType?: string };
+  const result = kase?.resultJson as { decision?: { support?: SupportRef }; approvals?: Array<{ support?: SupportRef }> } | null;
+  // El de la decisión final; si no, el de la última firma parcial que adjuntó uno.
+  const support = result?.decision?.support
+    ?? (Array.isArray(result?.approvals) ? [...result.approvals].reverse().find((a) => a?.support?.storageKey)?.support : undefined);
   if (!support?.storageKey) return NextResponse.json({ error: "El caso no tiene soporte adjunto" }, { status: 404 });
   try {
     const stream = Readable.toWeb(await getFileStream(support.storageKey)) as unknown as ReadableStream<Uint8Array>;

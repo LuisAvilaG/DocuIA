@@ -10,7 +10,7 @@ import { getFileBuffer } from "@/lib/storage/minio";
 import { getFeature } from "@/lib/features";
 import type { PipelineJob } from "@/lib/queue";
 import { extractionRequest, DEFAULT_PRIMARY_MODEL, configuredModel, configuredEffort } from "@/lib/workflow/extract";
-import { batchResults, createBatch, getBatch, providerOf, type AiJsonRequest } from "./provider";
+import { batchResults, claudeReadsFile, createBatch, getBatch, providerOf, type AiJsonRequest } from "./provider";
 import { recordAiUsage } from "./usage";
 
 const MAX_ITEMS_PER_BATCH = 500;
@@ -30,6 +30,15 @@ export async function batchModeFor(organizationId: string, documentType: string)
 
 export async function queueDocumentForBatch(job: PipelineJob): Promise<void> {
   await db.insert(aiBatchItems).values({ organizationId: job.organizationId, documentId: job.documentId, status: "pending", jobJson: job });
+}
+
+/**
+ * Takes a document back out of the batch wait (it will run through the regular
+ * queue instead), so a later collection cannot process it a second time.
+ */
+export async function withdrawDocumentFromBatch(documentId: number): Promise<void> {
+  await db.update(aiBatchItems).set({ status: "bypassed", error: "se procesó por la cola normal", updatedAt: new Date() })
+    .where(and(eq(aiBatchItems.documentId, documentId), eq(aiBatchItems.status, "pending")));
 }
 
 /** Groups every pending item of the organization into one provider batch. Returns the batch id, or null when there was nothing to send. */
@@ -56,15 +65,17 @@ export async function collectBatch(organizationId: string, enqueue: (job: Pipeli
   for (const item of pending) {
     const job = item.jobJson as PipelineJob;
     try {
+      // One file the provider cannot read would reject the whole batch.
+      if (!claudeReadsFile(job.mimeType)) throw new Error(`formato ${job.mimeType} no admitido en lotes`);
       const buffer = await getFileBuffer(job.storageKey);
       requests.push({ customId: String(item.id), request: extractionRequest(mode.model, job.fileName, job.mimeType, buffer.toString("base64"), { maxChars, effort }) });
     } catch (error) {
       failed.push(item.id);
-      console.error("[ai-batch] no se pudo leer el archivo, se procesa en línea", job.storageKey, error instanceof Error ? error.message : error);
+      console.error("[ai-batch] el archivo no entra al lote, se procesa en línea", job.storageKey, error instanceof Error ? error.message : error);
       await enqueue(job);
     }
   }
-  if (failed.length) await db.update(aiBatchItems).set({ status: "bypassed", error: "archivo no disponible al armar el lote", updatedAt: new Date() }).where(inArray(aiBatchItems.id, failed));
+  if (failed.length) await db.update(aiBatchItems).set({ status: "bypassed", error: "archivo no disponible o no admitido al armar el lote", updatedAt: new Date() }).where(inArray(aiBatchItems.id, failed));
   if (requests.length === 0) return null;
 
   const batchId = await createBatch(requests);

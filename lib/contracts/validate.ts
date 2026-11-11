@@ -289,12 +289,23 @@ export function runValidations(rules: ConfiguredRule[], docsByType: DocsByType, 
   return out;
 }
 
+/**
+ * Cuánto pesa una validación en el caso. Un bloqueante que falla bloquea; uno
+ * que no se pudo verificar (falta el dato) queda «a revisar», igual que una
+ * advertencia que falla o no se verificó. Los aprobados e informativos no pesan.
+ */
+export function findingLevel(v: { ok: boolean | null; severity: string | null }): "block" | "warn" | null {
+  if (v.ok === true || (v.severity !== "block" && v.severity !== "warn")) return null;
+  return v.ok === false && v.severity === "block" ? "block" : "warn";
+}
+
 // Overall case verdict for the semáforo: block > warn > ok.
-export function caseVerdict(results: ValidationResult[]): "ok" | "warn" | "block" {
+export function caseVerdict(results: Array<{ ok: boolean | null; severity: string | null }>): "ok" | "warn" | "block" {
   let worst: "ok" | "warn" | "block" = "ok";
   for (const r of results) {
-    if (r.ok === false && r.severity === "block") return "block";
-    if (r.ok !== true && r.severity === "warn" && worst === "ok") worst = "warn";
+    const level = findingLevel(r);
+    if (level === "block") return "block";
+    if (level === "warn") worst = "warn";
   }
   return worst;
 }

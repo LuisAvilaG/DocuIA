@@ -51,6 +51,7 @@ export const CASE_STATUS: Record<string, StatusWord> = {
   generated:  { label: "Aprobado",    tone: "ok" },
   approved:   { label: "Aprobado",    tone: "ok" },
   rejected:   { label: "Rechazado",   tone: "mute" },
+  awaiting_documents: { label: "Esperando documentos", tone: "blue" },
   failed:     { label: "Error",       tone: "err" },
 };
 

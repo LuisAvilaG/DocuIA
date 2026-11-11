@@ -45,3 +45,16 @@ test("días hábiles entre fechas", async () => {
   assert.equal(businessDaysBetween(new Date(2026, 10, 16, 10), new Date(2026, 10, 16, 18)), 0);
   assert.equal(businessDaysBetween(new Date(2026, 10, 16), new Date(2026, 10, 23)), 5);
 });
+
+test("pedir documentos: correo sugerido y cuerpo del mensaje", async () => {
+  const { suggestContractorEmail, buildRequestEmail, isEmail } = await import("../lib/contracts/document-requests");
+  assert.equal(suggestContractorEmail([{ values: { razon_social: "Consorcio HMM", correo_contacto: "Legal@HMM.co" } }]), "legal@hmm.co");
+  assert.equal(suggestContractorEmail([{ values: { notas: "Escribir a pagos@obra.cl antes del viernes" } }]), "pagos@obra.cl");
+  assert.equal(suggestContractorEmail([{ values: { monto: "1.000" } }]), null);
+  assert.equal(isEmail("a@b.co"), true);
+  assert.equal(isEmail("sin-arroba"), false);
+  const mail = buildRequestEmail({ template: "Estimado contratista:", senderName: "Seguros X", caseTitle: "Póliza <HMM>", message: "", reason: "Falta el poder", documents: ["Certificado de existencia"] });
+  assert.match(mail.html, /Estimado contratista/);
+  assert.match(mail.html, /<li>Certificado de existencia<\/li>/);
+  assert.match(mail.html, /Póliza &lt;HMM&gt;/, "el título se escapa");
+});

@@ -105,3 +105,36 @@ export async function createCaseFromUploads(input: { organizationId: string; cre
   });
   return caseId;
 }
+
+/**
+ * Reingreso de un caso que esperaba documentos: agrega las versiones corregidas.
+ * Cada archivo puede reemplazar a un documento del caso (conserva su tipo) o sumarse.
+ * El caso vuelve a «uploaded» para analizarse otra vez.
+ */
+export async function addCorrectedDocuments(input: { organizationId: string; userId: string; caseId: string; items: Array<{ uploadId: string; replaces?: string | null }> }) {
+  if (input.items.length < 1 || input.items.length > 10) throw new Error("Agrega de 1 a 10 archivos");
+  const uploads = await Promise.all(input.items.map((it) => getOwnedUpload(it.uploadId, input.organizationId, input.userId)));
+  if (uploads.some((u) => !u || u.status !== "completed")) throw new Error("Hay archivos que no terminaron de cargar");
+  const files = uploads as NonNullable<(typeof uploads)[number]>[];
+  if (files.some((u) => u.mimeType === WORD_MIME)) throw new Error("Los casos aceptan PDF, imágenes y texto");
+  if (files.some((u) => u.sizeBytes > MAX_OTHER_BYTES) && !await isFeatureEnabled(input.organizationId, "contract_large_documents")) throw new Error("Documentos extensos no habilitados");
+
+  await db.transaction(async (tx) => {
+    const [kase] = await tx.select({ status: contractCases.status }).from(contractCases)
+      .where(and(eq(contractCases.id, input.caseId), eq(contractCases.organizationId, input.organizationId))).for("update");
+    if (!kase) throw new Error("Caso no encontrado");
+    if (kase.status !== "awaiting_documents") throw new Error("El caso no está esperando documentos");
+    const existing = await tx.select({ id: contractDocuments.id, detectedType: contractDocuments.detectedType }).from(contractDocuments).where(eq(contractDocuments.caseId, input.caseId));
+    const byId = new Map(existing.map((d) => [d.id, d]));
+    for (const [i, upload] of files.entries()) {
+      const claimed = await tx.update(contractLargeUploads).set({ status: "claimed", claimedBy: input.caseId })
+        .where(and(eq(contractLargeUploads.id, upload.id), eq(contractLargeUploads.organizationId, input.organizationId), eq(contractLargeUploads.status, "completed"), isNull(contractLargeUploads.claimedBy)))
+        .returning({ id: contractLargeUploads.id });
+      if (claimed.length !== 1) throw new Error("El archivo ya fue utilizado por otro caso");
+      const replaced = input.items[i].replaces ? byId.get(input.items[i].replaces!) : undefined;
+      if (replaced) await tx.delete(contractDocuments).where(and(eq(contractDocuments.id, replaced.id), eq(contractDocuments.caseId, input.caseId)));
+      await tx.insert(contractDocuments).values({ id: randomUUID(), caseId: input.caseId, storageKey: upload.storageKey, originalName: upload.originalName, mimeType: upload.mimeType, detectedType: replaced?.detectedType ?? null });
+    }
+    await tx.update(contractCases).set({ status: "uploaded", errorMessage: null, updatedAt: new Date() }).where(eq(contractCases.id, input.caseId));
+  });
+}

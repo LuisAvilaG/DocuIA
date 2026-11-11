@@ -17,6 +17,7 @@ export const CONTRACT_CASE_STATUS = {
   generated:  entry("generated"),
   approved:   entry("approved"),
   rejected:   entry("rejected"),
+  awaiting_documents: entry("awaiting_documents"),
   failed:     entry("failed"),
 } as const;
 

@@ -15,6 +15,8 @@ import { flowGraphSchema } from "@/lib/contracts/flow";
 import { CaseActivity, type CaseActivityItem } from "./case-activity";
 import { contractStatusLabel } from "@/lib/contracts/status";
 import { caseApprovalRules } from "@/lib/contracts/approval-state";
+import { canAccessTenantArea } from "@/lib/auth/permissions";
+import { ResubmitPanel } from "./resubmit-panel";
 import { AiAnalysisResults } from "./ai-analysis-results";
 import { OutputDownloads } from "./output-downloads";
 
@@ -89,6 +91,7 @@ export default async function ContractCasePage({ params, searchParams }: { param
     outputKey?: string; outputMime?: string; outputName?: string; missing?: string[];
     decision?: { action?: string; reason?: string | null; byEmail?: string | null; at?: string | null; override?: boolean; support?: { name?: string } } | null;
     calculations?: CalculationOutcome[];
+    documentRequest?: { to: string; reason: string; documents: string[]; message?: string; at: string; byEmail?: string | null; emailSent?: boolean };
   };
   const calculations = Array.isArray(result.calculations) ? result.calculations : [];
   const docs: CaseDoc[] = documents.map((d) => ({
@@ -149,6 +152,7 @@ export default async function ContractCasePage({ params, searchParams }: { param
   const warns = failedChecks.filter((v) => v.severity === "warn").length;
   const unknownDocs = docs.filter((d) => !d.detectedType || d.detectedType === "unknown").length;
   const deciding = kase.status === "validated" || kase.status === "review";
+  const waitingDocs = kase.status === "awaiting_documents";
   const stages: Stage[] = [
     { key: "docs", label: "Documentos", detail: isProcessing ? "Leyendo…" : `${totalFields} datos · ${docs.length} documento${docs.length === 1 ? "" : "s"}`, state: isProcessing ? "run" : kase.status === "failed" ? "err" : unknownDocs ? "warn" : "ok", href: "?etapa=docs" },
     calculations.length
@@ -160,6 +164,7 @@ export default async function ContractCasePage({ params, searchParams }: { param
       : { key: "checks", label: "Validaciones", detail: blocks ? `${blocks} bloqueo${blocks === 1 ? "" : "s"}${warns ? ` · ${warns} a revisar` : ""}` : warns ? `${warns} a revisar` : validations.length ? "Sin observaciones" : "Sin reglas", state: blocks ? "err" : warns ? "warn" : "ok", href: "?etapa=checks" },
     decided
       ? { key: "dec", label: "Decisión", detail: [rejected ? "Rechazado" : "Aprobado", result.decision?.byEmail].filter(Boolean).join(" · "), state: rejected ? "err" : "ok", href: "?etapa=dec" }
+      : waitingDocs ? { key: "dec", label: "Decisión", detail: "Esperando documentos", state: "now", href: "?etapa=dec" }
       : { key: "dec", label: "Decisión", detail: deciding ? "Pendiente" : "Después del análisis", state: deciding ? "now" : "off", href: deciding ? "?etapa=dec" : undefined },
     !generationEnabled
       ? { key: "doc", label: "Documento", detail: "No aplica", state: "off" }
@@ -209,6 +214,12 @@ export default async function ContractCasePage({ params, searchParams }: { param
               <p className="mt-1 text-[13.5px]">{kase.errorMessage?.split("\n")[0] ?? "Ocurrió un error al analizar los documentos."}</p>
               <p className="mt-2 text-[13px] text-muted-foreground">Revisa que los documentos sean los que pide el flujo y crea el caso de nuevo, o pide a un administrador que revise el flujo.</p>
             </div>
+          )}
+
+          {waitingDocs && (
+            <ResubmitPanel caseId={kase.id} request={result.documentRequest ?? null}
+              documents={docs.map((d) => ({ id: d.id, label: d.originalName || d.detectedType || "Documento" }))}
+              canWrite={canAccessTenantArea(session.role, { area: "contracts", permission: "write" })} />
           )}
 
           {tab === "docs" && <CaseDocuments documents={docs} canTrain={session.role === "admin"} />}
@@ -268,7 +279,7 @@ export default async function ContractCasePage({ params, searchParams }: { param
             </section>
           )}
 
-          {(tab === "dec" || (tab === "checks" && deciding)) && (
+          {!waitingDocs && (tab === "dec" || (tab === "checks" && deciding)) && (
             <section className={tab === "checks" ? "border-t border-line-soft pt-4" : ""}>
               {tab === "dec" && <SectionTitle title="Decisión" className="mb-3" aside={approvalRules ? `${approvalRules.done.length} de ${approvalRules.steps.length} aprobaci${approvalRules.steps.length === 1 ? "ón" : "ones"}` : undefined} />}
               {approvalRules && (

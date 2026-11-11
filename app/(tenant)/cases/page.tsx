@@ -15,6 +15,7 @@ const VIEWS: Record<Exclude<CaseView, "all" | "findings">, CaseStatus[]> = {
   analyzing: ["uploaded", "processing"],
   decide:    ["review", "validated"],
   done:      ["approved", "generated"],
+  waiting:   ["awaiting_documents"],
   rejected:  ["rejected"],
   failed:    ["failed"],
 };

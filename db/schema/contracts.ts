@@ -6,7 +6,7 @@ import {
 // ── Enums ─────────────────────────────────────────────────────────────
 export const contractCaseStatusEnum = pgEnum("contract_case_status", [
   "uploaded", "processing", "review", "validated", "generated", "failed",
-  "approved", "rejected",
+  "approved", "rejected", "awaiting_documents",
 ]);
 
 // How a document's text was obtained.
@@ -136,6 +136,8 @@ export const contractCases = pgTable("contract_cases", {
   organizationId: varchar("organization_id", { length: 36 }).notNull(),
   flowId:         varchar("flow_id", { length: 36 }), // which flow the client chose (null → fallback)
   title:          varchar("title", { length: 255 }),
+  // A quién se piden documentos corregidos (feature contract_document_requests).
+  contractorEmail: varchar("contractor_email", { length: 191 }),
   status:         contractCaseStatusEnum("status").notNull().default("uploaded"),
   createdBy:      varchar("created_by", { length: 36 }),
   resultJson:     json("result_json"),   // summary of extraction + validation

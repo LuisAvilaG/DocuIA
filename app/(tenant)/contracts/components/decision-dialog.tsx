@@ -36,6 +36,20 @@ export function DecisionDialog({ caseId, caseTitle, action, blocked, allowOverri
   const done = useRef(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const isApproval = action === "approve";
+  // Pedir documentos corregidos (feature contract_document_requests), solo al rechazar.
+  const [requests, setRequests] = useState<{ enabled: boolean; email: string | null; emailSource: "case" | "contract" | null; documents: string[] } | null>(null);
+  const [mode, setMode] = useState<"request" | "reject">("request");
+  const [email, setEmail] = useState("");
+  const [askFor, setAskFor] = useState<Set<string>>(new Set());
+  const [otherDoc, setOtherDoc] = useState("");
+  const [message, setMessage] = useState("");
+  useEffect(() => {
+    if (isApproval) return;
+    fetch(`/api/v1/contracts/cases/${caseId}/request-documents`).then((r) => r.json())
+      .then((d) => { setRequests(d.enabled ? d : { enabled: false, email: null, emailSource: null, documents: [] }); if (d.email) setEmail(d.email); })
+      .catch(() => setRequests({ enabled: false, email: null, emailSource: null, documents: [] }));
+  }, [caseId, isApproval]);
+  const requesting = !isApproval && requests?.enabled === true && mode === "request";
   const exception = isApproval && blocked;
   const cannotApprove = exception && !allowOverride;
 
@@ -75,17 +89,25 @@ export function DecisionDialog({ caseId, caseTitle, action, blocked, allowOverri
 
   const missingChecks = exception && findings ? findings.filter((f) => !checked.has(f.id)).length : 0;
   const reasonRequired = action === "reject" || exception;
-  const disabled = busy || cannotApprove || (reasonRequired && !reason.trim()) || (exception && (findings === null || missingChecks > 0)) || support?.status === "uploading";
+  const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email.trim());
+  const disabled = busy || cannotApprove || (reasonRequired && !reason.trim()) || (exception && (findings === null || missingChecks > 0)) || support?.status === "uploading"
+    || (requesting && !emailOk);
   const hint = cannotApprove ? null
     : exception && missingChecks > 0 ? `Falta marcar ${missingChecks} validaci${missingChecks === 1 ? "ón" : "ones"}`
     : reasonRequired && !reason.trim() ? (action === "reject" ? "Escribe el motivo" : "Escribe la justificación")
+    : requesting && !emailOk ? "Falta el correo del contratista"
     : null;
 
   async function submit() {
     if (disabled) return;
     setBusy(true); setError(null);
     try {
-      const response = await fetch(`/api/v1/contracts/cases/${caseId}/${action}`, {
+      const response = requesting
+        ? await fetch(`/api/v1/contracts/cases/${caseId}/request-documents`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: email.trim(), reason, message, documents: [...askFor, ...(otherDoc.trim() ? [otherDoc.trim()] : [])] }),
+        })
+        : await fetch(`/api/v1/contracts/cases/${caseId}/${action}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -108,7 +130,8 @@ export function DecisionDialog({ caseId, caseTitle, action, blocked, allowOverri
 
   const blocks = findings?.filter((f) => f.severity === "block") ?? [];
   const warns = findings?.filter((f) => f.severity !== "block") ?? [];
-  const title = isApproval ? (exception ? "Aprobar con excepción" : "Aprobar caso") : "Rechazar caso";
+  const title = isApproval ? (exception ? "Aprobar con excepción" : "Aprobar caso") : requests?.enabled ? "¿Qué hacemos con el caso?" : "Rechazar caso";
+  const submitLabel = requesting ? "Enviar y dejar en espera" : isApproval ? title : "Rechazar caso";
 
   return (
     <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-[rgba(30,32,41,0.38)] px-4 py-16" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
@@ -146,6 +169,16 @@ export function DecisionDialog({ caseId, caseTitle, action, blocked, allowOverri
                 </div>
               )}
             </>
+          ) : !isApproval && requests?.enabled ? (
+            <fieldset className="flex flex-col gap-2">
+              <legend className="sr-only">Tipo de rechazo</legend>
+              {([["request", "Pedir documentos corregidos", "El caso queda abierto. Cuando suban la nueva versión, se vuelve a analizar."], ["reject", "Rechazar definitivamente", "El caso se cierra como Rechazado. No se genera el documento."]] as const).map(([k, t, d]) => (
+                <label key={k} className={`flex cursor-pointer items-start gap-2.5 rounded-[10px] border px-3.5 py-3 text-[13.5px] ${mode === k ? "border-primary bg-tone-info-bg/50" : "border-border"}`}>
+                  <input type="radio" name="reject-mode" className="mt-0.5 accent-primary" checked={mode === k} onChange={() => setMode(k)} />
+                  <span><b className="block font-semibold">{t}</b><span className="text-[13px] text-muted-foreground">{d}</span></span>
+                </label>
+              ))}
+            </fieldset>
           ) : (
             <p className="text-sm">Vas a {isApproval ? "aprobar" : "rechazar"} este caso.{!isApproval && " El motivo queda en el registro."}</p>
           )}
@@ -153,12 +186,36 @@ export function DecisionDialog({ caseId, caseTitle, action, blocked, allowOverri
           {!cannotApprove && (
             <label className="flex flex-col gap-1.5">
               <span className="text-[13px] font-semibold text-foreground/90">
-                {action === "reject" ? "Motivo del rechazo" : exception ? "Justificación" : "Comentario"} <span className="font-normal text-muted-foreground">· {reasonRequired ? "obligatorio" : "opcional"}</span>
+                {requesting ? "Motivo" : action === "reject" ? "Motivo del rechazo" : exception ? "Justificación" : "Comentario"} <span className="font-normal text-muted-foreground">· {reasonRequired ? "obligatorio" : "opcional"}</span>
               </span>
               <textarea rows={4} value={reason} onChange={(e) => setReason(e.target.value)}
                 placeholder={action === "reject" ? "Ej. Falta confirmar el alcance de la póliza." : exception ? "Ej. El consorcio entregó el poder (escritura 1.204 del 2 de marzo)." : "Ej. Revisado con el responsable del contrato."}
                 className="min-h-24 rounded-lg border border-[#D6D2C8] bg-white px-3 py-2.5 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20" />
             </label>
+          )}
+
+          {requesting && requests && (
+            <>
+              {requests.documents.length > 0 && (
+                <fieldset>
+                  <legend className="mb-1.5 text-xs font-semibold uppercase tracking-[0.05em] text-foreground/75">Qué documentos pedir</legend>
+                  {requests.documents.map((d) => (
+                    <label key={d} className="flex cursor-pointer items-center gap-2.5 py-1 text-[13.5px]">
+                      <input type="checkbox" className="size-4 accent-primary" checked={askFor.has(d)} onChange={(e) => setAskFor((cur) => { const n = new Set(cur); if (e.target.checked) n.add(d); else n.delete(d); return n; })} />{d} corregido
+                    </label>
+                  ))}
+                  <input value={otherDoc} onChange={(e) => setOtherDoc(e.target.value)} placeholder="Otro documento (opcional)" className="mt-1.5 min-h-9 w-full rounded-lg border border-[#D6D2C8] bg-white px-3 text-[13px] outline-none focus:border-primary" />
+                </fieldset>
+              )}
+              <label className="flex flex-col gap-1.5">
+                <span className="text-[13px] font-semibold text-foreground/90">Correo del contratista {requests.emailSource === "contract" && <span className="font-normal text-tone-warn">· leído del contrato, confírmalo</span>}</span>
+                <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="nombre@empresa.com" className="min-h-10 rounded-lg border border-[#D6D2C8] bg-white px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20" />
+              </label>
+              <label className="flex flex-col gap-1.5">
+                <span className="text-[13px] font-semibold text-foreground/90">Mensaje <span className="font-normal text-muted-foreground">· opcional</span></span>
+                <textarea rows={3} value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Hola. Para continuar necesitamos…" className="rounded-lg border border-[#D6D2C8] bg-white px-3 py-2.5 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20" />
+              </label>
+            </>
           )}
 
           {exception && !cannotApprove && (
@@ -181,8 +238,8 @@ export function DecisionDialog({ caseId, caseTitle, action, blocked, allowOverri
           <span className="flex gap-2">
             <button type="button" onClick={onClose} disabled={busy} className={btn("secondary")}>Cancelar</button>
             {!cannotApprove && (
-              <button type="button" onClick={submit} disabled={disabled} className={btn(isApproval ? "primary" : "danger")}>
-                {busy && <Loader2 className="animate-spin" />}{title}
+              <button type="button" onClick={submit} disabled={disabled} className={btn(isApproval || requesting ? "primary" : "danger")}>
+                {busy && <Loader2 className="animate-spin" />}{submitLabel}
               </button>
             )}
           </span>

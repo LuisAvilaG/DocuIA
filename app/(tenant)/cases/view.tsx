@@ -7,7 +7,7 @@ import { Search } from "lucide-react";
 import { btn, CaseStatusPill, EmptyState, PageFrame, StatusPill, ViewTabs } from "@/components/kit";
 import { NewCaseDialog } from "./new-case-dialog";
 
-export type CaseView = "all" | "analyzing" | "decide" | "findings" | "done" | "rejected" | "failed";
+export type CaseView = "all" | "analyzing" | "decide" | "findings" | "waiting" | "done" | "rejected" | "failed";
 
 export interface CaseListRow {
   id: string; title: string; flowName: string; docs: string[]; status: string;
@@ -15,7 +15,7 @@ export interface CaseListRow {
 }
 
 const VIEW_LABEL: Record<CaseView, string> = {
-  all: "Todos", analyzing: "Analizando", decide: "Por decidir", findings: "Con hallazgos",
+  all: "Todos", analyzing: "Analizando", decide: "Por decidir", findings: "Con hallazgos", waiting: "Esperando documentos",
   done: "Aprobados", rejected: "Rechazados", failed: "Con error",
 };
 const PERIODS = [["30", "Últimos 30 días"], ["90", "Últimos 90 días"], ["365", "Último año"], ["all", "Todo"]] as const;

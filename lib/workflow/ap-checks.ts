@@ -6,8 +6,8 @@
 import { db } from "@/lib/db";
 import { catalogVendors, historyDocuments, subsidiaries, vendorRules } from "@/db/schema";
 import { and, eq, isNotNull, ne, or } from "drizzle-orm";
-import { getActiveNsConnection, nsCredentials } from "@/lib/netsuite/connection";
-import { fetchOpenPurchaseOrders, fetchPurchaseOrderLines, type NSOpenPurchaseOrder } from "@/lib/netsuite/client";
+import { getErp } from "@/lib/erp";
+import type { ErpOpenPurchaseOrder as NSOpenPurchaseOrder } from "@/lib/erp/types";
 import { consultSatStatus } from "@/lib/cfdi/sat";
 import { evaluateFiscalValidation, parseSatValidationConfig, type FiscalValidation } from "@/lib/cfdi/validation";
 import type { CfdiData } from "./cfdi-parser";
@@ -83,9 +83,9 @@ export async function comparePurchaseOrder(
   cfg: PoMatchConfig,
   requireReceipt: boolean,
 ): Promise<{ comparison: PoComparison | null; error: string | null }> {
-  const conn = await getActiveNsConnection(organizationId);
-  if (!conn?.catalogScriptId || !conn.catalogDeployId) return { comparison: null, error: "No hay script de catálogo configurado para consultar la OC" };
-  const res = await fetchPurchaseOrderLines(nsCredentials(conn), conn.catalogScriptId, conn.catalogDeployId, [poInternalId]);
+  const erp = await getErp(organizationId);
+  if (!erp?.capabilities.purchaseOrders) return { comparison: null, error: "El ERP conectado no permite consultar la OC" };
+  const res = await erp.fetchPurchaseOrderLines([poInternalId]);
   const po = res.ok ? res.data?.[0] : undefined;
   if (!po) return { comparison: null, error: res.error ?? "No se pudo leer la OC en el ERP" };
   return { comparison: comparePoLines(lines, po, cfg, { requireReceipt, invoiceTotal }), error: null };
@@ -194,11 +194,11 @@ export async function runApChecks(ctx: {
     const cfg = effectivePoConfig(parsePoMatchConfig(ctx.flags.getConfig("po_matching")), checks.vendorRule);
     const requireReceipt = requiresReceipt(ctx.flags, checks.vendorRule);
     const po: PoCheck = { openPurchaseOrders: [], suggestions: [], selectedPoId: null, comparison: null, outcome: null, requireReceipt, error: null };
-    const conn = await getActiveNsConnection(ctx.organizationId);
-    if (!conn?.catalogScriptId || !conn.catalogDeployId) {
-      po.error = "No hay script de catálogo configurado para consultar las OC";
+    const erp = await getErp(ctx.organizationId);
+    if (!erp?.capabilities.purchaseOrders) {
+      po.error = "El ERP conectado no permite consultar las OC";
     } else {
-      const open = await fetchOpenPurchaseOrders(nsCredentials(conn), conn.catalogScriptId, conn.catalogDeployId, sub.nsSubsidiaryId, vendorId);
+      const open = await erp.fetchOpenPurchaseOrders(sub.nsSubsidiaryId, vendorId);
       if (!open.ok) {
         po.error = open.error ?? "No se pudieron consultar las OC abiertas";
       } else {

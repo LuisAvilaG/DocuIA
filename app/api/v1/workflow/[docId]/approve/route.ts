@@ -5,8 +5,7 @@ import { canApprove } from "@/lib/auth/permissions";
 import { db } from "@/lib/db";
 import { historyDocuments, subsidiaries } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
-import { fetchOpenPurchaseOrders } from "@/lib/netsuite/client";
-import { getActiveNsConnection, nsCredentials } from "@/lib/netsuite/connection";
+import { getErp } from "@/lib/erp";
 import { assignPoLines, draftFromReviewBody, storedDraft, type NsDraft } from "@/lib/workflow/ns-payload";
 import { gateDraftAgainstPo, loadFeatureFlags, vendorRuleFor, type ApChecks } from "@/lib/workflow/ap-checks";
 import { postClaimedDocument } from "@/lib/workflow/post-draft";
@@ -21,11 +20,9 @@ const CONFLICT = "Otro usuario ya está procesando o procesó este documento. Re
 // The RESTlet re-validates too, but a stale or foreign PO should fail here with
 // a clear message instead of as an ERP error.
 async function validatePurchaseOrder(orgId: string, nsSubsidiaryId: string, draft: NsDraft): Promise<string | null> {
-  const connection = await getActiveNsConnection(orgId);
-  if (!connection?.catalogScriptId || !connection.catalogDeployId) {
-    return "No hay un catálogo del ERP configurado para validar la OC seleccionada";
-  }
-  const open = await fetchOpenPurchaseOrders(nsCredentials(connection), connection.catalogScriptId, connection.catalogDeployId, nsSubsidiaryId, draft.vendorId ?? "");
+  const erp = await getErp(orgId);
+  if (!erp?.capabilities.purchaseOrders) return "El ERP conectado no permite validar la OC seleccionada";
+  const open = await erp.fetchOpenPurchaseOrders(nsSubsidiaryId, draft.vendorId ?? "");
   if (!open.ok) return `No se pudo validar la OC en el ERP: ${open.error ?? "error desconocido"}`;
   if (!open.data?.some((po) => po.internal_id === draft.poId)) {
     return "La OC elegida no está abierta o no corresponde al proveedor y subsidiaria seleccionados";

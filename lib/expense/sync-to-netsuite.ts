@@ -57,7 +57,7 @@ async function suiteQL(
   });
   // A failed query is not "no rows": treating it as such would create a
   // duplicate vendor (or post a transaction twice) on a NetSuite/auth error.
-  if (!res.ok) throw new Error(`La consulta a NetSuite falló (HTTP ${res.status})`);
+  if (!res.ok) throw new Error(`La consulta al ERP falló (HTTP ${res.status})`);
   const json = await res.json() as { items?: Array<Record<string, unknown>> };
   return json.items ?? [];
 }
@@ -72,7 +72,7 @@ async function lookupVendor(creds: NSCredentials, vendorNit: string): Promise<st
     creds,
     `SELECT id FROM vendor WHERE isinactive = 'F' AND (UPPER(entityid) IN (${list}) OR REPLACE(UPPER(entityid), '-', '') IN (${list}))`,
   );
-  if (rows.length > 1) throw new Error(`Hay más de un proveedor activo en NetSuite con el NIT ${vendorNit}`);
+  if (rows.length > 1) throw new Error(`Hay más de un proveedor activo en el ERP con el NIT ${vendorNit}`);
   return rows.length > 0 && rows[0].id ? String(rows[0].id) : null;
 }
 
@@ -100,7 +100,7 @@ async function createVendor(
   // NS may not return ID in body — retry lookup
   const retry = await suiteQL(creds, `SELECT id FROM vendor WHERE entityid = '${vendorNit.replace(/'/g, "''")}'`);
   if (retry.length > 0 && retry[0].id) return String(retry[0].id);
-  throw new Error(`Proveedor "${vendorName}" creado en NS pero no se pudo recuperar su ID`);
+  throw new Error(`Proveedor "${vendorName}" creado en el ERP pero no se pudo recuperar su ID`);
 }
 
 // ── NS Expense Report ─────────────────────────────────────────────────
@@ -146,7 +146,7 @@ async function createNSExpenseReport(
   if (!result.ok) {
     const d = result.data as Record<string, unknown> | null;
     const msg = d?.["o__message"] ?? d?.message ?? `HTTP ${result.status}`;
-    throw new Error(`Error al crear Expense Report en NS: ${msg}`);
+    throw new Error(`Error al crear el informe de gastos en el ERP: ${msg}`);
   }
   const created = result.data as Record<string, unknown> | null;
   if (created?.id) return String(created.id);
@@ -155,7 +155,7 @@ async function createNSExpenseReport(
   if (fromLocation) return fromLocation;
   const created204 = await findTransactionByExternalId(creds, opts.externalId);
   if (created204) return created204;
-  throw new Error("NS creó el Expense Report pero no devolvió el ID");
+  throw new Error("El ERP creó el informe de gastos pero no devolvió su ID");
 }
 
 // ── Vendor Bill via process script ────────────────────────────────────
@@ -203,18 +203,18 @@ async function createNSVendorBill(
     expense_lines:          [expenseLine],
     ...(opts.customFormId ? { customform: opts.customFormId } : {}),
   });
-  if (!result.ok) throw new Error(result.error ?? "Error en NS al crear Vendor Bill");
+  if (!result.ok) throw new Error(result.error ?? "Error del ERP al crear la factura de proveedor");
   const d = result.data as Record<string, unknown>;
   const id = String(d?.vendor_bill_internal_id ?? d?.internal_id ?? d?.id ?? "");
   // Another bill of this vendor with the same number, not this line's own
   // earlier attempt: linking to it would mark the line as posted with nothing
   // created for its amount.
   if (d?.already_exists && d?.matched_by === "document_number") {
-    throw new Error(`La factura ${opts.invoiceNumber} de este proveedor ya existe en NetSuite${id ? ` (ID ${id})` : ""}; no se creó otra.`);
+    throw new Error(`La factura ${opts.invoiceNumber} de este proveedor ya existe en el ERP${id ? ` (ID ${id})` : ""}; no se creó otra.`);
   }
   // A reply without an ID is not a created bill (for example, the Process
   // Script ID pointing at another script).
-  if (!id) throw new Error("NetSuite no devolvió el ID de la factura. Revisa que el Process Script configurado sea docuia-process-v1.");
+  if (!id) throw new Error("El ERP no devolvió el ID de la factura. Revisa que el script de proceso configurado sea docuia-process-v1.");
   // The bill is saved, but not as sent (for example, in the vendor's currency
   // instead of the line's): accounting has to look at it.
   return { id, note: erpWarningNote(erpWarnings(d)) };
@@ -272,9 +272,9 @@ export async function syncReportToNetsuite(reportId: string, orgId: string): Pro
 
   // ── 2. Load NS connection ──────────────────────────────────────────
   const conn = await getActiveNsConnection(orgId);
-  if (!conn) throw new Error("No hay conexión NetSuite activa para esta organización");
+  if (!conn) throw new Error("No hay conexión activa con el ERP para esta organización");
   if (!conn.processScriptId || !conn.processDeployId) {
-    throw new Error("El Process Script de NetSuite no está configurado");
+    throw new Error("El script de proceso del ERP no está configurado");
   }
 
   const creds: NSCredentials = {
@@ -317,7 +317,7 @@ export async function syncReportToNetsuite(reportId: string, orgId: string): Pro
   // A1. Employee NS ID (required for personal items)
   if (personalItems.length > 0 && !report.submitter.netsuiteEmployeeId) {
     preErrors.push(
-      `El empleado ${report.submitter.email} no tiene ID de NetSuite asignado. ` +
+      `El empleado ${report.submitter.email} no tiene ID de empleado del ERP asignado. ` +
       `Ejecuta el sync de empleados desde el panel de administración.`
     );
   }
@@ -329,7 +329,7 @@ export async function syncReportToNetsuite(reportId: string, orgId: string): Pro
   if (vendorBillItems.some(item => item.needsDocumentoEquivalente)
     && expenseConfig.documentoEquivalenteFormId
     && !/^\d+$/.test(expenseConfig.documentoEquivalenteFormId)) {
-    preErrors.push("El Custom Form ID de Documento Equivalente debe ser el Internal ID numérico de NetSuite.");
+    preErrors.push("El Custom Form ID de Documento Equivalente debe ser el ID interno numérico del formulario en el ERP.");
   }
 
   if (preErrors.length > 0) {
@@ -385,7 +385,7 @@ export async function syncReportToNetsuite(reportId: string, orgId: string): Pro
           .where(and(eq(expenseItems.reportId, reportId), eq(expenseItems.vendorNit, nit)));
       } else {
         vendorErrors.push(
-          `Línea ${item.lineNumber}: el proveedor ${nit} no existe en NetSuite y la creación automática de proveedores está desactivada.`
+          `Línea ${item.lineNumber}: el proveedor ${nit} no existe en el ERP y la creación automática de proveedores está desactivada.`
         );
       }
     } catch (e) {
@@ -497,7 +497,7 @@ export async function syncReportToNetsuite(reportId: string, orgId: string): Pro
 
         for (const item of personalItems) {
           const deNote = item.needsDocumentoEquivalente
-            ? "Requiere creación manual de Documento Equivalente en NetSuite"
+            ? "Requiere creación manual de Documento Equivalente en el ERP"
             : null;
           await db.update(expenseItems)
             .set({ nsRecordId: nsExpenseReportId, syncError: deNote, updatedAt: new Date() })
@@ -506,7 +506,7 @@ export async function syncReportToNetsuite(reportId: string, orgId: string): Pro
         }
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        syncErrors.push(`Expense Report NS: ${msg}`);
+        syncErrors.push(`Informe de gastos en el ERP: ${msg}`);
         for (const item of personalItems) {
           await db.update(expenseItems)
             .set({ syncError: msg, updatedAt: new Date() })

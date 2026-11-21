@@ -1,9 +1,6 @@
-import { db } from "@/lib/db";
-import { nsConnections, organizations } from "@/db/schema";
-import { eq, and } from "drizzle-orm";
 import { processDocument } from "@/lib/netsuite/client";
-import type { NSCredentials } from "@/lib/netsuite/oauth";
-import { decryptField } from "@/lib/crypto/encrypt";
+import { nsCredentials, type NsConnection } from "@/lib/netsuite/connection";
+import type { ErpPostResult } from "@/lib/erp/types";
 
 function normalize(v: unknown): string {
   return String(v ?? "").trim();
@@ -125,7 +122,7 @@ export function erpWarningNote(warnings: string[]): string | null {
   return warnings.length ? `Creada en el ERP con avisos: ${warnings.join("; ")}. Revisa el registro en el ERP.` : null;
 }
 
-function buildRecordUrl(documentType: string, accountId: string, internalId: string): string {
+export function netsuiteRecordUrl(documentType: string, accountId: string, internalId: string): string {
   if (!accountId || !internalId) return "";
   const normalizedId = accountId.replace(/_/g, "-").toLowerCase();
   if (documentType === "purchase_order") {
@@ -134,43 +131,26 @@ function buildRecordUrl(documentType: string, accountId: string, internalId: str
   return `https://${normalizedId}.app.netsuite.com/app/accounting/transactions/vendbill.nl?id=${internalId}`;
 }
 
+/**
+ * Sends a document to the client's ERP, whichever it is (the name is from when
+ * NetSuite was the only one). The client's adapter does the sending.
+ */
 export async function processInNetSuite(
   organizationId: string,
   payload: Record<string, unknown>
-): Promise<{
-  ok: boolean;
-  internalId: string | null;
-  recordUrl: string | null;
-  error: string | null;
-  warnings: string[];
-  nsResponse: Record<string, unknown>;
-}> {
-  const org = await db.query.organizations.findFirst({
-    where: eq(organizations.id, organizationId),
-  });
-  if (!org) throw new Error(`Organization ${organizationId} not found`);
+): Promise<ErpPostResult> {
+  // Loaded here and not at the top: the NetSuite adapter imports this module.
+  const { requireErp } = await import("@/lib/erp");
+  return (await requireErp(organizationId)).postDocument(payload);
+}
 
-  const env = org.activeNsEnvironment as "sandbox" | "production";
-
-  const conn = await db.query.nsConnections.findFirst({
-    where: and(
-      eq(nsConnections.organizationId, organizationId),
-      eq(nsConnections.environment, env),
-      eq(nsConnections.isActive, true),
-    ),
-  });
-  if (!conn) throw new Error(`No hay conexión activa con el ERP (${env})`);
+/** NetSuite's way of posting: the process RESTlet builds the bill or purchase order. */
+export async function postToNetSuite(conn: NsConnection, payload: Record<string, unknown>): Promise<ErpPostResult> {
   if (!conn.processScriptId || !conn.processDeployId) {
-    throw new Error("Process script not configured for this organization");
+    throw new Error("El script de proceso del ERP no está configurado en la conexión");
   }
 
-  const creds: NSCredentials = {
-    accountId:      conn.accountId,
-    consumerKey:    decryptField(conn.consumerKey),
-    consumerSecret: decryptField(conn.consumerSecret),
-    tokenId:        decryptField(conn.tokenId),
-    tokenSecret:    decryptField(conn.tokenSecret),
-  };
+  const creds = nsCredentials(conn);
 
   const restletBody = buildRestletBody(payload);
 
@@ -215,7 +195,7 @@ export async function processInNetSuite(
   const documentType = normalize(String(restletBody.document_type ?? "invoice"));
   const recordUrl =
     normalize(nsData?.record_url || nsData?.url || "") ||
-    (internalId ? buildRecordUrl(documentType, conn.accountId, internalId) : null);
+    (internalId ? netsuiteRecordUrl(documentType, conn.accountId, internalId) : null);
 
   return {
     ok: true,

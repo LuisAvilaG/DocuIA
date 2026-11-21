@@ -67,7 +67,9 @@ export async function recheckAwaitingReceipt(doc: HistoryDocument, requestedBy: 
     const since = doc.awaitingSince ?? doc.updatedAt;
     if (Date.now() - since.getTime() > maxWaitMs) {
       const reason = `La recepción no llegó en ${Math.round(maxWaitMs / 86_400_000)} días: ${gate.outcome.reason}`;
-      if (cfg.on_timeout === "exception") {
+      // Without the exception queue its screen does not exist: the row would be
+      // written where nobody can see it. The document goes to review instead.
+      if (cfg.on_timeout === "exception" && flags.isEnabled("exception_queue")) {
         if (await moveTo(doc, "failed", reason, checks)) {
           await db.insert(exceptionQueue).values({
             organizationId: doc.organizationId, documentId: doc.id, subsidiaryId: doc.subsidiaryId,

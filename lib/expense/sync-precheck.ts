@@ -22,7 +22,7 @@ export function expenseItemProblems(items: PrecheckItem[]): string[] {
   // Personal (Expense Report) lines need the NetSuite expense category.
   for (const item of personal) {
     if (!item.category?.netsuiteCategoryId) {
-      problems.push(`Línea ${item.lineNumber}: sin categoría de NetSuite (re-sincroniza catálogos)`);
+      problems.push(`Línea ${item.lineNumber}: sin categoría del ERP (re-sincroniza catálogos)`);
     }
   }
 
@@ -32,7 +32,7 @@ export function expenseItemProblems(items: PrecheckItem[]): string[] {
   const currencies = [...new Set(personal.map((item) => (item.currency ?? "").toUpperCase()).filter(Boolean))];
   if (currencies.length > 1) {
     problems.push(
-      `El informe mezcla monedas (${currencies.join(", ")}) en gastos personales y NetSuite los registraría todos en una sola. ` +
+      `El informe mezcla monedas (${currencies.join(", ")}) en gastos personales y el ERP los registraría todos en una sola. ` +
       `Deja una sola moneda por informe o convierte los importes.`
     );
   }
@@ -43,7 +43,7 @@ export function expenseItemProblems(items: PrecheckItem[]): string[] {
   for (const item of vendorBills) {
     if (!item.vendorNit) problems.push(`Línea ${item.lineNumber}: Vendor Bill requiere NIT/RFC del proveedor`);
     if (!item.invoiceNumber && !item.needsDocumentoEquivalente) problems.push(`Línea ${item.lineNumber}: Vendor Bill requiere número de factura`);
-    if (!item.category?.netsuiteAccountId) problems.push(`Línea ${item.lineNumber}: la categoría no tiene cuenta contable de NetSuite (re-sincroniza catálogos)`);
+    if (!item.category?.netsuiteAccountId) problems.push(`Línea ${item.lineNumber}: la categoría no tiene cuenta contable del ERP (re-sincroniza catálogos)`);
     // Without a date the bill was posted with the day of the sync, unnoticed.
     if (!item.invoiceDate && !item.expenseDate) problems.push(`Línea ${item.lineNumber}: falta la fecha del comprobante (se registra como factura de proveedor y necesita su fecha)`);
   }

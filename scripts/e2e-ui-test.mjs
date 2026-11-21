@@ -2,6 +2,12 @@
  * Quick UI page smoke test — verifies pages load (200) with valid session
  */
 const BASE = "http://localhost:3000";
+// The user to sign in with comes from the environment, never from this file.
+const E2E_USER = { email: process.env.E2E_TENANT_EMAIL, password: process.env.E2E_TENANT_PASSWORD };
+if (!E2E_USER.email || !E2E_USER.password) {
+  console.error("Define E2E_TENANT_EMAIL y E2E_TENANT_PASSWORD antes de ejecutar este script.");
+  process.exit(1);
+}
 
 class CookieJar {
   constructor() { this.cookies = {}; }
@@ -40,7 +46,7 @@ const jar = new CookieJar();
 const lr = await fetch(`${BASE}/api/v1/auth/login`, {
   method: "POST",
   headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ email: "carlos@acme.mx", password: "Demo1234!" }),
+  body: JSON.stringify(E2E_USER),
   redirect: "manual",
 });
 jar.update(lr.headers.get("set-cookie"));

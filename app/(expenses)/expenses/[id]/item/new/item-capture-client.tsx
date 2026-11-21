@@ -611,7 +611,7 @@ export function ItemCaptureClient({ reportId, reportPurpose, categories, departm
             <label className="text-xs text-muted-foreground">Categoría</label>
             {categories.length === 0 ? (
               <p className="text-xs text-warning py-2 px-3 rounded-lg bg-warning/10 border border-warning/20">
-                Sin categorías cargadas — el administrador debe sincronizarlas desde NetSuite. Puedes guardar el gasto sin categoría.
+                Sin categorías cargadas — el administrador debe sincronizarlas desde el ERP. Puedes guardar el gasto sin categoría.
               </p>
             ) : (
               <div className="relative">
@@ -696,7 +696,7 @@ export function ItemCaptureClient({ reportId, reportPurpose, categories, departm
             </div>
             {paymentMethod === "company_pays_vendor" && ocr?.documentType === "invoice" && (
               <p className="text-[0.625rem] text-primary">
-                Se creará como Factura de Proveedor en NetSuite
+                Se creará como factura de proveedor en el ERP
               </p>
             )}
           </div>

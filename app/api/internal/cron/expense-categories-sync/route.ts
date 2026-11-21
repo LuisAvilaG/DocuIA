@@ -1,18 +1,9 @@
+import { getErpExpenses } from "@/lib/erp";
 import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
-import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { nsConnections } from "@/db/schema";
 import { getFeature, isFeatureEnabled } from "@/lib/features";
-import { decryptField } from "@/lib/crypto/encrypt";
 import { operatingOrganization } from "@/lib/auth/jwt";
-import type { NSCredentials } from "@/lib/netsuite/oauth";
-import {
-  syncClasses,
-  syncDepartments,
-  syncEmployees,
-  syncExpenseCategories,
-} from "@/lib/expense/sync-catalogs";
 
 function cronAuth(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
@@ -35,34 +26,20 @@ async function handleGET(req: NextRequest) {
       const feature = await getFeature(org.id, "expense_categories_sync");
       if (!feature.isEnabled) continue;
 
-      const environment = org.activeNsEnvironment as "sandbox" | "production";
-      const connection = await db.query.nsConnections.findFirst({
-        where: and(
-          eq(nsConnections.organizationId, org.id),
-          eq(nsConnections.environment, environment),
-          eq(nsConnections.isActive, true),
-        ),
-      });
-      if (!connection) {
-        summary[org.id] = { skipped: "no active NetSuite connection" };
+      const erp = await getErpExpenses(org.id);
+      if (!erp) {
+        summary[org.id] = { skipped: "no ERP connected that handles expenses" };
         continue;
       }
 
       try {
-        // Inside the try: damaged credentials of one client must not stop the rest.
-        const credentials: NSCredentials = {
-          accountId: connection.accountId,
-          consumerKey: decryptField(connection.consumerKey),
-          consumerSecret: decryptField(connection.consumerSecret),
-          tokenId: decryptField(connection.tokenId),
-          tokenSecret: decryptField(connection.tokenSecret),
-        };
-
+        // Inside the try: damaged credentials of one client (read when the call
+        // is made) must not stop the rest.
         const [categories, departments, classes, employees] = await Promise.all([
-          syncExpenseCategories(org.id, null, credentials),
-          syncDepartments(org.id, null, credentials),
-          syncClasses(org.id, null, credentials),
-          syncEmployees(org.id, credentials),
+          erp.syncCategories(org.id, null),
+          erp.syncDepartments(org.id, null),
+          erp.syncClasses(org.id, null),
+          erp.syncEmployees(org.id),
         ]);
         summary[org.id] = { categories, departments, classes, employees };
       } catch (error) {

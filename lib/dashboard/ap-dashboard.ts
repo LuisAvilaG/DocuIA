@@ -1,3 +1,4 @@
+import { amountsByCurrency, docCurrency } from "@/lib/stats/doc-currency";
 import { db } from "@/lib/db";
 import { exceptionQueue, historyDocuments, itemMappings, orgUsers, subsidiaries } from "@/db/schema";
 import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
@@ -74,6 +75,10 @@ export async function getDashboardData(orgId: string, userId: string) {
     today: { total: todayRow[0]?.total ?? 0, auto: todayRow[0]?.auto ?? 0 },
     review: byStatus.get("review"),
     approval: byStatus.get("pending_approval"),
+    /** What waits for approval, per currency. */
+    approvalAmounts: amountsByCurrency(await db.select({ currency: docCurrency, amount: sql<number>`coalesce(sum(${historyDocuments.total}), 0)::float` })
+      .from(historyDocuments).leftJoin(subsidiaries, eq(subsidiaries.id, historyDocuments.subsidiaryId))
+      .where(and(org, eq(historyDocuments.status, "pending_approval"))).groupBy(docCurrency)),
     receipt: byStatus.get("awaiting_receipt"),
     reviewReasons,
     exceptions: { count: exceptions[0]?.count ?? 0, reasons: exceptionReasons },

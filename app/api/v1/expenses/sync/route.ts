@@ -1,28 +1,8 @@
 import { withApiSecurity } from "@/lib/security/http";
-import { getActiveNsConnection } from "@/lib/netsuite/connection";
+import { getErpExpenses } from "@/lib/erp";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { isFeatureEnabled } from "@/lib/features";
-import { decryptField } from "@/lib/crypto/encrypt";
-import type { NSCredentials } from "@/lib/netsuite/oauth";
-import {
-  syncExpenseCategories,
-  syncDepartments,
-  syncClasses,
-  syncEmployees,
-} from "@/lib/expense/sync-catalogs";
-
-async function resolveNsCreds(orgId: string): Promise<NSCredentials | null> {
-  const conn = await getActiveNsConnection(orgId);
-  if (!conn) return null;
-  return {
-    accountId:      conn.accountId,
-    consumerKey:    decryptField(conn.consumerKey),
-    consumerSecret: decryptField(conn.consumerSecret),
-    tokenId:        decryptField(conn.tokenId),
-    tokenSecret:    decryptField(conn.tokenSecret),
-  };
-}
 
 async function handlePOST(req: NextRequest) {
   const session = await getTenantSession({ area: "expenses", permission: "write" });
@@ -40,8 +20,8 @@ async function handlePOST(req: NextRequest) {
     subsidiaryId?: string;
   };
 
-  const creds = await resolveNsCreds(session.orgId);
-  if (!creds) {
+  const erp = await getErpExpenses(session.orgId);
+  if (!erp) {
     return NextResponse.json(
       { error: "No hay conexión activa con el ERP. Contacta al administrador de DocuIA." },
       { status: 422 },
@@ -54,16 +34,16 @@ async function handlePOST(req: NextRequest) {
     const results: Record<string, unknown> = {};
 
     if (body.action === "sync_categories" || body.action === "sync_all") {
-      results.categories = await syncExpenseCategories(session.orgId, subsidiaryId, creds);
+      results.categories = await erp.syncCategories(session.orgId, subsidiaryId);
     }
     if (body.action === "sync_departments" || body.action === "sync_all") {
-      results.departments = await syncDepartments(session.orgId, subsidiaryId, creds);
+      results.departments = await erp.syncDepartments(session.orgId, subsidiaryId);
     }
     if (body.action === "sync_classes" || body.action === "sync_all") {
-      results.classes = await syncClasses(session.orgId, subsidiaryId, creds);
+      results.classes = await erp.syncClasses(session.orgId, subsidiaryId);
     }
     if (body.action === "sync_employees" || body.action === "sync_all") {
-      results.employees = await syncEmployees(session.orgId, creds);
+      results.employees = await erp.syncEmployees(session.orgId);
     }
 
     return NextResponse.json({ ok: true, results });

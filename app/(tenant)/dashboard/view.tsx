@@ -19,6 +19,12 @@ function ago(date: Date): string {
 }
 
 const money = (n: number) => n.toLocaleString("es-MX", { style: "currency", currency: "MXN", minimumFractionDigits: 2 });
+/** An amount in its own currency («$1,740.00» for pesos, «USD 45.00» for the rest). */
+const moneyIn = (n: number, currency: string) => {
+  if (!currency || currency === "MXN") return `${money(n)}${currency ? " MXN" : ""}`;
+  try { return n.toLocaleString("es-MX", { style: "currency", currency, currencyDisplay: "code", minimumFractionDigits: 2 }); }
+  catch { return `${currency} ${n.toLocaleString("es-MX", { minimumFractionDigits: 2 })}`; }
+};
 const short = (s: string | null, max = 40) => (s && s.length > max ? `${s.slice(0, max - 1).trimEnd()}…` : s);
 const plural = (n: number, one: string, many: string) => `${n.toLocaleString("es-MX")} ${n === 1 ? one : many}`;
 
@@ -99,7 +105,7 @@ export function DashboardView({ data, statsEnabled, exceptionsEnabled, canUpload
     },
     data.approval && {
       key: "approval", count: data.approval.count, title: "Por aprobar", href: "/documents?status=pending_approval", cta: "Aprobar",
-      detail: `${money(data.approval.amount)} en total.`,
+      detail: data.approvalAmounts.length ? `${data.approvalAmounts.map((a) => moneyIn(a.amount, a.currency)).join(" · ")} en total.` : `${money(data.approval.amount)} en total.`,
     },
     data.receipt && {
       key: "receipt", count: data.receipt.count, title: "Esperando recepción", href: "/documents?status=awaiting_receipt", cta: "Ver",

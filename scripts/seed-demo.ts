@@ -95,7 +95,7 @@ const ORGS = [
     ],
     features: [
       { featureId: "auto_mapping",       isEnabled: true,  config: { min_confirmations: 3, merge_similarity: 0.90, suggest_similarity: 0.80, vendor_suggest_similarity: 0.88 }, notes: "Reducido a 3 confirmaciones por volumen alto" },
-      { featureId: "ai_tiered_fallback", isEnabled: true,  config: { soft_fallback_rate: 0.05, complex_line_count_threshold: 15 }, notes: null },
+      { featureId: "ai_tiered_fallback", isEnabled: true,  config: {}, notes: null },
       { featureId: "approval_workflow",  isEnabled: true,  config: {}, notes: "Requerido por controles internos" },
       { featureId: "bulk_upload",        isEnabled: true,  config: {}, notes: null },
       { featureId: "duplicate_detection",isEnabled: true,  config: {}, notes: null },
@@ -202,7 +202,7 @@ const ORGS = [
     ],
     features: [
       { featureId: "auto_mapping",         isEnabled: true,  config: { min_confirmations: 2, merge_similarity: 0.95 }, notes: "Config agresiva por volumen" },
-      { featureId: "ai_tiered_fallback",   isEnabled: true,  config: { soft_fallback_rate: 0.10, complex_line_count_threshold: 10 }, notes: null },
+      { featureId: "ai_tiered_fallback",   isEnabled: true,  config: {}, notes: null },
       { featureId: "ai_force_secondary",   isEnabled: false, config: {}, notes: "Solo en casos especiales" },
       { featureId: "bulk_upload",          isEnabled: true,  config: {}, notes: null },
       { featureId: "duplicate_detection",  isEnabled: true,  config: {}, notes: null },

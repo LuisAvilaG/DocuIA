@@ -4,7 +4,7 @@ Rama `feat/rediseno-fase-0`, con los cambios sin confirmar de la ronda anterior 
 
 ## Resultado de las correcciones
 
-Después de la revisión se corrigió grupo por grupo y luego se repasaron uno por uno los menores que habían quedado. De los 282 hallazgos: 254 corregidos, 16 corregidos en parte y 12 sin corregir (los que dependen de una decisión del negocio o de probar contra NetSuite). Cada hallazgo lleva su resultado en la línea «Resultado». Lo corregido pasó tipos, lint y tests, y la landing se comprobó en el navegador; no se probó contra la base de datos ni contra NetSuite, y los dos scripts de NetSuite cambiaron: hay que probarlos en un sandbox antes de desplegarlos.
+Después de la revisión se corrigió grupo por grupo y luego se repasaron uno por uno los menores que habían quedado. De los 282 hallazgos: 256 corregidos, 16 corregidos en parte y 10 sin corregir (los que dependen de una decisión del negocio o de probar contra NetSuite). Cada hallazgo lleva su resultado en la línea «Resultado». Lo corregido pasó tipos, lint y tests, y la landing se comprobó en el navegador; no se probó contra la base de datos ni contra NetSuite, y los dos scripts de NetSuite cambiaron: hay que probarlos en un sandbox antes de desplegarlos.
 
 ## Cobertura
 
@@ -117,7 +117,7 @@ createNSVendorBill ignora los warnings del RESTlet (CURRENCY_NOT_SET / CURRENCY_
 
 **E6** · `lib/expense/sync-to-netsuite.ts:446` · confirmado
 
-- Resultado: sin corregir: necesita decisión contable: cómo registrar IVA y retención
+- Resultado: sin cambio por decisión: cómo registrar IVA y retención depende de cada cliente y se definirá al configurarlo
 
 El Vendor Bill se crea con una única línea de gasto por item.total (subtotal + impuesto − retención) contra la cuenta de la categoría, por lo que el IVA se carga al gasto y la retención practicada no queda registrada como pasivo.
 
@@ -1035,7 +1035,7 @@ catalog_items, catalog_vendors, catalog_locations e item_mappings se guardan por
 
 **H15** · `scripts/take-screenshots.mjs:11` · confirmado
 
-- Resultado: corregido en parte: dos scripts ya leen las credenciales del entorno; otros cuatro scripts de pruebas todavía las traen fijas, y hay que rotar las contraseñas
+- Resultado: corregido en parte: ningún script trae ya contraseñas (se leen del entorno); las antiguas siguen en el historial de git, en el primer commit, y hay que rotarlas
 
 El script, versionado en git, trae en claro un correo personal con su contraseña (TENANT) y la contraseña del superadmin (ADMIN).
 
@@ -1303,7 +1303,7 @@ En «Duplicados evitados» un monto sin moneda leída se formatea como USD.
 
 **B25** · `lib/stats/ap-stats.ts:75` · sin verificar
 
-- Resultado: sin corregir: los totales siguen sumando monedas distintas
+- Resultado: corregido: los totales de Métricas y de «Por aprobar» se muestran por moneda; la moneda de cada factura se guarda con sus métricas (las facturas anteriores usan la de su subsidiaria)
 
 Los montos de Métricas (total del periodo y por proveedor) y el «en total» de «Por aprobar» del tablero suman history_documents.total sin distinguir moneda y se muestran con «$».
 
@@ -2305,7 +2305,7 @@ findByExternalId filtra con ["externalid","is",…]; externalid es un filtro tip
 
 **H20** · `scripts/netsuite/docuia-process-v1.js:412` · sin verificar
 
-- Resultado: sin corregir: falta decidir si la opción «Aplicar factura a líneas de PO» se implementa o se quita de la configuración (hoy no hace nada)
+- Resultado: corregido: con la opción apagada la OC solo se usa para cotejar; la factura se crea por su cuenta en el ERP con una nota de la OC, y la OC queda abierta (sin probar en un sandbox)
 
 apply_to_po_lines se documenta, se configura en po_processing ("Aplicar factura a líneas de PO") y se pasa a applyLinesTransform, pero nunca se lee.
 

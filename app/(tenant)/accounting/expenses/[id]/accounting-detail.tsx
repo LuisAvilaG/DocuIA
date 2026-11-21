@@ -509,7 +509,7 @@ export function AccountingExpenseDetail({ report, canDecide, canSync }: { report
           <div className="flex items-center justify-center gap-2 py-2.5 text-sm text-success">
             <BadgeCheck className="w-4 h-4" />
             {report.netsuiteExpenseReportId
-              ? `Sincronizado · NS ${report.netsuiteExpenseReportId}`
+              ? `Sincronizado · ID en el ERP ${report.netsuiteExpenseReportId}`
               : "Sincronizado en el ERP"}
           </div>
         )}

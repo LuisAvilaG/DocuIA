@@ -1,3 +1,4 @@
+import { getErp } from "@/lib/erp";
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { CheckCircle2, ExternalLink } from "lucide-react";
@@ -454,16 +455,8 @@ async function recordUrl(orgId: string, doc: { urlNetsuite: string | null; netsu
   if (doc.urlNetsuite) return doc.urlNetsuite;
   if (!doc.netsuiteDocId) return null;
   try {
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.id, orgId), columns: { activeNsEnvironment: true } });
-    const env = (org?.activeNsEnvironment ?? "production") as "sandbox" | "production";
-    const conn = await db.query.nsConnections.findFirst({
-      where: and(eq(nsConnections.organizationId, orgId), eq(nsConnections.environment, env)),
-      columns: { accountId: true },
-    });
-    if (!conn?.accountId) return null;
-    const account = conn.accountId.replace(/_/g, "-").toLowerCase();
-    const type = doc.documentType === "purchase_order" ? "purchord" : "vendbill";
-    return `https://${account}.app.netsuite.com/app/accounting/transactions/${type}.nl?id=${doc.netsuiteDocId}`;
+    // Built by the client's ERP (also when its connection was switched off since).
+    return (await getErp(orgId, { includeInactive: true }))?.recordUrl(doc.documentType, doc.netsuiteDocId) ?? null;
   } catch {
     return null;
   }

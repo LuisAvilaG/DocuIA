@@ -17,7 +17,7 @@ const STATUS_CONFIG = {
   approved:     { label: "Aprobado",      color: "text-success bg-success/10" },
   rejected:     { label: "Rechazado",     color: "text-destructive bg-destructive/10" },
   syncing:      { label: "Sincronizando", color: "text-primary bg-primary/10" },
-  synced:       { label: "En NetSuite",   color: "text-success bg-success/10" },
+  synced:       { label: "En el ERP",   color: "text-success bg-success/10" },
   exception:    { label: "Error",         color: "text-destructive bg-destructive/10" },
 } as const;
 

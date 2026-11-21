@@ -93,7 +93,7 @@ async function handleGET(req: NextRequest) {
       .set({
         status:       "failed",
         errorMessage: `Procesamiento interrumpido (sin actividad por más de ${stuckMinutes} min). ` +
-                      `Si el registro se creó en NetSuite, verifícalo por externalId antes de reintentar.`,
+                      `Si el registro se creó en el ERP, verifícalo antes de reintentar.`,
         updatedAt:    new Date(),
       })
       .where(and(

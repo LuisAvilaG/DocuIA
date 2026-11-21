@@ -18,7 +18,8 @@
  *   dry_run:                       true/false (default true) — validate without saving
  *   location_internal_id:          optional
  *   currency_internal_id:          optional
- *   apply_to_po_lines:             true/false (default true)
+ *   apply_to_po_lines:             true/false (default true) — false: do not create the bill from the PO
+ *                                  (po_internal_id is ignored and the bill is saved on its own)
  *   set_unselected_po_lines_to_zero: true/false (default false) — zero qty/amount on PO lines not matched by DocuIA
  *   allow_additional_lines:        true/false (default true)
  *   custom_fields:                 optional { custbody_x: "value" } — body fields to set (CFDI UUID, uso, etc.)
@@ -421,7 +422,9 @@ define(["N/record", "N/search", "N/format", "N/log", "N/file", "N/encode", "N/ru
   function createVendorBill(body, warnings) {
     const vendorId  = s(body.vendor_internal_id);
     const subId     = s(body.subsidiary_internal_id) || null;
-    const poId      = s(body.po_internal_id) || null;
+    // apply_to_po_lines false: the bill is not created from the purchase order
+    // (the PO stays open); it is saved on its own with the lines received.
+    const poId      = b(body.apply_to_po_lines, true) ? (s(body.po_internal_id) || null) : null;
     const invNumber = s(body.invoice_number || body.invoiceNumber);
     const invDate   = parseDate(body.invoice_date || body.invoiceDate);
     const lines     = Array.isArray(body.lines) ? body.lines : [];

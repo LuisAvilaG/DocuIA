@@ -23,8 +23,14 @@ export interface BatchMode { model: string; waitMinutes: number }
 /** Whether this organization's bulk uploads should go through a batch, and with which model. */
 export async function batchModeFor(organizationId: string, documentType: string): Promise<BatchMode | null> {
   if (documentType === "xml_cfdi") return null; // parsed without a model
-  const [bulk, models] = await Promise.all([getFeature(organizationId, "bulk_upload"), getFeature(organizationId, "ai_model_selection")]);
+  const [bulk, models, forceSecondary] = await Promise.all([
+    getFeature(organizationId, "bulk_upload"), getFeature(organizationId, "ai_model_selection"),
+    getFeature(organizationId, "ai_force_secondary").catch(() => null),
+  ]);
   if (!bulk.isEnabled || bulk.config.batch_mode !== true) return null;
+  // A batch runs the first model. With "always the precise model" on, the
+  // documents go one by one through the normal queue, which uses the second.
+  if (forceSecondary?.isEnabled) return null;
   const model = configuredModel(models.isEnabled ? models.config.primary_model : undefined, DEFAULT_PRIMARY_MODEL);
   if (providerOf(model) !== "anthropic") return null;
   const wait = Number(bulk.config.batch_wait_minutes);

@@ -6,6 +6,8 @@ import { db } from "@/lib/db";
 import { historyDocuments } from "@/db/schema";
 
 export interface DocMetrics {
+  /** Moneda del documento, para sumar totales por moneda (products la pierde al enviar). */
+  currency?: string | null;
   /** Campos corregidos en la revisión, con cuántas veces. */
   corrections?: { fields: Record<string, number>; at: string; by: string | null };
   /** Líneas leídas, con ítem asignado al leer y de esas cuántas por la memoria de mapeos. */

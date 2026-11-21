@@ -7,7 +7,7 @@ import { expenseReports, expenseItems, orgUsers } from "@/db/schema";
 import { eq, and, inArray, ne } from "drizzle-orm";
 import { formatExpenseTotals } from "@/lib/expense/totals";
 import { sendEmail, buildExpenseSubmittedEmail } from "@/lib/email/send";
-import { syncReportToNetsuite } from "@/lib/expense/sync-to-netsuite";
+import { postExpenseReport } from "@/lib/erp";
 import { expenseItemProblems } from "@/lib/expense/sync-precheck";
 import { logAudit } from "@/lib/audit/log";
 
@@ -72,7 +72,7 @@ async function handlePOST(
     // The report is approved at this point; a sync failure (e.g. NetSuite not
     // configured) is reported to accounting, not as a failed submission.
     try {
-      const syncResult = await syncReportToNetsuite(id, session.orgId);
+      const syncResult = await postExpenseReport(id, session.orgId);
       // Sent either way; "autoSynced" only when NetSuite actually took it.
       return NextResponse.json({ ok: true, autoSynced: syncResult.ok, syncResult });
     } catch (err) {

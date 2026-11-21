@@ -3,6 +3,12 @@
  * (no RESEND_API_KEY in dev = console.log fallback)
  */
 const BASE = "http://localhost:3000";
+// The user to sign in with comes from the environment, never from this file.
+const E2E_USER = { email: process.env.E2E_TENANT_EMAIL, password: process.env.E2E_TENANT_PASSWORD };
+if (!E2E_USER.email || !E2E_USER.password) {
+  console.error("Define E2E_TENANT_EMAIL y E2E_TENANT_PASSWORD antes de ejecutar este script.");
+  process.exit(1);
+}
 
 class CookieJar {
   constructor() { this.cookies = {}; }
@@ -28,7 +34,7 @@ async function api(method, path, body, jar) {
 }
 
 const jar = new CookieJar();
-await api("POST", "/api/v1/auth/login", { email: "carlos@acme.mx", password: "Demo1234!" }, jar);
+await api("POST", "/api/v1/auth/login", E2E_USER, jar);
 
 // Create report + item + submit
 const { data: r } = await api("POST", "/api/v1/expenses/reports", { purpose: "Email test" }, jar);

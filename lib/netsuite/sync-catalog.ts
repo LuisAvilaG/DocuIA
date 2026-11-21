@@ -1,15 +1,13 @@
 // Shared catalog sync (items / vendors / locations) for one subsidiary.
+import { getFeature } from "@/lib/features";
 import { logWorkflow } from "@/lib/workflow/log";
-import { getActiveNsConnection } from "@/lib/netsuite/connection";
+import { getErp } from "@/lib/erp";
 // Used by both the platform-admin endpoint and the tenant-admin endpoint so the
 // logic — including the subsidiary-scoped location cleanup — lives in one place.
 import { db } from "@/lib/db";
 import { subsidiaries, catalogItems, catalogVendors, catalogLocations } from "@/db/schema";
 import { and, eq, lt } from "drizzle-orm";
-import { fetchCatalogPage } from "@/lib/netsuite/client";
-import type { NSCredentials } from "@/lib/netsuite/oauth";
-import type { NSCatalogItem, NSVendor, NSLocation } from "@/lib/netsuite/client";
-import { decryptField } from "@/lib/crypto/encrypt";
+import type { ErpCatalogItem as NSCatalogItem, ErpVendor as NSVendor, ErpLocation as NSLocation } from "@/lib/erp/types";
 
 export type CatalogType = "items" | "vendors" | "locations";
 
@@ -53,27 +51,23 @@ export async function syncSubsidiaryCatalog(
   subsidiaryId: string,
   types?: CatalogType[],
 ): Promise<SyncCatalogResult> {
-  const conn = await getActiveNsConnection(organizationId);
-  if (!conn) return { ok: false, error: "No active NS connection found", status: 422 };
-  if (!conn.catalogScriptId || !conn.catalogDeployId) {
-    return { ok: false, error: "Catalog script not configured on this connection", status: 422 };
-  }
+  const erp = await getErp(organizationId);
+  if (!erp) return { ok: false, error: "No hay conexión activa con el ERP", status: 422 };
 
   const sub = await db.query.subsidiaries.findFirst({
     where: and(eq(subsidiaries.id, subsidiaryId), eq(subsidiaries.organizationId, organizationId)),
   });
   if (!sub) return { ok: false, error: "Subsidiary not found", status: 404 };
 
-  const creds: NSCredentials = {
-    accountId:      conn.accountId,
-    consumerKey:    decryptField(conn.consumerKey),
-    consumerSecret: decryptField(conn.consumerSecret),
-    tokenId:        decryptField(conn.tokenId),
-    tokenSecret:    decryptField(conn.tokenSecret),
-  };
-
   const syncTypes = types ?? ["items", "vendors", "locations"];
   const summary: Record<string, number> = {};
+  // The same settings the scheduled sync uses (sync_advanced): they were read
+  // only there, so a sync started by hand ignored them.
+  const advanced = (await getFeature(organizationId, "sync_advanced").catch(() => null))?.config as
+    { page_size?: number; request_timeout_ms?: number; mx_service_category_id?: number } | undefined;
+  const pageSize = Math.min(1000, Math.max(50, Math.round(Number(advanced?.page_size) || 500)));
+  const timeoutMs = advanced?.request_timeout_ms ? Math.min(120_000, Math.max(5_000, Math.round(Number(advanced.request_timeout_ms)))) : undefined;
+  const serviceCategoryId = sub.currency === "MXN" && advanced?.mx_service_category_id != null ? String(advanced.mx_service_category_id) : undefined;
 
   for (const type of syncTypes) {
     let page = 0;
@@ -81,9 +75,9 @@ export async function syncSubsidiaryCatalog(
     const startedAt = new Date();
 
     while (true) {
-      const result = await fetchCatalogPage(
-        creds, conn.catalogScriptId, conn.catalogDeployId, type, sub.nsSubsidiaryId, page, 500,
-      );
+      const result = await erp.fetchCatalogPage(type, sub.nsSubsidiaryId, page, {
+        pageSize, timeoutMs, serviceCategoryId: type === "items" ? serviceCategoryId : undefined,
+      });
       if (!result.ok || !result.data) {
         const error = `Sync failed at type=${type} page=${page}: ${result.error}`;
         await logWorkflow({ organizationId, stage: "sync", step: "catalog", status: "FAILED", errorMessage: error, metaJson: { subsidiaryId, partial: summary } });

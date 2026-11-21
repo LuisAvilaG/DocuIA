@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 import { historyDocuments, exceptionQueue, organizations, subsidiaries, usageDaily } from "@/db/schema";
 import { and, eq, inArray, isNotNull, ne, or, sql } from "drizzle-orm";
 import { uploadFile } from "@/lib/storage/minio";
-import { extractFromFile, mapInvoice, configuredEffort } from "./extract";
+import { extractFromFile, mapInvoice, configuredEffort, secondaryReason } from "./extract";
 import { parseJsonObject } from "@/lib/ai/provider";
 import { mergeDocMetrics, poAcceptance } from "./doc-metrics";
 import { reviewReason } from "./review-reason";
@@ -263,37 +263,48 @@ async function runPipelineInner(input: PipelineInput): Promise<PipelineResult> {
         promptTokens:     0,
         completionTokens: 0,
       };
-    } else if (input.precomputedExtraction) {
-      // A batch already ran the model; reuse its answer instead of calling again.
-      const pre = input.precomputedExtraction;
-      extraction = {
-        invoice: mapInvoice(parseJsonObject(pre.rawJson), input.fileName),
-        model: pre.model, fallbackUsed: false, fallbackReason: null, rawJson: pre.rawJson,
-        promptTokens: pre.promptTokens, completionTokens: pre.completionTokens, cachedTokens: pre.cachedTokens,
-      };
     } else {
-      const base64Content = input.fileBuffer.toString("base64");
-      extraction = await extractFromFile({
-        fileName:      input.fileName,
-        mimeType:      input.mimeType,
-        base64Content,
-        options: {
-          fallbackEnabled,
-          forceSecondary,
-          apiKey: orgApiKey,
-          primaryModel: modelSelection?.primary_model,
-          secondaryModel: modelSelection?.secondary_model,
-          maxChars: modelSelection?.max_chars,
-          effort: configuredEffort(modelSelection?.reasoning_effort),
-          validation: validationConfig,
-          policy: fallbackPolicy ? {
-            onZeroLines: fallbackPolicy.on_zero_lines,
-            onTotalMismatch: fallbackPolicy.on_total_mismatch,
-            onMissingHeader: fallbackPolicy.on_missing_header,
-            onModelDoubt: fallbackPolicy.on_model_doubt,
-          } : undefined,
-        },
+      const extractOptions = {
+        fallbackEnabled,
+        forceSecondary,
+        apiKey: orgApiKey,
+        primaryModel: modelSelection?.primary_model,
+        secondaryModel: modelSelection?.secondary_model,
+        maxChars: modelSelection?.max_chars,
+        effort: configuredEffort(modelSelection?.reasoning_effort),
+        validation: validationConfig,
+        policy: fallbackPolicy ? {
+          onZeroLines: fallbackPolicy.on_zero_lines,
+          onTotalMismatch: fallbackPolicy.on_total_mismatch,
+          onMissingHeader: fallbackPolicy.on_missing_header,
+          onModelDoubt: fallbackPolicy.on_model_doubt,
+        } : undefined,
+      };
+      const readFile = (options: typeof extractOptions) => extractFromFile({
+        fileName: input.fileName, mimeType: input.mimeType, base64Content: input.fileBuffer.toString("base64"), options,
       });
+      if (input.precomputedExtraction) {
+        // A batch already ran the model; reuse its answer instead of calling again.
+        const pre = input.precomputedExtraction;
+        extraction = {
+          invoice: mapInvoice(parseJsonObject(pre.rawJson), input.fileName),
+          model: pre.model, fallbackUsed: false, fallbackReason: null, rawJson: pre.rawJson,
+          promptTokens: pre.promptTokens, completionTokens: pre.completionTokens, cachedTokens: pre.cachedTokens,
+        };
+        // The batch only runs the first model. A reading the second model would
+        // have been asked about in a normal upload is read again by it here:
+        // the "second reading" setting did nothing for bulk uploads.
+        const doubt = fallbackEnabled ? secondaryReason(extraction.invoice, validationConfig ?? {}, extractOptions.policy ?? {}) : null;
+        if (doubt) {
+          try {
+            extraction = { ...await readFile({ ...extractOptions, forceSecondary: true }), fallbackReason: doubt };
+          } catch (error) {
+            console.warn("[pipeline] la segunda lectura del lote falló, se conserva la primera:", error instanceof Error ? error.message : error);
+          }
+        }
+      } else {
+        extraction = await readFile(extractOptions);
+      }
     }
 
     await logWorkflow({
@@ -315,8 +326,14 @@ async function runPipelineInner(input: PipelineInput): Promise<PipelineResult> {
 
     // Only for what the model read. A CFDI is parsed, not read, and its total
     // may include local taxes (ISH) the lines + IVA formula does not know.
+    // Lines and total apart by more than the tolerance (and less than the hard
+    // failure): a person looks at it. It used to change only the log's level.
+    let totalsWarning: string | null = null;
     if (validationConfig && !isCfdiXml) {
       const validation = validateExtraction(extraction.invoice, validationConfig);
+      if (validation.level === "warning") {
+        totalsWarning = `Las líneas no cuadran con el total (diferencia ${validation.difference.toFixed(2)})`;
+      }
       if (validation.level === "error") {
         throw new Error(
           `Validación de extracción falló: diferencia total/líneas de ${validation.difference.toFixed(2)} (${(validation.percentage * 100).toFixed(2)}%)`
@@ -402,7 +419,7 @@ async function runPipelineInner(input: PipelineInput): Promise<PipelineResult> {
       },
     });
     // Líneas asignadas solas por la memoria de mapeos (métrica «Auto-mapeo»).
-    await mergeDocMetrics(docId, { mapping: {
+    await mergeDocMetrics(docId, { currency: payload.document.currency || null, mapping: {
       lines: payload.document.lines.length,
       assigned: payload.document.lines.filter((l) => l.selected_item_id).length,
       fromMemory: payload.document.lines.filter((l) => l.selected_item_id && l.recommendation_source === "memory").length,
@@ -464,6 +481,7 @@ async function runPipelineInner(input: PipelineInput): Promise<PipelineResult> {
     const threshold = rule?.autoProcessPct != null ? rule.autoProcessPct / 100 : autoProcessThreshold;
     const autoProcess =
       !rule?.neverAutoProcess &&
+      !totalsWarning &&
       payload.confidence.overall >= threshold &&
       payload.document.lines.every((l) => l.selected_item_id !== null) &&
       // A line with neither price nor amount would be priced by the ERP itself.
@@ -503,7 +521,7 @@ async function runPipelineInner(input: PipelineInput): Promise<PipelineResult> {
           poInternalId: poId,
           // Motivo final, para el lote terminado y la lista de Documentos.
           errorMessage: reviewReason({
-            decisionReason: decision.next === "review" ? decision.reason : null,
+            decisionReason: decision.next === "review" ? decision.reason : totalsWarning,
             vendorSelected: Boolean(payload.document.vendor.selected_internal_id),
             lines: payload.document.lines,
             confidence: payload.confidence.overall,

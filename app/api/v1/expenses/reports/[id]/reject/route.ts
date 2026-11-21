@@ -48,7 +48,7 @@ async function handlePOST(req: NextRequest, { params }: Params) {
       where: and(eq(expenseItems.reportId, id), isNotNull(expenseItems.nsRecordId)),
       columns: { id: true },
     });
-    if (posted) return NextResponse.json({ error: "Este informe ya tiene registros creados en NetSuite y no se puede devolver al empleado." }, { status: 409 });
+    if (posted) return NextResponse.json({ error: "Este informe ya tiene registros creados en el ERP y no se puede devolver al empleado." }, { status: 409 });
   }
 
   const rejected = await db.update(expenseReports)

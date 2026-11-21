@@ -103,7 +103,7 @@ export function buildExpenseApprovedEmail(opts: {
   return `<div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#111">
     <h2 style="margin:0 0 8px">Tu informe de gastos fue aprobado</h2>
     <p style="color:#555;margin:0 0 24px">
-      Hola ${esc(submitterName)}, tu informe de gastos ha sido <strong style="color:#16a34a">aprobado</strong> y será procesado en NetSuite próximamente.
+      Hola ${esc(submitterName)}, tu informe de gastos ha sido <strong style="color:#16a34a">aprobado</strong> y será registrado en el ERP próximamente.
     </p>
     <div style="background:#f5f5f5;border-radius:8px;padding:16px;margin:0 0 24px">
       <p style="margin:0 0 4px;font-size:11px;color:#888">Propósito</p>

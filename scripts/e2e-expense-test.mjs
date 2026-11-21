@@ -3,6 +3,12 @@
  * Run: node scripts/e2e-expense-test.mjs
  */
 const BASE = "http://localhost:3000";
+// The user to sign in with comes from the environment, never from this file.
+const E2E_USER = { email: process.env.E2E_TENANT_EMAIL, password: process.env.E2E_TENANT_PASSWORD };
+if (!E2E_USER.email || !E2E_USER.password) {
+  console.error("Define E2E_TENANT_EMAIL y E2E_TENANT_PASSWORD antes de ejecutar este script.");
+  process.exit(1);
+}
 
 class CookieJar {
   constructor() { this.cookies = {}; }
@@ -76,7 +82,7 @@ console.log("══════════════════════�
 console.log("TEST 1: Login as Acme admin (carlos@acme.mx)");
 const jar = new CookieJar();
 const loginRes = await req("POST", "/api/v1/auth/login",
-  { email: "carlos@acme.mx", password: "Demo1234!" }, jar);
+  E2E_USER, jar);
 check("Login returns 200", loginRes.status === 200, `got ${loginRes.status}`);
 check("Returns ok:true", loginRes.data?.ok === true);
 check("Cookie set", Object.keys(jar.cookies).includes("access_token"),

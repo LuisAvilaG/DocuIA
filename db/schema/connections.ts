@@ -13,6 +13,11 @@ export const nsConnections = pgTable("ns_connections", {
   id:                 varchar("id", { length: 36 }).primaryKey(),
   organizationId:     varchar("organization_id", { length: 36 }).notNull(),
   environment:        nsEnvironmentEnum("environment").notNull(),
+  // Which ERP this connection is for (lib/erp: one adapter per provider). The
+  // credential columns below are NetSuite's; another ERP keeps its own in
+  // provider_config (encrypted JSON).
+  provider:           varchar("provider", { length: 32 }).notNull().default("netsuite"),
+  providerConfig:     text("provider_config"),
 
   // TBA Credentials
   accountId:          varchar("account_id", { length: 100 }).notNull(),

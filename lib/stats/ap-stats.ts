@@ -5,7 +5,8 @@
 import { orgTimeZone } from "@/lib/org-time-zone";
 import { startOfMonthIn } from "@/lib/time-zone";
 import { db } from "@/lib/db";
-import { catalogVendors, exceptionQueue, historyDocuments, orgUsers } from "@/db/schema";
+import { catalogVendors, exceptionQueue, historyDocuments, orgUsers, subsidiaries } from "@/db/schema";
+import { amountsByCurrency, docCurrency } from "./doc-currency";
 import { and, desc, eq, gte, inArray, isNotNull, lt, ne, sql, type SQL } from "drizzle-orm";
 
 export type Period = "7d" | "month" | "quarter";
@@ -86,6 +87,25 @@ export async function loadApStats(f: StatsFilters, opts: { byCategory: boolean }
     ${f.subsidiaryId ? sql`and h.subsidiary_id = ${f.subsidiaryId}` : sql``}
     ${f.vendor ? sql`and h.vendor = ${f.vendor}` : sql``}
     ${f.includeQa ? sql`` : sql`and h.is_qa = false`}`;
+  const groupName = opts.byCategory
+    ? sql<string>`coalesce(max(${catalogVendors.categoryName}), 'Sin categoría')`
+    : sql<string>`coalesce(${historyDocuments.vendor}, 'Sin proveedor')`;
+  const amountSum = sql<number>`coalesce(sum(${historyDocuments.total}), 0)::float`;
+  // Money by currency, for the period and for each row of the table: a total
+  // that adds pesos and dollars means nothing.
+  const [periodAmounts, groupAmounts] = await Promise.all([
+    db.select({ currency: docCurrency, amount: amountSum }).from(historyDocuments)
+      .leftJoin(subsidiaries, eq(subsidiaries.id, historyDocuments.subsidiaryId))
+      .where(cur).groupBy(docCurrency),
+    opts.byCategory
+      ? db.select({ name: groupName, currency: docCurrency, amount: amountSum }).from(historyDocuments)
+          .leftJoin(subsidiaries, eq(subsidiaries.id, historyDocuments.subsidiaryId))
+          .leftJoin(catalogVendors, and(eq(catalogVendors.subsidiaryId, historyDocuments.subsidiaryId), eq(catalogVendors.internalId, vendorIdExpr)))
+          .where(cur).groupBy(catalogVendors.categoryId, docCurrency)
+      : db.select({ name: groupName, currency: docCurrency, amount: amountSum }).from(historyDocuments)
+          .leftJoin(subsidiaries, eq(subsidiaries.id, historyDocuments.subsidiaryId))
+          .where(cur).groupBy(historyDocuments.vendor, docCurrency),
+  ]);
   const [curRow, prevRow, weeks, vendorsRows, exceptionRows, openExceptions, team] = await Promise.all([
     summary(cur),
     summary(prev),
@@ -160,6 +180,7 @@ export async function loadApStats(f: StatsFilters, opts: { byCategory: boolean }
     autoDelta: autoPct !== null && prevAutoPct !== null ? autoPct - prevAutoPct : null,
     received: c.received,
     amount: c.amount,
+    amounts: amountsByCurrency(periodAmounts),
     medianHours: c.medianHours === null ? null : Number(c.medianHours),
     exceptions: { total: exceptions.length, open: openExceptions[0]?.count ?? 0, pct: c.received ? Math.round((exceptions.length / c.received) * 1000) / 10 : 0 },
     funnel: [
@@ -173,6 +194,7 @@ export async function loadApStats(f: StatsFilters, opts: { byCategory: boolean }
       name: v.name,
       count: v.count,
       amount: v.amount,
+      amounts: amountsByCurrency(groupAmounts.filter((g) => g.name === v.name)),
       poPct: v.poChecked ? Math.round((v.poOk / v.poChecked) * 100) : null,
       exceptions: (v.docIds ?? []).reduce((s, id) => s + (exceptionDocs.get(Number(id)) ?? 0), 0),
     })),

@@ -500,3 +500,32 @@ test("SAT: el & de un RFC se escribe &amp; dentro de la expresión", async () =>
   const { satExpression } = await import("../lib/cfdi/sat");
   assert.equal(satExpression({ emisorRfc: "A&B010101AB1", receptorRfc: "ANO010203AB4", total: 100, uuid: "abc" }), "?re=A&amp;B010101AB1&rr=ANO010203AB4&tt=100.00&id=ABC");
 });
+
+test("OC: con «Aplicar factura a líneas de PO» apagado la factura va sola y la OC queda de referencia", async () => {
+  const { buildNsPayload } = await import("../lib/workflow/ns-payload");
+  const draft = {
+    vendorId: "17", vendorName: "Proveedor", invoiceNumber: "F-1", invoiceDate: "2026-11-20", dueDate: null, currency: "MXN", locationId: null, poId: "900",
+    lines: [{ internal_id: "5", item_document_name: "Tornillo", quantity: 10, rate: 2, amount: 20, unit: null, po_line: "3" }],
+  };
+  const ctx = { organizationId: "org", documentId: 1, documentType: "invoice", nsSubsidiaryId: "7", dryRun: false };
+  const on = buildNsPayload(draft, { ...ctx, poConfig: { apply_to_po_lines: true } });
+  assert.equal(on.po_internal_id, "900");
+  assert.equal(on.set_unselected_po_lines_to_zero, true);
+  assert.equal((on.line_items as Array<{ po_line: string | null }>)[0].po_line, "3");
+  assert.equal(on.memo, undefined);
+  const off = buildNsPayload(draft, { ...ctx, poConfig: { apply_to_po_lines: false, set_unselected_po_lines_to_zero: true } });
+  assert.equal(off.po_internal_id, null);
+  assert.equal(off.apply_to_po_lines, false);
+  assert.equal(off.set_unselected_po_lines_to_zero, false);
+  assert.equal((off.line_items as Array<{ po_line: string | null }>)[0].po_line, null);
+  assert.match(String(off.memo), /900/);
+  // Sin configuración se comporta como hasta ahora.
+  assert.equal(buildNsPayload(draft, ctx).po_internal_id, "900");
+});
+
+test("totales por moneda: nunca se suman monedas distintas", async () => {
+  const { amountsByCurrency } = await import("../lib/stats/doc-currency");
+  assert.deepEqual(amountsByCurrency([{ currency: "MXN", amount: 100 }, { currency: "USD", amount: 45 }, { currency: "MXN", amount: "50.5" }, { currency: "EUR", amount: 0 }]),
+    [{ currency: "MXN", amount: 150.5 }, { currency: "USD", amount: 45 }]);
+  assert.deepEqual(amountsByCurrency([]), []);
+});

@@ -1,6 +1,6 @@
 import { withApiSecurity } from "@/lib/security/http";
 import { logAdminAction } from "@/lib/audit/admin";
-import { getActiveNsConnection } from "@/lib/netsuite/connection";
+import { getErpExpenses } from "@/lib/erp";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession } from "@/lib/auth/admin";
 import { db } from "@/lib/db";
@@ -9,28 +9,7 @@ import {
   catalogClasses, orgUsers,
 } from "@/db/schema";
 import { and, eq, count } from "drizzle-orm";
-import { decryptField } from "@/lib/crypto/encrypt";
-import type { NSCredentials } from "@/lib/netsuite/oauth";
-import {
-  syncExpenseCategories,
-  syncDepartments,
-  syncClasses,
-  syncEmployees,
-} from "@/lib/expense/sync-catalogs";
-
 type Params = { params: Promise<{ id: string }> };
-
-async function resolveNsCreds(organizationId: string): Promise<NSCredentials | null> {
-  const conn = await getActiveNsConnection(organizationId);
-  if (!conn) return null;
-  return {
-    accountId:      conn.accountId,
-    consumerKey:    decryptField(conn.consumerKey),
-    consumerSecret: decryptField(conn.consumerSecret),
-    tokenId:        decryptField(conn.tokenId),
-    tokenSecret:    decryptField(conn.tokenSecret),
-  };
-}
 
 async function handleGET(_req: NextRequest, { params }: Params) {
   const { error } = await requireAdminSession();
@@ -83,9 +62,9 @@ async function handlePOST(req: NextRequest, { params }: Params) {
     subsidiaryId?: string;
   };
 
-  const creds = await resolveNsCreds(organizationId);
-  if (!creds) {
-    return NextResponse.json({ error: "No hay conexión NetSuite activa para este cliente" }, { status: 422 });
+  const erp = await getErpExpenses(organizationId);
+  if (!erp) {
+    return NextResponse.json({ error: "Este cliente no tiene un ERP conectado que maneje gastos" }, { status: 422 });
   }
 
   const subsidiaryId = body.subsidiaryId ?? null;
@@ -94,16 +73,16 @@ async function handlePOST(req: NextRequest, { params }: Params) {
     const results: Record<string, unknown> = {};
 
     if (body.action === "sync_categories" || body.action === "sync_all") {
-      results.categories = await syncExpenseCategories(organizationId, subsidiaryId, creds);
+      results.categories = await erp.syncCategories(organizationId, subsidiaryId);
     }
     if (body.action === "sync_departments" || body.action === "sync_all") {
-      results.departments = await syncDepartments(organizationId, subsidiaryId, creds);
+      results.departments = await erp.syncDepartments(organizationId, subsidiaryId);
     }
     if (body.action === "sync_classes" || body.action === "sync_all") {
-      results.classes = await syncClasses(organizationId, subsidiaryId, creds);
+      results.classes = await erp.syncClasses(organizationId, subsidiaryId);
     }
     if (body.action === "sync_employees" || body.action === "sync_all") {
-      results.employees = await syncEmployees(organizationId, creds);
+      results.employees = await erp.syncEmployees(organizationId);
     }
 
     await logAdminAction(req, session!, { action: "expense_catalogs.synced", targetOrgId: organizationId, after: { action: body.action, results } });

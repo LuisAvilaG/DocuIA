@@ -25,6 +25,11 @@ export interface NsDraft {
 }
 
 export interface PoConfig {
+  /**
+   * On (default): the bill is created from the purchase order and each invoice
+   * line bills its PO line. Off: the PO is only used to compare the invoice;
+   * the bill goes to the ERP on its own and the PO stays open there.
+   */
   apply_to_po_lines?:               boolean;
   set_unselected_po_lines_to_zero?: boolean;
   allow_additional_lines?:          boolean;
@@ -49,7 +54,8 @@ export function buildNsPayload(draft: NsDraft, ctx: {
   // An invoice matched line by line to its PO usually covers one delivery. The
   // ERP builds the bill from every open PO line, so the ones this invoice does
   // not bill must go to zero or the bill would be for the whole pending PO.
-  const matchedToPoLines = Boolean(draft.poId) && draft.lines.some((l) => l.po_line);
+  const billFromPo = Boolean(draft.poId) && poConfig.apply_to_po_lines !== false;
+  const matchedToPoLines = billFromPo && draft.lines.some((l) => l.po_line);
   return {
     documentType:                    ctx.documentType,
     dry_run:                         ctx.dryRun,
@@ -62,11 +68,14 @@ export function buildNsPayload(draft: NsDraft, ctx: {
     due_date:                        draft.dueDate,
     currency_internal_id:            draft.currency,
     location_internal_id:            draft.locationId,
-    po_internal_id:                  draft.poId,
-    apply_to_po_lines:               poConfig.apply_to_po_lines ?? true,
-    set_unselected_po_lines_to_zero: matchedToPoLines || (poConfig.set_unselected_po_lines_to_zero ?? false),
+    po_internal_id:                  billFromPo ? draft.poId : null,
+    apply_to_po_lines:               billFromPo,
+    set_unselected_po_lines_to_zero: billFromPo && (matchedToPoLines || (poConfig.set_unselected_po_lines_to_zero ?? false)),
     allow_additional_lines:          poConfig.allow_additional_lines ?? true,
-    line_items:                      draft.poId ? mergeLinesOnSamePoLine(draft.lines) : draft.lines,
+    // Not billed from the PO: the invoice's own lines, without their PO line.
+    line_items:                      billFromPo ? mergeLinesOnSamePoLine(draft.lines) : draft.lines.map((line) => ({ ...line, po_line: null })),
+    // The PO it was checked against stays written on the bill.
+    ...(draft.poId && !billFromPo ? { memo: `Cotejada contra la orden de compra con id interno ${draft.poId}; no se aplicó a sus líneas.` } : {}),
   };
 }
 

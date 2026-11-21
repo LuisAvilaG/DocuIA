@@ -6,11 +6,8 @@ import { subsidiaries, catalogItems, catalogVendors, catalogLocations, orgFeatur
 import { and, eq, lt, max, sql } from "drizzle-orm";
 import { getFeature } from "@/lib/features";
 import { operatingOrganization } from "@/lib/auth/jwt";
-import { fetchCatalogPage } from "@/lib/netsuite/client";
-import type { NSCredentials } from "@/lib/netsuite/oauth";
-import type { NSCatalogItem, NSVendor, NSLocation } from "@/lib/netsuite/client";
-import { decryptField } from "@/lib/crypto/encrypt";
-import { getActiveNsConnection } from "@/lib/netsuite/connection";
+import { getErp } from "@/lib/erp";
+import type { ErpCatalogItem as NSCatalogItem, ErpVendor as NSVendor, ErpLocation as NSLocation } from "@/lib/erp/types";
 
 function cronAuth(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
@@ -99,20 +96,11 @@ async function handleGET(req: NextRequest) {
         const mxDue = allSubs.filter(sub => sub.currency === "MXN" && isDue(sub)).sort((a, b) => age(a) - age(b));
         const subs = mxLimit > 0 ? [...allSubs.filter(sub => sub.currency !== "MXN"), ...mxDue.slice(0, mxLimit)] : allSubs;
 
-        const conn = await getActiveNsConnection(org.id);
-
-        if (!conn?.catalogScriptId || !conn?.catalogDeployId) {
-          summary[org.id] = { skipped: "no catalog script configured" };
+        const erp = await getErp(org.id);
+        if (!erp) {
+          summary[org.id] = { skipped: "no ERP connected" };
           continue;
         }
-
-        const creds: NSCredentials = {
-          accountId:      conn.accountId,
-          consumerKey:    decryptField(conn.consumerKey),
-          consumerSecret: decryptField(conn.consumerSecret),
-          tokenId:        decryptField(conn.tokenId),
-          tokenSecret:    decryptField(conn.tokenSecret),
-        };
 
         const orgSummary: Record<string, unknown> = {};
 
@@ -133,11 +121,10 @@ async function handleGET(req: NextRequest) {
             const now = new Date();
 
             while (true) {
-              const result = await fetchCatalogPage(
-                creds, conn.catalogScriptId, conn.catalogDeployId,
-                type, sub.nsSubsidiaryId, page, pageSize, timeoutMs,
-                type === "items" && sub.currency === "MXN" ? String(advanced.mx_service_category_id ?? "") : undefined,
-              );
+              const result = await erp.fetchCatalogPage(type, sub.nsSubsidiaryId, page, {
+                pageSize, timeoutMs,
+                serviceCategoryId: type === "items" && sub.currency === "MXN" ? String(advanced.mx_service_category_id ?? "") : undefined,
+              });
               if (!result.ok || !result.data) {
                 // Report partial pages instead of a silent "ok".
                 if (!result.ok) subSummary[`${type}_error`] = result.error ?? "fetch failed";

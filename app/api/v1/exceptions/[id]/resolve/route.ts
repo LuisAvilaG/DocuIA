@@ -1,3 +1,4 @@
+import { isFeatureEnabled } from "@/lib/features";
 import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
@@ -10,6 +11,9 @@ type Params = { params: Promise<{ id: string }> };
 async function handlePOST(req: NextRequest, { params }: Params) {
   const session = await getTenantSession({ area: "documents", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+  if (!await isFeatureEnabled(session.orgId, "exception_queue")) {
+    return NextResponse.json({ error: "La cola de excepciones no está activa para tu organización" }, { status: 403 });
+  }
 
   try {
     const { id } = await params;

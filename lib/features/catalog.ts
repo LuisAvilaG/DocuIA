@@ -51,7 +51,7 @@ export const FEATURE_CATALOG = [
       { key: "primary_model", label: "Modelo primario", type: "select", options: ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5", "gemini-2.5-flash", "gemini-2.5-pro"], optionLabels: { "claude-haiku-5-5": "Claude Haiku 5.5", "claude-sonnet-5-5": "Claude Sonnet 5.5", "claude-opus-5-5": "Claude Opus 5.5", "gemini-2.5-flash": "Gemini 2.5 Flash", "gemini-2.5-pro": "Gemini 2.5 Pro" } },
       { key: "secondary_model", label: "Modelo secundario (respaldo)", type: "select", options: ["claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5", "gemini-2.5-pro", "gemini-2.5-flash"], optionLabels: { "claude-haiku-5-5": "Claude Haiku 5.5", "claude-sonnet-5-5": "Claude Sonnet 5.5", "claude-opus-5-5": "Claude Opus 5.5", "gemini-2.5-flash": "Gemini 2.5 Flash", "gemini-2.5-pro": "Gemini 2.5 Pro" } },
       { key: "reasoning_effort", label: "Esfuerzo de razonamiento (Claude)", type: "select", options: ["low", "medium", "high"], optionLabels: { low: "Bajo · más rápido", medium: "Medio · recomendado", high: "Alto · más lento" }, description: "Medio es el que probamos con calidad completa; bajo ahorra un cuarto del tiempo. Sin razonamiento se pierde calidad, por eso no es opción" },
-      { key: "max_chars", label: "Máx. caracteres de respuesta AI (aprox.)", type: "number", min: 10000, max: 200000 },
+      { key: "max_chars", label: "Máx. caracteres de respuesta AI (aprox.)", type: "number", min: 10000, max: 80000 },
     ],
     planRequired: "starter" as const,
     isBeta: false,
@@ -60,7 +60,7 @@ export const FEATURE_CATALOG = [
   {
     id: "ai_validation_thresholds",
     name: "Umbrales de validación de extracción",
-    description: "Controla qué diferencia entre total extraído y suma de líneas se considera error.",
+    description: "Qué diferencia entre el total leído y la suma de líneas se acepta. Por encima de la tolerancia la factura pasa a revisión; por encima del fallo duro, la lectura se rechaza.",
     category: "extraction" as const,
     featureType: "config" as const,
     defaultEnabled: true,
@@ -104,8 +104,8 @@ export const FEATURE_CATALOG = [
     defaultEnabled: false,
     defaultConfig: { apply_to_po_lines: true, set_unselected_po_lines_to_zero: false, allow_additional_lines: true },
     configSchema: [
-      { key: "apply_to_po_lines", label: "Aplicar factura a líneas de PO", type: "boolean" },
-      { key: "set_unselected_po_lines_to_zero", label: "Poner líneas no seleccionadas en cero", type: "boolean" },
+      { key: "apply_to_po_lines", label: "Aplicar factura a líneas de PO (apagado: la OC solo se usa para cotejar y queda abierta en el ERP)", type: "boolean" },
+      { key: "set_unselected_po_lines_to_zero", label: "Poner líneas no seleccionadas en cero (siempre activo cuando cada línea va atada a su línea de la OC)", type: "boolean" },
       { key: "allow_additional_lines", label: "Permitir líneas adicionales", type: "boolean" },
     ],
     planRequired: "starter" as const,
@@ -143,7 +143,7 @@ export const FEATURE_CATALOG = [
   {
     id: "three_way_match",
     name: "Validación con entrada de almacén (3 vías)",
-    description: "Solo factura lo recibido y aún no facturado. Si falta la recepción, la factura espera y se revisa sola. Requiere Coincidencia factura–OC.",
+    description: "Solo factura lo recibido y aún no facturado. Si falta la recepción, la factura espera y se revisa sola. Requiere Coincidencia factura–OC. Con el alcance «según reglas de proveedor» también requiere Reglas de proveedores y una regla que pida recepción; enviar a excepción al vencer la espera requiere la Cola de excepciones.",
     category: "workflow" as const,
     featureType: "boolean_config" as const,
     defaultEnabled: false,
@@ -199,7 +199,7 @@ export const FEATURE_CATALOG = [
   {
     id: "erp_attachments",
     name: "Adjuntos y campos en el ERP",
-    description: "Adjunta el XML y el PDF a la factura del ERP y llena el UUID y campos personalizados. Con el método Factura (PDF) solo se adjunta el PDF.",
+    description: "Adjunta el XML y el PDF a la factura del ERP y llena el UUID y campos personalizados. Con el método Factura (PDF) solo se adjunta el PDF. Requiere Almacenamiento de documentos: sin él no se envía nada. Los campos personalizados deben ser campos de cabecera del ERP (custbody…).",
     category: "workflow" as const,
     featureType: "boolean_config" as const,
     defaultEnabled: false,
@@ -218,7 +218,7 @@ export const FEATURE_CATALOG = [
   {
     id: "ap_advanced_stats",
     name: "Estadísticas avanzadas de AP",
-    description: "Por proveedor, coincidencia con OC, excepciones por motivo, tiempo al ERP y actividad por usuario.",
+    description: "Agrega a Métricas la vista agrupada por categoría de proveedor. (El resto de Métricas viene con Analítica avanzada.)",
     category: "analytics" as const,
     featureType: "boolean" as const,
     defaultEnabled: false,
@@ -314,7 +314,7 @@ export const FEATURE_CATALOG = [
   {
     id: "bulk_upload",
     name: "Carga masiva de documentos",
-    description: "Sube múltiples documentos a la vez y los procesa en cola. Opcionalmente por lotes: mitad de precio, resultados en minutos u horas.",
+    description: "Sube múltiples documentos a la vez y los procesa en cola. Opcionalmente por lotes: mitad de precio, resultados en minutos u horas. El modo por lotes requiere Almacenamiento de documentos y un modelo Claude como primario; con «lectura siempre con el modelo preciso» los documentos van uno por uno.",
     category: "workflow" as const,
     featureType: "boolean_config" as const,
     defaultEnabled: false,
@@ -364,7 +364,7 @@ export const FEATURE_CATALOG = [
     defaultConfig: { interval_hours: 24, check_every_minutes: 5, start_delay_seconds: 20 },
     configSchema: [
       { key: "interval_hours", label: "Intervalo entre sincronizaciones (horas)", type: "number", min: 1, max: 168 },
-      { key: "check_every_minutes", label: "Frecuencia de verificación (min)", type: "number", min: 1, max: 60 },
+      { key: "check_every_minutes", label: "Frecuencia de verificación (min)", type: "number", min: 5, max: 60 },
       { key: "start_delay_seconds", label: "Delay inicial al arrancar (seg)", type: "number", min: 0, max: 300 },
     ],
     planRequired: "growth" as const,
@@ -380,7 +380,7 @@ export const FEATURE_CATALOG = [
     defaultEnabled: true,
     defaultConfig: { page_size: 500, mx_max_subsidiaries_per_run: 0, mx_service_category_id: 6, request_timeout_ms: 45000 },
     configSchema: [
-      { key: "page_size", label: "Tamaño de página de sync", type: "number", min: 50, max: 2000 },
+      { key: "page_size", label: "Tamaño de página de sync", type: "number", min: 50, max: 1000 },
       { key: "mx_max_subsidiaries_per_run", label: "Máx subsidiarias MX por corrida (0=todas)", type: "number", min: 0, max: 100 },
       { key: "mx_service_category_id", label: "ID categoría de servicios MX", type: "number", min: 1 },
       { key: "request_timeout_ms", label: "Timeout peticiones NetSuite (ms)", type: "number", min: 5000, max: 120000 },
@@ -393,7 +393,7 @@ export const FEATURE_CATALOG = [
   {
     id: "webhook_system",
     name: "Webhooks",
-    description: "Notificaciones HTTP a sistemas externos en eventos de documentos y syncs.",
+    description: "Notificaciones HTTP a sistemas externos cuando una factura llega al ERP, pasa a revisión o falla.",
     category: "integration" as const,
     featureType: "boolean" as const,
     defaultEnabled: false,
@@ -463,7 +463,7 @@ export const FEATURE_CATALOG = [
   {
     id: "data_retention",
     name: "Retención de datos",
-    description: "Define por cuántos días se conservan los documentos procesados y los logs.",
+    description: "Define por cuántos días se conservan las facturas ya terminadas (en el ERP o con error) y los logs de proceso. No borra contratos, gastos ni auditoría.",
     category: "analytics" as const,
     featureType: "config" as const,
     defaultEnabled: true,
@@ -538,7 +538,7 @@ export const FEATURE_CATALOG = [
       documento_equivalente_form_id: "",
     },
     configSchema: [
-      { key: "country_code", label: "País principal (CO, MX, CL...)", type: "string" },
+      { key: "country_code", label: "País principal (CO o MX; otros países solo fijan la moneda)", type: "string" },
       { key: "auto_create_vendor", label: "Crear proveedor automáticamente si no existe en NS", type: "boolean" },
       { key: "duplicate_check_enabled", label: "Detectar gastos duplicados", type: "boolean" },
       { key: "spending_caps_enabled", label: "Validar topes de gasto por categoría", type: "boolean" },
@@ -728,8 +728,10 @@ export const FEATURE_CATALOG = [
     category: "contracts" as const,
     featureType: "boolean_config" as const,
     defaultEnabled: false,
-    defaultConfig: { sender_name: "", email_template: "" },
+    defaultConfig: { sender_name: "", email_template: "", upload_link: true, link_days: 14 },
     configSchema: [
+      { key: "upload_link", label: "Incluir enlace para que el contratista suba los documentos sin cuenta", type: "boolean" },
+      { key: "link_days", label: "Días que dura el enlace", type: "number", min: 1, max: 60 },
       { key: "sender_name", label: "Nombre del remitente", type: "string" },
       { key: "email_template", label: "Plantilla del correo", type: "string", description: "Texto base; el motivo y los documentos pedidos se agregan solos." },
     ],

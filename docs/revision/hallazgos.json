@@ -877,7 +877,7 @@
   "verdict": "sin verificar",
   "evidence": "",
   "fix": "",
-  "outcome": "sin corregir: los totales siguen sumando monedas distintas"
+  "outcome": "corregido: los totales de Métricas y de «Por aprobar» se muestran por moneda; la moneda de cada factura se guarda con sus métricas (las facturas anteriores usan la de su subsidiaria)"
  },
  {
   "file": "lib/stats/ap-stats.ts",
@@ -2141,7 +2141,7 @@
   "verdict": "confirmado",
   "evidence": "lib/expense/sync-to-netsuite.ts:181-199 y 446 envían una sola expense_line con amount = item.total contra la cuenta de la categoría; subtotal, taxAmount y retentionAmount no aparecen en ningún payload, y lib/expense/tax-engine.ts:275 obliga a que total = subtotal + impuesto − retención. El RESTlet (docuia-process-v1.js:279-301) solo fija cuenta, importe, memo, departamento y clase, sin código de impuesto ni línea de retención; el asiento final depende de la configuración fiscal de la cuenta NetSuite, pero la retención capturada no se envía en ningún caso y no hay documentación en docs/ que lo declare intencional.",
   "fix": "Requiere decisión del responsable contable: o enviar subtotal como gasto más líneas/códigos de IVA y de retención (cuentas configurables por cliente), o declarar explícitamente que solo se contabiliza el neto y bloquear/avisar las líneas con retención > 0.",
-  "outcome": "sin corregir: necesita decisión contable: cómo registrar IVA y retención"
+  "outcome": "sin cambio por decisión: cómo registrar IVA y retención depende de cada cliente y se definirá al configurarlo"
  },
  {
   "file": "app/(tenant)/accounting/expenses/[id]/accounting-detail.tsx",
@@ -3901,7 +3901,7 @@
   "verdict": "confirmado",
   "evidence": "scripts/take-screenshots.mjs:11-12 trae en claro un correo personal con su contraseña y la contraseña del superadmin; el archivo está versionado desde el primer commit (5a82631) y el repositorio tiene remoto en GitHub. La misma contraseña de administrador aparece además en scripts/e2e-admin-tab-test.mjs, scripts/reset-admin-password.ts, start.ps1 y docs/QA.md.",
   "fix": "Rotar ambas contraseñas, leerlas de variables de entorno en los scripts y quitar el valor fijo también de start.ps1 y docs/QA.md (el historial de git seguirá mostrándolas, por eso la rotación es obligatoria).",
-  "outcome": "corregido en parte: dos scripts ya leen las credenciales del entorno; otros cuatro scripts de pruebas todavía las traen fijas, y hay que rotar las contraseñas"
+  "outcome": "corregido en parte: ningún script trae ya contraseñas (se leen del entorno); las antiguas siguen en el historial de git, en el primer commit, y hay que rotarlas"
  },
  {
   "file": "scripts/reset-admin-password.ts",
@@ -3981,7 +3981,7 @@
   "verdict": "sin verificar",
   "evidence": "",
   "fix": "",
-  "outcome": "sin corregir: falta decidir si la opción «Aplicar factura a líneas de PO» se implementa o se quita de la configuración (hoy no hace nada)"
+  "outcome": "corregido: con la opción apagada la OC solo se usa para cotejar; la factura se crea por su cuenta en el ERP con una nota de la OC, y la OC queda abierta (sin probar en un sandbox)"
  },
  {
   "file": "scripts/netsuite/docuia-process-v1.js",

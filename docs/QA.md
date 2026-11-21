@@ -12,7 +12,7 @@
 
 | Rol | Email | Contraseña | URL de acceso |
 |---|---|---|---|
-| Superadmin | admin@docuia.com | CONTRASENA-ELIMINADA | /admin/login |
+| Superadmin | admin@docuia.com | (la de `PLATFORM_ADMIN_PASSWORD` en `.env.local`) | /admin/login |
 | Tenant admin (Enterprise) | carlos@acme.mx | Demo1234! | /login |
 
 **Tenant demo:** Distribuidora Acme, plan Enterprise, rol admin.
@@ -386,7 +386,7 @@
 
 **Pasos:**
 1. Ir a `/admin/login`
-2. Ingresar `admin@docuia.com` / `CONTRASENA-ELIMINADA`
+2. Ingresar `admin@docuia.com` / `(la de `PLATFORM_ADMIN_PASSWORD` en `.env.local`)`
 
 **Resultado esperado:**
 - HTTP 200 con `{ ok: true }`

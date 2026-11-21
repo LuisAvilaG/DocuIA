@@ -19,6 +19,10 @@ function compactMoney(n: number) {
   if (n >= 10_000) return `$${(n / 1_000).toLocaleString("es-MX", { maximumFractionDigits: 0 })} mil`;
   return `$${n.toLocaleString("es-MX", { maximumFractionDigits: 0 })}`;
 }
+/** One figure per currency: «$250 mil MXN · $3 mil USD». */
+function amountsText(list: Array<{ currency: string; amount: number }>) {
+  return list.length === 0 ? "$0" : list.map((a) => `${compactMoney(a.amount)}${a.currency ? ` ${a.currency}` : ""}`).join(" · ");
+}
 function duration(hours: number | null) {
   if (hours === null) return "—";
   if (hours < 1) return `${Math.max(1, Math.round(hours * 60))} min`;
@@ -213,7 +217,7 @@ export default async function StatisticsPage({ searchParams }: { searchParams: P
                 <Sparkline values={trend} />
               </div>
               <div className="lg:ml-auto flex flex-wrap gap-10">
-                <div className="flex flex-col gap-1"><span className="text-xs font-semibold text-muted-foreground">Facturas</span><span className="text-[1.75rem] font-semibold tracking-[-0.02em] tabular-nums">{num(stats.received)}</span><span className="text-xs text-muted-foreground">{compactMoney(stats.amount)}</span></div>
+                <div className="flex flex-col gap-1"><span className="text-xs font-semibold text-muted-foreground">Facturas</span><span className="text-[1.75rem] font-semibold tracking-[-0.02em] tabular-nums">{num(stats.received)}</span><span className="text-xs text-muted-foreground">{amountsText(stats.amounts)}</span></div>
                 <div className="flex flex-col gap-1"><span className="text-xs font-semibold text-muted-foreground">Tiempo al ERP</span><span className="text-[1.75rem] font-semibold tracking-[-0.02em] tabular-nums">{duration(stats.medianHours)}</span><span className="text-xs text-muted-foreground">mediana desde la carga</span></div>
                 <div className="flex flex-col gap-1"><span className="text-xs font-semibold text-muted-foreground">Excepciones</span><span className="text-[1.75rem] font-semibold tracking-[-0.02em] tabular-nums">{num(stats.exceptions.total)}</span><span className="text-xs text-muted-foreground">{stats.exceptions.pct}% · {num(stats.exceptions.open)} abiertas</span></div>
               </div>
@@ -278,7 +282,7 @@ export default async function StatisticsPage({ searchParams }: { searchParams: P
                           <tr key={g.name} className="border-b border-border/60">
                             <td className="py-2.5 pr-3 max-w-[220px] truncate">{g.name}</td>
                             <td className="py-2.5 pr-3"><div className="flex items-center gap-2"><div className="w-24"><Thin pct={(g.count / maxGroup) * 100} /></div><span className="tabular-nums">{num(g.count)}</span></div></td>
-                            <td className="py-2.5 text-right tabular-nums">{compactMoney(g.amount)}</td>
+                            <td className="py-2.5 text-right tabular-nums">{amountsText(g.amounts)}</td>
                             <td className="py-2.5 text-right tabular-nums">{g.poPct === null ? <span className="text-muted-foreground">Sin OC</span> : `${g.poPct}%`}</td>
                             <td className="py-2.5 text-right tabular-nums">{num(g.exceptions)}</td>
                           </tr>

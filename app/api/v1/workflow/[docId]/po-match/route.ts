@@ -4,8 +4,7 @@ import { and, eq } from "drizzle-orm";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
 import { historyDocuments, subsidiaries } from "@/db/schema";
-import { getActiveNsConnection, nsCredentials } from "@/lib/netsuite/connection";
-import { fetchOpenPurchaseOrders } from "@/lib/netsuite/client";
+import { getErp } from "@/lib/erp";
 import { comparePurchaseOrder, effectivePoConfig, loadFeatureFlags, requiresReceipt, vendorRuleFor } from "@/lib/workflow/ap-checks";
 import { parsePoMatchConfig, poOutcome, suggestPurchaseOrders } from "@/lib/workflow/po-match";
 import type { UiPayload } from "@/lib/workflow/types";
@@ -46,16 +45,16 @@ async function handleGET(req: NextRequest, { params }: Params) {
       where: and(eq(subsidiaries.id, doc.subsidiaryId), eq(subsidiaries.organizationId, session.orgId)),
       columns: { nsSubsidiaryId: true },
     }),
-    getActiveNsConnection(session.orgId),
+    getErp(session.orgId),
     ruleFor(session.orgId, doc.subsidiaryId, vendorId, flags),
   ]);
   if (!sub) return NextResponse.json({ error: "Subsidiaria no encontrada" }, { status: 404 });
-  if (!conn?.catalogScriptId || !conn.catalogDeployId) {
-    return NextResponse.json({ error: "No hay script de catálogo del ERP configurado" }, { status: 422 });
+  if (!conn?.capabilities.purchaseOrders) {
+    return NextResponse.json({ error: "El ERP conectado no permite consultar órdenes de compra" }, { status: 422 });
   }
 
   const cfg = effectivePoConfig(parsePoMatchConfig(flags.getConfig("po_matching")), rule);
-  const open = await fetchOpenPurchaseOrders(nsCredentials(conn), conn.catalogScriptId, conn.catalogDeployId, sub.nsSubsidiaryId, vendorId);
+  const open = await conn.fetchOpenPurchaseOrders(sub.nsSubsidiaryId, vendorId);
   if (!open.ok) return NextResponse.json({ error: open.error ?? "No se pudieron consultar las OC abiertas" }, { status: 502 });
 
   const payload = (doc.products ?? {}) as Partial<UiPayload>;

@@ -4,8 +4,8 @@ import { getTenantSession } from "@/lib/auth/jwt";
 import { canApprove } from "@/lib/auth/permissions";
 import { isFeatureEnabled } from "@/lib/features";
 import { db } from "@/lib/db";
-import { expenseReports } from "@/db/schema";
-import { eq, and, inArray } from "drizzle-orm";
+import { expenseItems, expenseReports } from "@/db/schema";
+import { eq, and, inArray, isNotNull, isNull } from "drizzle-orm";
 import { sendEmail, buildExpenseRejectedEmail } from "@/lib/email/send";
 import { logAudit } from "@/lib/audit/log";
 
@@ -37,13 +37,28 @@ async function handlePOST(req: NextRequest, { params }: Params) {
   });
 
   if (!report) return NextResponse.json({ error: "Informe no encontrado" }, { status: 404 });
-  if (report.status !== "submitted" && report.status !== "under_review") {
+  // An approved report that cannot be posted (or failed to) may go back to the
+  // employee too, as long as nothing of it exists in NetSuite yet.
+  const decided = report.status === "approved" || report.status === "exception";
+  if (report.status !== "submitted" && report.status !== "under_review" && !decided) {
     return NextResponse.json({ error: `No se puede rechazar un informe en estado "${report.status}"` }, { status: 409 });
+  }
+  if (decided) {
+    const posted = report.netsuiteExpenseReportId || await db.query.expenseItems.findFirst({
+      where: and(eq(expenseItems.reportId, id), isNotNull(expenseItems.nsRecordId)),
+      columns: { id: true },
+    });
+    if (posted) return NextResponse.json({ error: "Este informe ya tiene registros creados en NetSuite y no se puede devolver al empleado." }, { status: 409 });
   }
 
   const rejected = await db.update(expenseReports)
-    .set({ status: "rejected", rejectedReason: body.reason.trim(), updatedAt: new Date() })
-    .where(and(eq(expenseReports.id, id), inArray(expenseReports.status, ["submitted", "under_review"])))
+    .set({ status: "rejected", rejectedReason: body.reason.trim(), syncError: null, updatedAt: new Date() })
+    .where(and(
+      eq(expenseReports.id, id),
+      decided
+        ? and(inArray(expenseReports.status, ["approved", "exception"]), isNull(expenseReports.netsuiteExpenseReportId))
+        : inArray(expenseReports.status, ["submitted", "under_review"]),
+    ))
     .returning({ id: expenseReports.id });
   if (!rejected.length) return NextResponse.json({ error: "El informe cambió de estado mientras lo procesabas. Recarga la página." }, { status: 409 });
 

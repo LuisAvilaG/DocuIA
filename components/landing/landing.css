@@ -381,3 +381,14 @@
   .lp .sub,.lp .ctas,.lp .machine,.lp .reveal{opacity:1;transform:none}
   .lp .lpre,.lp .hero-field{display:none}
 }
+
+/* Teclado: el menú de Productos también se abre al llegar con Tab (el mouse sigue con hover). */
+.lp .nav-dd:has(:focus-visible) > a svg{transform:rotate(180deg)}
+.lp .nav-dd:has(:focus-visible) .nav-dd-panel{opacity:1;visibility:visible;transform:translateX(-50%) translateY(0)}
+/* El panel deja de ser visible al terminar su desvanecido, no antes: si se ocultara en el
+   instante en que «Productos» pierde el foco, Tab no alcanzaría a entrar a sus enlaces. */
+.lp .nav-dd-panel{transition:opacity .28s cubic-bezier(.22,1,.36,1),transform .28s cubic-bezier(.22,1,.36,1),visibility 0s linear .28s}
+.lp .nav-dd:hover .nav-dd-panel{transition-delay:0s}
+.lp .nav-dd:has(:focus-visible) .nav-dd-panel{transition-delay:0s}
+/* El formulario de contacto se desplaza solo: al llegar al final no arrastra la página de atrás. */
+.lp .cmodal .box{overscroll-behavior:contain}

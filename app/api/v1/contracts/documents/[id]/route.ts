@@ -42,7 +42,7 @@ async function handlePATCH(request: NextRequest, { params }: { params: Promise<{
   if (!CORRECTABLE.includes(kase.status)) {
     return NextResponse.json({
       error: kase.status === "failed"
-        ? "El procesamiento de este caso falló. Vuelve a procesarlo antes de corregir campos."
+        ? "El análisis de este caso no terminó. Vuelve a analizarlo desde el caso antes de corregir campos."
         : "Este caso ya tiene una decisión. Reábrelo para corregir campos.",
     }, { status: 409 });
   }

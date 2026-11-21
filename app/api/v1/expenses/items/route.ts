@@ -9,8 +9,9 @@ import { expenseReports, expenseItems, expenseDocuments } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { validateExpenseAmounts } from "@/lib/expense/tax-engine";
+import { getExpenseManagementConfig } from "@/lib/expense/config";
 import {
-  createExpenseItemSchema, expenseRecordType, firstIssue, needsDocumentoEquivalente, resolveAmounts,
+  createExpenseItemSchema, defaultExpenseCurrency, expenseRecordType, firstIssue, needsDocumentoEquivalente, resolveAmounts,
 } from "@/lib/expense/item-input";
 
 async function handlePOST(req: NextRequest) {
@@ -71,7 +72,7 @@ async function handlePOST(req: NextRequest) {
       taxAmount:                String(amounts.taxAmount),
       retentionAmount:          String(amounts.retentionAmount),
       total:                    String(amounts.total),
-      currency:                 body.currency ?? "COP",
+      currency:                 body.currency ?? defaultExpenseCurrency((await getExpenseManagementConfig(session.orgId)).countryCode),
       paymentMethod:            body.paymentMethod,
       documentTypeDetected:     docType,
       needsDocumentoEquivalente: needsDE,
@@ -85,6 +86,7 @@ async function handlePOST(req: NextRequest) {
         mimeType:             receipt!.mimeType,
         originalName:         receipt!.originalName,
         documentTypeDetected: docType,
+        ocrConfidence:        receipt!.ocrConfidence !== undefined ? String(receipt!.ocrConfidence) : null,
       });
     }
 

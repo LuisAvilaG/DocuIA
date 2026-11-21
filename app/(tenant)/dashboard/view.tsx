@@ -40,8 +40,7 @@ function recentDetail(d: Recent): string | null {
 }
 
 /** Documentos por día de la semana: una serie, valor encima de cada barra con datos. */
-function WeekBars({ days }: { days: number[] }) {
-  const todayIdx = (new Date().getDay() + 6) % 7;
+function WeekBars({ days, todayIdx }: { days: number[]; todayIdx: number }) {
   const shown = days.slice(0, Math.max(5, todayIdx + 1)); // fin de semana solo si ya llegó
   const W = 320, base = 104, top = 24, slot = W / shown.length, bw = Math.min(28, slot * 0.5);
   const max = Math.max(1, ...shown);
@@ -85,7 +84,9 @@ function Todo({ count, title, detail, href, cta }: { count: number; title: strin
 }
 
 export function DashboardView({ data, statsEnabled, exceptionsEnabled, canUpload }: { data: DashboardData | null; statsEnabled: boolean; exceptionsEnabled: boolean; canUpload: boolean }) {
-  const dateLabel = new Date().toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long" });
+  // Rendered on the server: dates and times need the client's zone.
+  const timeZone = data?.timeZone;
+  const dateLabel = new Date().toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", timeZone });
 
   const tasks = data ? [
     data.review && {
@@ -102,7 +103,7 @@ export function DashboardView({ data, statsEnabled, exceptionsEnabled, canUpload
     },
     data.receipt && {
       key: "receipt", count: data.receipt.count, title: "Esperando recepción", href: "/documents?status=awaiting_receipt", cta: "Ver",
-      detail: `Se envían solas cuando almacén registre la entrada.${data.receipt.nextCheck ? ` Se revisa de nuevo a las ${new Date(data.receipt.nextCheck).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" })}.` : ""}`,
+      detail: `Se envían solas cuando almacén registre la entrada.${data.receipt.nextCheck ? ` Se revisa de nuevo a las ${new Date(data.receipt.nextCheck).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit", timeZone })}.` : ""}`,
     },
   ].filter((t): t is Exclude<typeof t, false | undefined | null> => Boolean(t)) : [];
   const attentionTotal = tasks.reduce((s, t) => s + t.count, 0);
@@ -137,7 +138,7 @@ export function DashboardView({ data, statsEnabled, exceptionsEnabled, canUpload
 
             <aside>
               <SectionTitle title="Esta semana" aside={statsEnabled ? <Link href="/metrics" className="text-link hover:underline">Métricas →</Link> : undefined} />
-              <WeekBars days={data.week.days} />
+              <WeekBars days={data.week.days} todayIdx={data.todayIdx} />
               <dl className="mt-3 text-[13.5px]">
                 {[
                   ["Documentos", data.week.total.toLocaleString("es-MX")],

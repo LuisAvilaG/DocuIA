@@ -5,15 +5,24 @@ import { BarChart3, CalendarDays, ChevronDown, Clock3, Files, Filter, ShieldChec
 import { FlowBars, SignerDonut, ThroughputArea } from "./charts";
 import { CONTRACT_CASE_STATUS, contractStatusLabel } from "@/lib/contracts/status";
 
-type CaseItem = { id: string; createdAt: string; updatedAt: string; status: string; flowId: string | null };
-type ValidationItem = { caseId: string; ok: boolean | null; severity: string };
+type CaseItem = { id: string; createdAt: string; updatedAt: string; analyzedAt: string | null; status: string; flowId: string | null };
+/** Validations of one case, already counted on the server. */
+type ValidationItem = { caseId: string; correct: number; review: number; finding: number };
 
-const DONE = new Set(["validated", "generated", "approved"]);
+// Finished = decided. Without the approval workflow nobody decides, so a case
+// is finished when its validation ends.
+const DECIDED = ["approved", "generated", "rejected"];
 const PERIODS = [
   { value: "7", label: "Últimos 7 días" }, { value: "30", label: "Últimos 30 días" },
   { value: "90", label: "Últimos 90 días" }, { value: "all", label: "Todo el historial" },
 ];
+// One option per word the user sees: several stored states share a word
+// ("Analizando", "Por decidir", "Aprobado") and each appeared twice in the list.
+const STATUS_OPTIONS = [...new Set(Object.values(CONTRACT_CASE_STATUS).map((entry) => entry.label))].map((label) => ({ value: label, label }));
 const pad = (n: number) => String(n).padStart(2, "0");
+const MONTHS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+const dayKey = (date: Date) => String(date.getFullYear()) + "-" + pad(date.getMonth() + 1) + "-" + pad(date.getDate());
+const monthKey = (date: Date) => String(date.getFullYear()) + "-" + pad(date.getMonth() + 1);
 
 function formatDuration(ms: number) {
   if (!ms) return "Sin muestra";
@@ -28,7 +37,11 @@ function countBy(values: string[]) {
   return [...counts.entries()].map(([name, n]) => ({ name, n })).sort((a, b) => b.n - a.n).slice(0, 8);
 }
 
-export function ContractMetricsClient({ referenceDate, cases, documents, validations, flows, children }: {
+export function ContractMetricsClient({ referenceDate, cases, documents, validations, flows, approvalEnabled = false, cappedAt = null, children }: {
+  /** Set when the organization has more cases than the page loads. */
+  cappedAt?: number | null;
+  /** With the approval workflow, a validated case still waits for its decision. */
+  approvalEnabled?: boolean;
   referenceDate: string;
   cases: CaseItem[];
   documents: Array<{ caseId: string; type: string }>;
@@ -45,36 +58,54 @@ export function ContractMetricsClient({ referenceDate, cases, documents, validat
     const dayCount = period === "all" ? null : Number(period);
     const cutoff = dayCount ? new Date(new Date(referenceDate).getTime() - (dayCount - 1) * 86_400_000) : null;
     if (cutoff) cutoff.setHours(0, 0, 0, 0);
-    return cases.filter((item) => (!cutoff || new Date(item.createdAt) >= cutoff) && (!flowId || item.flowId === flowId) && (!status || item.status === status));
+    return cases.filter((item) => (!cutoff || new Date(item.createdAt) >= cutoff) && (!flowId || item.flowId === flowId) && (!status || contractStatusLabel(item.status) === status));
   }, [cases, flowId, period, referenceDate, status]);
   const selectedIds = useMemo(() => new Set(filtered.map((item) => item.id)), [filtered]);
   const selectedDocs = useMemo(() => documents.filter((item) => selectedIds.has(item.caseId)), [documents, selectedIds]);
   const selectedValidations = useMemo(() => validations.filter((item) => selectedIds.has(item.caseId)), [selectedIds, validations]);
-  const finished = filtered.filter((item) => DONE.has(item.status));
-  const durations = finished.map((item) => new Date(item.updatedAt).getTime() - new Date(item.createdAt).getTime()).filter((duration) => duration > 0);
+  const finished = filtered.filter((item) => DECIDED.includes(item.status) || (!approvalEnabled && item.status === "validated"));
+  // From the case's creation to the end of its analysis. The last update moved
+  // with the wait for a decision and with anything done to the case afterwards.
+  const durations = filtered.map((item) => item.analyzedAt ? new Date(item.analyzedAt).getTime() - new Date(item.createdAt).getTime() : 0).filter((duration) => duration > 0);
   const avgDuration = durations.length ? durations.reduce((sum, duration) => sum + duration, 0) / durations.length : 0;
   const rules = { correct: 0, review: 0, finding: 0 };
   for (const item of selectedValidations) {
-    if (item.ok === true) rules.correct += 1;
-    else if (item.ok === false && item.severity === "block") rules.finding += 1;
-    else rules.review += 1;
+    rules.correct += item.correct; rules.review += item.review; rules.finding += item.finding;
   }
 
   const timeline = useMemo(() => {
-    const days = period === "all" ? 30 : Number(period);
-    const start = new Date(referenceDate); start.setDate(start.getDate() - (days - 1)); start.setHours(0, 0, 0, 0);
+    const today = new Date(referenceDate); today.setHours(0, 0, 0, 0);
+    let days = Number(period);
+    if (period === "all") {
+      // The whole history: from the first case in scope, by day while it fits
+      // and by month beyond that (it used to draw the last 30 days only).
+      const first = new Date(filtered.reduce((min, item) => Math.min(min, new Date(item.createdAt).getTime()), today.getTime()));
+      first.setHours(0, 0, 0, 0);
+      days = Math.max(30, Math.round((today.getTime() - first.getTime()) / 86_400_000) + 1);
+      if (days > 92) {
+        const buckets: Array<{ key: string; label: string; n: number }> = [];
+        for (const date = new Date(first.getFullYear(), first.getMonth(), 1); date <= today; date.setMonth(date.getMonth() + 1)) {
+          buckets.push({ key: monthKey(date), label: MONTHS[date.getMonth()] + " " + String(date.getFullYear()).slice(2), n: 0 });
+        }
+        const indexes = new Map(buckets.map((item, index) => [item.key, index]));
+        for (const item of filtered) {
+          const index = indexes.get(monthKey(new Date(item.createdAt)));
+          if (index !== undefined) buckets[index].n += 1;
+        }
+        return { buckets, byMonth: true };
+      }
+    }
+    const start = new Date(today); start.setDate(start.getDate() - (days - 1));
     const buckets = Array.from({ length: days }, (_, index) => {
       const date = new Date(start); date.setDate(start.getDate() + index);
-      const key = String(date.getFullYear()) + "-" + pad(date.getMonth() + 1) + "-" + pad(date.getDate());
-      return { key, label: pad(date.getDate()) + "/" + pad(date.getMonth() + 1), n: 0 };
+      return { key: dayKey(date), label: pad(date.getDate()) + "/" + pad(date.getMonth() + 1), n: 0 };
     });
     const indexes = new Map(buckets.map((item, index) => [item.key, index]));
     for (const item of filtered) {
-      const date = new Date(item.createdAt);
-      const index = indexes.get(String(date.getFullYear()) + "-" + pad(date.getMonth() + 1) + "-" + pad(date.getDate()));
+      const index = indexes.get(dayKey(new Date(item.createdAt)));
       if (index !== undefined) buckets[index].n += 1;
     }
-    return buckets;
+    return { buckets, byMonth: false };
   }, [filtered, period, referenceDate]);
   const perFlow = useMemo(() => countBy(filtered.map((item) => item.flowId ? flowNames.get(item.flowId) ?? "Flujo eliminado" : "Sin flujo asignado")), [filtered, flowNames]);
   const perType = useMemo(() => countBy(selectedDocs.map((item) => item.type)), [selectedDocs]);
@@ -98,18 +129,18 @@ export function ContractMetricsClient({ referenceDate, cases, documents, validat
       <span className="mr-1 inline-flex items-center gap-1.5 text-xs font-semibold text-foreground"><Filter className="h-3.5 w-3.5 text-primary" /> Alcance</span>
       <Select value={period} onChange={setPeriod} options={PERIODS} label="Periodo" />
       <Select value={flowId} onChange={setFlowId} options={[{ value: "", label: "Todos los flujos" }, ...flows.map((flow) => ({ value: flow.id, label: flow.name }))]} label="Flujo" />
-      <Select value={status} onChange={setStatus} options={[{ value: "", label: "Todos los estados" }, ...Object.entries(CONTRACT_CASE_STATUS).map(([value, entry]) => ({ value, label: entry.label }))]} label="Estado" />
-      <span className="ml-auto text-[11px] tabular-nums text-muted-foreground">{total} caso{total === 1 ? "" : "s"} analizado{total === 1 ? "" : "s"}</span>
+      <Select value={status} onChange={setStatus} options={[{ value: "", label: "Todos los estados" }, ...STATUS_OPTIONS]} label="Estado" />
+      <span className="ml-auto text-[11px] tabular-nums text-muted-foreground">{total} caso{total === 1 ? "" : "s"} analizado{total === 1 ? "" : "s"}{cappedAt ? ` · de los ${cappedAt.toLocaleString("es-MX")} más recientes` : ""}</span>
     </section>
     {total === 0 ? <EmptyMetrics /> : <>
       <section className="grid gap-0 overflow-hidden rounded-xl border border-border bg-card md:grid-cols-4" aria-label="Resumen del alcance">
         <Summary label="Finalizados" value={String(completionRate) + "%"} detail={String(finished.length) + " de " + String(total) + " casos"} Icon={ShieldCheck} tone="text-success" />
-        <Summary label="Tiempo de proceso" value={formatDuration(avgDuration)} detail={durations.length ? String(durations.length) + " casos medidos" : "Aún sin muestra"} Icon={Clock3} tone="text-primary" />
+        <Summary label="Tiempo de análisis" value={formatDuration(avgDuration)} detail={durations.length ? String(durations.length) + " casos medidos" : "Aún sin muestra"} Icon={Clock3} tone="text-primary" />
         <Summary label="Documentos por caso" value={docsPerCase} detail={String(selectedDocs.length) + " documentos"} Icon={Files} tone="text-primary" />
         <Summary label="Requieren atención" value={String(flags)} detail={String(rules.finding) + " bloqueos · " + String(rules.review) + " por revisar"} Icon={TriangleAlert} tone={flags ? "text-warning" : "text-success"} />
       </section>
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1.55fr)_minmax(18rem,0.85fr)]">
-        <section className="rounded-xl border border-border bg-card p-5"><PanelTitle title="Actividad de casos" subtitle="Casos creados en el periodo seleccionado." Icon={CalendarDays} /><div className="mt-4"><ThroughputArea data={timeline} /></div></section>
+        <section className="rounded-xl border border-border bg-card p-5"><PanelTitle title="Actividad de casos" subtitle={timeline.byMonth ? "Casos creados por mes en todo el historial." : "Casos creados por día en el periodo seleccionado."} Icon={CalendarDays} /><div className="mt-4"><ThroughputArea data={timeline.buckets} /></div></section>
         <section className="rounded-xl border border-border bg-card p-5"><PanelTitle title="Resultado de reglas" subtitle="El detalle que necesita atención, no solo un porcentaje." /><div className="mt-4">{outcomeData.length ? <SignerDonut data={outcomeData} /> : <p className="py-8 text-center text-xs text-muted-foreground">Aún no hay reglas ejecutadas.</p>}</div></section>
       </div>
       <div className="grid gap-4 lg:grid-cols-2">

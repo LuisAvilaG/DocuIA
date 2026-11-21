@@ -8,8 +8,13 @@ const OUT = join(__dirname, '..', 'screenshots');
 mkdirSync(OUT, { recursive: true });
 
 const BASE = 'http://localhost:3000';
-const TENANT = { email: 'luisavi.g@hotmail.com', password: 'CONTRASENA-ELIMINADA' };
-const ADMIN  = { email: 'admin@docuia.com', password: 'CONTRASENA-ELIMINADA' };
+const TENANT = { email: process.env.E2E_TENANT_EMAIL, password: process.env.E2E_TENANT_PASSWORD };
+const ADMIN  = { email: process.env.E2E_ADMIN_EMAIL, password: process.env.E2E_ADMIN_PASSWORD };
+// Credentials come from the environment, never from this file.
+if (!TENANT.email || !TENANT.password || !ADMIN.email || !ADMIN.password) {
+  console.error('Define E2E_TENANT_EMAIL, E2E_TENANT_PASSWORD, E2E_ADMIN_EMAIL y E2E_ADMIN_PASSWORD antes de ejecutar este script.');
+  process.exit(1);
+}
 
 async function shot(page, name) {
   await page.waitForLoadState('networkidle');

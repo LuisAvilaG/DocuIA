@@ -1,3 +1,5 @@
+import { dayIn } from "@/lib/time-zone";
+import { orgTimeZone } from "@/lib/org-time-zone";
 import { db } from "@/lib/db";
 import { getActiveNsConnection } from "@/lib/netsuite/connection";
 import { expenseReports, expenseItems, subsidiaries } from "@/db/schema";
@@ -6,6 +8,8 @@ import { decryptField } from "@/lib/crypto/encrypt";
 import { buildOAuthHeader, buildRestApiUrl, NSCredentials } from "@/lib/netsuite/oauth";
 import { getExpenseManagementConfig } from "@/lib/expense/config";
 import { nitCandidates } from "@/lib/expense/nit";
+import { expenseItemProblems } from "@/lib/expense/sync-precheck";
+import { erpWarningNote, erpWarnings } from "@/lib/workflow/process-ns";
 
 const NS_TIMEOUT_MS = Number(process.env.NETSUITE_TIMEOUT_MS) || 30_000;
 
@@ -51,7 +55,9 @@ async function suiteQL(
     body: JSON.stringify({ q: query }),
     signal: AbortSignal.timeout(NS_TIMEOUT_MS),
   });
-  if (!res.ok) return [];
+  // A failed query is not "no rows": treating it as such would create a
+  // duplicate vendor (or post a transaction twice) on a NetSuite/auth error.
+  if (!res.ok) throw new Error(`La consulta a NetSuite falló (HTTP ${res.status})`);
   const json = await res.json() as { items?: Array<Record<string, unknown>> };
   return json.items ?? [];
 }
@@ -172,7 +178,7 @@ async function createNSVendorBill(
     class?:           string | null;
     customFormId?:     string | null;
   },
-): Promise<string> {
+): Promise<{ id: string; note: string | null }> {
   const { processDocument } = await import("@/lib/netsuite/client");
   // Employee expenses paid to a vendor have no catalog item — they post to the
   // Vendor Bill's expense sublist against the category's GL account.
@@ -199,7 +205,19 @@ async function createNSVendorBill(
   });
   if (!result.ok) throw new Error(result.error ?? "Error en NS al crear Vendor Bill");
   const d = result.data as Record<string, unknown>;
-  return String(d?.vendor_bill_internal_id ?? d?.internal_id ?? d?.id ?? "");
+  const id = String(d?.vendor_bill_internal_id ?? d?.internal_id ?? d?.id ?? "");
+  // Another bill of this vendor with the same number, not this line's own
+  // earlier attempt: linking to it would mark the line as posted with nothing
+  // created for its amount.
+  if (d?.already_exists && d?.matched_by === "document_number") {
+    throw new Error(`La factura ${opts.invoiceNumber} de este proveedor ya existe en NetSuite${id ? ` (ID ${id})` : ""}; no se creó otra.`);
+  }
+  // A reply without an ID is not a created bill (for example, the Process
+  // Script ID pointing at another script).
+  if (!id) throw new Error("NetSuite no devolvió el ID de la factura. Revisa que el Process Script configurado sea docuia-process-v1.");
+  // The bill is saved, but not as sent (for example, in the vendor's currency
+  // instead of the line's): accounting has to look at it.
+  return { id, note: erpWarningNote(erpWarnings(d)) };
 }
 
 // ── Result types ──────────────────────────────────────────────────────
@@ -304,38 +322,9 @@ export async function syncReportToNetsuite(reportId: string, orgId: string): Pro
     );
   }
 
-  // A2. Personal (Expense Report) items need the NS expense category
-  for (const item of personalItems) {
-    if (!item.category?.netsuiteCategoryId) {
-      preErrors.push(`Línea ${item.lineNumber}: sin categoría de NetSuite (re-sincroniza catálogos)`);
-    }
-  }
-
-  // A2b. The Expense Report is posted without a currency per line, so NetSuite
-  // books every amount in the report's currency. Mixed currencies would post
-  // a USD 100 line as 100 of whatever the others are.
-  const personalCurrencies = [...new Set(personalItems.map((item) => (item.currency ?? "").toUpperCase()).filter(Boolean))];
-  if (personalCurrencies.length > 1) {
-    preErrors.push(
-      `El informe mezcla monedas (${personalCurrencies.join(", ")}) en gastos personales y NetSuite los registraría todos en una sola. ` +
-      `Deja una sola moneda por informe o convierte los importes.`
-    );
-  }
-
-  // A3. Vendor Bill items need NIT, a reference (documents equivalent receive a
-  // deterministic one below), and the category's GL account.
-  //     (the expense line on the bill is account-based, not item-based).
-  for (const item of vendorBillItems) {
-    if (!item.vendorNit) {
-      preErrors.push(`Línea ${item.lineNumber}: Vendor Bill requiere NIT/RFC del proveedor`);
-    }
-    if (!item.invoiceNumber && !item.needsDocumentoEquivalente) {
-      preErrors.push(`Línea ${item.lineNumber}: Vendor Bill requiere número de factura`);
-    }
-    if (!item.category?.netsuiteAccountId) {
-      preErrors.push(`Línea ${item.lineNumber}: la categoría no tiene cuenta contable de NetSuite (re-sincroniza catálogos)`);
-    }
-  }
+  // A2/A3. What each line needs (category, single currency, vendor data): the
+  // same rules the report passes when the employee sends it.
+  preErrors.push(...expenseItemProblems(report.items));
 
   if (vendorBillItems.some(item => item.needsDocumentoEquivalente)
     && expenseConfig.documentoEquivalenteFormId
@@ -344,11 +333,26 @@ export async function syncReportToNetsuite(reportId: string, orgId: string): Pro
   }
 
   if (preErrors.length > 0) {
+    // Guarded: never overwrite a report another request already claimed or synced.
     await db.update(expenseReports)
       .set({ status: "approved", syncError: preErrors.join("\n"), updatedAt: new Date() })
-      .where(eq(expenseReports.id, reportId));
+      .where(and(eq(expenseReports.id, reportId), syncableStatus()));
     return { ok: false, nsExpenseReportId: null, itemResults: [], errors: preErrors };
   }
+
+  // "Today" is the client's day, not the server's (UTC): after 6 or 7 pm the
+  // server is already on tomorrow.
+  const today = dayIn(await orgTimeZone(orgId));
+
+  // Claim the report: of two concurrent syncs (double click, submit + manual
+  // retry) only one reaches NetSuite. It comes before the vendors are resolved,
+  // because that step can already create one there: two runs side by side
+  // created the same vendor twice.
+  const claimed = await db.update(expenseReports)
+    .set({ status: "syncing", updatedAt: new Date() })
+    .where(and(eq(expenseReports.id, reportId), syncableStatus()))
+    .returning({ id: expenseReports.id });
+  if (!claimed.length) throw new Error("El informe ya se está sincronizando o cambió de estado. Recarga la página.");
 
   // ═══════════════════════════════════════════════════════════════════
   // FASE B — RESOLUCIÓN DE VENDORS (lookup + create si no existen)
@@ -394,23 +398,16 @@ export async function syncReportToNetsuite(reportId: string, orgId: string): Pro
 
   if (vendorErrors.length > 0) {
     // Revert to approved so contabilidad can retry after fixing the vendor
+    // (the report is ours: it was claimed above).
     await db.update(expenseReports)
       .set({ status: "approved", syncError: vendorErrors.join("\n"), updatedAt: new Date() })
-      .where(eq(expenseReports.id, reportId));
+      .where(and(eq(expenseReports.id, reportId), eq(expenseReports.status, "syncing")));
     return { ok: false, nsExpenseReportId: null, itemResults: [], errors: vendorErrors };
   }
 
   // ═══════════════════════════════════════════════════════════════════
   // FASE C — CREACIÓN DE REGISTROS EN NS
   // ═══════════════════════════════════════════════════════════════════
-  // Claim the report: of two concurrent syncs (double click, submit + manual
-  // retry) only one reaches NetSuite.
-  const claimed = await db.update(expenseReports)
-    .set({ status: "syncing", updatedAt: new Date() })
-    .where(and(eq(expenseReports.id, reportId), syncableStatus()))
-    .returning({ id: expenseReports.id });
-  if (!claimed.length) throw new Error("El informe ya se está sincronizando o cambió de estado. Recarga la página.");
-
   const itemResults: SyncToNSResult["itemResults"] = [];
   const syncErrors: string[] = [];
   let nsExpenseReportId: string | null = report.netsuiteExpenseReportId ?? null;
@@ -425,11 +422,11 @@ export async function syncReportToNetsuite(reportId: string, orgId: string): Pro
       }
       try {
         const vendorNsId   = vendorMap.get(item.vendorNit!)!;
-        const invoiceDate  = item.invoiceDate
-          ? (item.invoiceDate as Date).toISOString().slice(0, 10)
-          : new Date().toISOString().slice(0, 10);
+        // The invoice's date, else the day of the expense; only without both, today.
+        const billDate     = item.invoiceDate ?? item.expenseDate;
+        const invoiceDate  = billDate ? (billDate as Date).toISOString().slice(0, 10) : today;
 
-        const nsId = await createNSVendorBill(creds, {
+        const { id: nsId, note } = await createNSVendorBill(creds, {
           processScriptId: conn.processScriptId!,
           processDeployId: conn.processDeployId!,
           vendorNsId,
@@ -449,10 +446,13 @@ export async function syncReportToNetsuite(reportId: string, orgId: string): Pro
         });
 
         await db.update(expenseItems)
-          .set({ nsRecordId: nsId || null, nsRecordType: "vendor_bill", syncError: null, updatedAt: new Date() })
+          .set({ nsRecordId: nsId, nsRecordType: "vendor_bill", syncError: note, updatedAt: new Date() })
           .where(eq(expenseItems.id, item.id));
+        // Created with warnings: the report stops in "exception" once, so someone
+        // sees it. Syncing again skips this line (it already has its record).
+        if (note) syncErrors.push(`Línea ${item.lineNumber}: ${note}`);
 
-        itemResults.push({ itemId: item.id, nsRecordId: nsId || null, error: null });
+        itemResults.push({ itemId: item.id, nsRecordId: nsId, error: note });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         syncErrors.push(`Línea ${item.lineNumber}: ${msg}`);
@@ -468,8 +468,6 @@ export async function syncReportToNetsuite(reportId: string, orgId: string): Pro
     // Skip if the Expense Report was already created in a previous run.
     if (personalItems.length > 0 && syncErrors.length === 0 && !nsExpenseReportId) {
       try {
-        const today = new Date().toISOString().slice(0, 10);
-
         const lines: ExpenseLineForNS[] = personalItems.map(item => {
           const dateStr = item.expenseDate
             ? (item.expenseDate as Date).toISOString().slice(0, 10)
@@ -527,7 +525,7 @@ export async function syncReportToNetsuite(reportId: string, orgId: string): Pro
           syncError:               null,
           updatedAt:               new Date(),
         })
-        .where(eq(expenseReports.id, reportId));
+        .where(and(eq(expenseReports.id, reportId), eq(expenseReports.status, "syncing")));
     } else {
       await db.update(expenseReports)
         .set({
@@ -535,7 +533,7 @@ export async function syncReportToNetsuite(reportId: string, orgId: string): Pro
           syncError: syncErrors.join("\n"),
           updatedAt: new Date(),
         })
-        .where(eq(expenseReports.id, reportId));
+        .where(and(eq(expenseReports.id, reportId), eq(expenseReports.status, "syncing")));
     }
 
   } catch (err) {

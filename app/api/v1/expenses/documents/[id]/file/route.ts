@@ -8,6 +8,8 @@ import { db } from "@/lib/db";
 import { expenseDocuments } from "@/db/schema";
 import { getFileStream } from "@/lib/storage/minio";
 
+const SHOWN_INLINE = new Set(["application/pdf", "image/jpeg", "image/png", "image/webp", "image/gif"]);
+
 // Receipt attached to an expense line: visible to its submitter and to the
 // people who review the organization's expenses.
 async function handleGET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -20,7 +22,7 @@ async function handleGET(_req: NextRequest, { params }: { params: Promise<{ id: 
 
   const document = await db.query.expenseDocuments.findFirst({
     where: eq(expenseDocuments.id, documentId),
-    columns: { fileKey: true, mimeType: true },
+    columns: { fileKey: true, mimeType: true, originalName: true },
     with: { item: { columns: { id: true }, with: { report: { columns: { organizationId: true, submitterId: true } } } } },
   });
   const report = document?.item?.report;
@@ -31,10 +33,14 @@ async function handleGET(_req: NextRequest, { params }: { params: Promise<{ id: 
 
   try {
     const stream = Readable.toWeb(await getFileStream(document.fileKey)) as unknown as ReadableStream<Uint8Array>;
+    // Browsers show these themselves. Anything else (an iPhone's HEIC photo)
+    // opened as a blank tab: it is downloaded with its name instead.
+    const shown = SHOWN_INLINE.has(document.mimeType ?? "");
+    const name = (document.originalName ?? "comprobante").replace(/[^\w.\- ]+/g, "_").slice(0, 120) || "comprobante";
     return new NextResponse(stream, {
       headers: {
         "Content-Type":        document.mimeType ?? "application/octet-stream",
-        "Content-Disposition": "inline",
+        "Content-Disposition": shown ? "inline" : `attachment; filename="${name}"`,
       },
     });
   } catch {

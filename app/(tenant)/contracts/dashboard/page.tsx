@@ -1,3 +1,4 @@
+import { orgTimeZone } from "@/lib/org-time-zone";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getTenantSession } from "@/lib/auth/jwt";
@@ -28,7 +29,7 @@ export default async function ContractsHomePage() {
     getContractsHome(session.orgId),
   ]);
   const canCreate = extraction && canAccessTenantArea(session.role, { area: "contracts", permission: "write" });
-  const dateLabel = new Date().toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long" });
+  const dateLabel = new Date().toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", timeZone: await orgTimeZone(session.orgId) });
 
   const parts = [
     data.waiting ? plural(data.waiting, "caso espera tu decisión", "casos esperan tu decisión") : null,

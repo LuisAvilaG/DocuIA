@@ -1,4 +1,5 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
+import { requireAdminSession } from "@/lib/auth/admin";
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { orgFeatures, orgProducts, subsidiaries } from "@/db/schema";
@@ -10,6 +11,7 @@ import { FeaturesView, type ProductState, type FeatureRow } from "./features-vie
 const TENANT_CONTROLLED = new Set(["netsuite_dry_run"]);
 
 export default async function ClientFeaturesPage({ params }: { params: Promise<{ id: string }> }) {
+  if ((await requireAdminSession()).error) redirect("/admin/login");
   const { id } = await params;
   const facts = await loadOneOrgFacts(id);
   if (!facts) notFound();

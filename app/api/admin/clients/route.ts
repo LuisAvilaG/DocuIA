@@ -4,7 +4,7 @@ import { z } from "zod";
 import { requireAdminSession } from "@/lib/auth/admin";
 import { logAdminAction } from "@/lib/audit/admin";
 import { db } from "@/lib/db";
-import { organizations, subscriptions, orgProducts, orgFeatures } from "@/db/schema";
+import { organizations, subscriptions, orgProducts, orgFeatures, features } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { addDays } from "date-fns";
@@ -85,13 +85,26 @@ async function handlePOST(req: NextRequest) {
     const playbook = body.contractPlaybook && PRESETS[body.contractPlaybook] ? body.contractPlaybook : undefined;
     // Keep only known features whose product is contracted (or platform-wide)
     // and whose value differs from the default; the rest resolve from the catalog.
-    const catalogBy = new Map<string, { defaultEnabled: boolean }>(FEATURE_CATALOG.map((f) => [f.id, f]));
+    // The default a feature resolves with is the one in the database, which the
+    // superadmin may have changed since the catalog file was written.
+    const dbDefaults = new Map((await db.select({ id: features.id, defaultEnabled: features.defaultEnabled }).from(features)).map((f) => [f.id, f.defaultEnabled]));
+    const catalogBy = new Map<string, { defaultEnabled: boolean }>(FEATURE_CATALOG.map((f) => [f.id, { defaultEnabled: dbDefaults.get(f.id) ?? f.defaultEnabled }]));
     const grants = Object.entries(body.features ?? {}).filter(([id, on]) => {
       const f = catalogBy.get(id);
       if (!f || f.defaultEnabled === on) return false;
       const product = FEATURE_PRODUCT[id];
       return !product || products.includes(product);
     });
+    // The form shows features of a higher plan as locked and does not send them.
+    // Those that are on by default would still light up: they are switched off here.
+    const PLAN_RANK: Record<string, number> = { starter: 0, growth: 1, enterprise: 2 };
+    for (const f of FEATURE_CATALOG) {
+      const product = FEATURE_PRODUCT[f.id];
+      const abovePlan = (PLAN_RANK[f.planRequired ?? "starter"] ?? 0) > (PLAN_RANK[body.planId] ?? 0);
+      if (abovePlan && (catalogBy.get(f.id)?.defaultEnabled ?? f.defaultEnabled) && (!product || products.includes(product)) && !grants.some(([id]) => id === f.id)) {
+        grants.push([f.id, false]);
+      }
+    }
 
     await db.transaction(async (tx) => {
       await tx.insert(organizations).values({

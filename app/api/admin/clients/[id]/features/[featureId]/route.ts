@@ -23,6 +23,9 @@ async function handleGET(
   return NextResponse.json({ features });
 }
 
+// Written by the client (its own on/off) and by the scheduled jobs.
+const RUNTIME_KEYS = ["tenant_off", "last_sent_period", "last_check_at"];
+
 async function handlePATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string; featureId: string }> }
@@ -33,10 +36,21 @@ async function handlePATCH(
   const { id: orgId, featureId } = await params;
   const body = await req.json();
   const { adminGranted, notes } = body;
-  let config = body.config;
 
-  if (typeof adminGranted !== "boolean" || !config || typeof config !== "object") {
+  const before = await db.query.orgFeatures.findFirst({
+    where: and(eq(orgFeatures.organizationId, orgId), eq(orgFeatures.featureId, featureId)),
+    columns: { adminGranted: true, configJson: true, notes: true },
+  });
+  const stored = (before?.configJson && typeof before.configJson === "object" ? before.configJson : {}) as Record<string, unknown>;
+  // Without a config in the body (a switch or a note) the stored one stays.
+  // With one, it is laid over the stored config, and the keys the client and
+  // the scheduled jobs own are never taken from the page, which may be stale.
+  if (typeof adminGranted !== "boolean" || (body.config !== undefined && (!body.config || typeof body.config !== "object"))) {
     return NextResponse.json({ error: "Configuración inválida" }, { status: 400 });
+  }
+  let config: Record<string, unknown> = { ...stored, ...(body.config ?? {}) };
+  for (const key of RUNTIME_KEYS) {
+    if (key in stored) config[key] = stored[key]; else delete config[key];
   }
   if (featureId === "custom_netsuite_forms") {
     const rows = await db.query.subsidiaries.findMany({
@@ -55,13 +69,8 @@ async function handlePATCH(
     });
     const result = normalizeQaConfig(config, org?.activeNsEnvironment);
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
-    config = result.config;
+    config = { ...result.config };
   }
-
-  const before = await db.query.orgFeatures.findFirst({
-    where: and(eq(orgFeatures.organizationId, orgId), eq(orgFeatures.featureId, featureId)),
-    columns: { adminGranted: true, configJson: true, notes: true },
-  });
 
   await setAdminGrant(orgId, featureId, adminGranted, config, session.sub, notes);
 

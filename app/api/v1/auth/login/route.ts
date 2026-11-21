@@ -15,6 +15,9 @@ import { getTenantHomePath } from "@/lib/products";
 import { isTenantIpAllowed } from "@/lib/security/ip-allowlist";
 import { SESSION_TTL_MS, setAuthCookies } from "@/lib/auth/cookies";
 
+// A bcrypt hash (cost 12) of a value nobody knows.
+const NO_ACCOUNT_HASH = "$2b$12$J3nnYPM3D/61r8ks0/BDB.a1gmXgVm.IH51uZv1Crd/8Lj0QBkgnO";
+
 async function handlePOST(req: NextRequest) {
   const ip = clientIp(req.headers);
 
@@ -41,6 +44,9 @@ async function handlePOST(req: NextRequest) {
     });
 
     if (!user || !user.passwordHash || !user.isActive || !await isOrganizationActive(user.organizationId)) {
+      // The same hash work as a wrong password, so the response time does not
+      // tell which emails have an account.
+      await compare(password, NO_ACCOUNT_HASH);
       return NextResponse.json({ error: "Credenciales inválidas" }, { status: 401 });
     }
 

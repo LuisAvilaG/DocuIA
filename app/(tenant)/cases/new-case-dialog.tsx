@@ -16,7 +16,7 @@ type SlotState =
   | { status: "done"; file: File; uploadId: string }
   | { status: "error"; file: File; error: string };
 
-const ACCEPT = ".pdf,.jpg,.jpeg,.png,.webp,.tiff,.txt,.xml";
+const ACCEPT = ".pdf,.jpg,.jpeg,.png,.webp,.txt,.xml";
 const GENERIC = "__docs";
 
 function removeUpload(id: string) {
@@ -76,15 +76,20 @@ export function NewCaseDialog({ onClose }: { onClose: () => void }) {
     const prev = slots[key];
     if (prev?.status === "done") { uploaded.current.delete(prev.uploadId); void removeUpload(prev.uploadId); }
     if (!file) { setSlots((s) => ({ ...s, [key]: { status: "empty" } })); return; }
-    void upload(file, (st) => setSlots((s) => ({ ...s, [key]: st })));
+    // El avance de una carga solo se aplica mientras su archivo siga en la casilla:
+    // si se cambió el archivo o el flujo, la carga anterior ya no la pisa.
+    setSlots((s) => ({ ...s, [key]: { status: "uploading", file, progress: 0 } }));
+    void upload(file, (st) => setSlots((s) => { const cur = s[key]; return cur && cur.status !== "empty" && cur.file === file ? { ...s, [key]: st } : s; }));
   }
 
   function addExtra(files: File[]) {
-    const start = extra.length;
-    const room = Math.max(0, 10 - start);
-    files.slice(0, room).forEach((file, i) => {
-      void upload(file, (st) => setExtra((cur) => { const next = [...cur]; next[start + i] = st; return next; }));
-    });
+    const picked = files.slice(0, Math.max(0, 10 - extra.length));
+    // Cada carga ubica su fila por el archivo, no por la posición: quitar otro
+    // archivo mientras sube corre los índices.
+    setExtra((cur) => [...cur, ...picked.map((file): SlotState => ({ status: "uploading", file, progress: 0 }))]);
+    for (const file of picked) {
+      void upload(file, (st) => setExtra((cur) => cur.map((s) => (s.status !== "empty" && s.file === file ? st : s))));
+    }
   }
 
   function changeFlow(id: string) {

@@ -5,9 +5,10 @@
 import { db } from "@/lib/db";
 import { exceptionQueue, historyDocuments, organizations } from "@/db/schema";
 import { and, asc, eq, inArray, lte } from "drizzle-orm";
-import { storedDraft } from "./ns-payload";
-import { gateDraftAgainstPo, loadFeatureFlags, type ApChecks } from "./ap-checks";
+import { assignPoLines, storedDraft } from "./ns-payload";
+import { gateDraftAgainstPo, loadFeatureFlags, vendorRuleFor, type ApChecks } from "./ap-checks";
 import { postClaimedDocument } from "./post-draft";
+import { operatingOrganization } from "@/lib/auth/jwt";
 
 type HistoryDocument = typeof historyDocuments.$inferSelect;
 
@@ -28,8 +29,11 @@ async function moveTo(doc: HistoryDocument, status: "review" | "pending_approval
   return moved.length > 0;
 }
 
-export async function recheckAwaitingReceipt(doc: HistoryDocument, approvedBy: string | null = null): Promise<ReceiptCheckResult> {
+export async function recheckAwaitingReceipt(doc: HistoryDocument, requestedBy: string | null = null): Promise<ReceiptCheckResult> {
   if (doc.status !== "awaiting_receipt") return { status: "skipped", reason: "El documento ya no espera recepción" };
+  // An approver who sent it and was told to wait for the goods already approved it.
+  const granted = productsOf(doc).approval_granted_by;
+  const approvedBy = requestedBy ?? (typeof granted === "string" ? granted : null);
   const flags = await loadFeatureFlags(doc.organizationId);
   const draft = storedDraft(doc.products);
   if (!draft?.poId) {
@@ -42,7 +46,10 @@ export async function recheckAwaitingReceipt(doc: HistoryDocument, approvedBy: s
   }
 
   const cfg = flags.getConfig("three_way_match");
-  const previous = (productsOf(doc).ap_checks ?? null) as ApChecks | null;
+  const stored = (productsOf(doc).ap_checks ?? null) as ApChecks | null;
+  // The rule of the vendor on the draft, which may not be the one read at extraction.
+  const vendorRule = flags.isEnabled("vendor_rules") ? await vendorRuleFor(doc.organizationId, doc.subsidiaryId, draft.vendorId, flags) : stored?.vendorRule ?? null;
+  const previous: ApChecks | null = stored ? { ...stored, vendorRule } : vendorRule ? { vendorRule, fiscal: null, po: null } : null;
   const gate = await gateDraftAgainstPo({ organizationId: doc.organizationId, draft, invoiceTotal: Number(doc.total ?? 0), storedChecks: previous, flags });
   const checks = previous?.po && gate.comparison
     ? { ap_checks: { ...previous, po: { ...previous.po, comparison: gate.comparison, outcome: gate.outcome } } }
@@ -65,6 +72,8 @@ export async function recheckAwaitingReceipt(doc: HistoryDocument, approvedBy: s
           await db.insert(exceptionQueue).values({
             organizationId: doc.organizationId, documentId: doc.id, subsidiaryId: doc.subsidiaryId,
             documentType: doc.documentType, storageKey: doc.storageKey,
+            // The retry reads the file type from this name.
+            originalFilename: doc.storageKey?.split("/").pop()?.replace(/^\d+-/, "") ?? null,
             failureStage: "validate", failureReason: reason, status: "pending",
           });
         }
@@ -82,8 +91,16 @@ export async function recheckAwaitingReceipt(doc: HistoryDocument, approvedBy: s
 
   if (gate.outcome.kind !== "ok" && gate.outcome.kind !== "needs_review") {
     // Received, but the PO changed meanwhile (price, quantities): a person decides.
-    await moveTo(doc, gate.outcome.kind === "needs_approval" || gate.outcome.kind === "blocked" ? "pending_approval" : "review", gate.outcome.reason, checks);
-    return { status: "pending_approval", reason: gate.outcome.reason };
+    const to = gate.outcome.kind === "needs_approval" || gate.outcome.kind === "blocked" ? "pending_approval" : "review";
+    await moveTo(doc, to, gate.outcome.reason, checks);
+    return { status: to, reason: gate.outcome.reason };
+  }
+  // Lines that are not on the PO need a person. When the pipeline parked the
+  // document itself nobody has seen them yet: review, not an automatic post.
+  const seenByReviewer = Boolean(approvedBy) || typeof productsOf(doc).approval_requested_by === "string";
+  if (gate.outcome.kind === "needs_review" && !seenByReviewer) {
+    await moveTo(doc, "review", gate.outcome.reason, checks);
+    return { status: "review", reason: gate.outcome.reason };
   }
   if (flags.isEnabled("approval_workflow") && !approvedBy) {
     await moveTo(doc, "pending_approval", "Recepción completa; falta la aprobación", checks);
@@ -95,7 +112,8 @@ export async function recheckAwaitingReceipt(doc: HistoryDocument, approvedBy: s
     .where(and(eq(historyDocuments.id, doc.id), eq(historyDocuments.status, "awaiting_receipt")))
     .returning();
   if (!claimed.length) return { status: "skipped", reason: "Otro proceso tomó el documento" };
-  const result = await postClaimedDocument({ doc: claimed[0], draft, approvedBy, revertTo: "review" });
+  const toPost = gate.comparison ? { ...draft, lines: assignPoLines(draft.lines, gate.comparison.lines) } : draft;
+  const result = await postClaimedDocument({ doc: claimed[0], draft: toPost, approvedBy, revertTo: "review" });
   return result.ok ? { status: "completed" } : { status: "review", reason: result.error };
 }
 
@@ -105,8 +123,8 @@ export async function runReceiptChecks(limit = 50): Promise<{ checked: number; c
     where: and(
       eq(historyDocuments.status, "awaiting_receipt"),
       lte(historyDocuments.nextReceiptCheckAt, new Date()),
-      // A suspended or deleted client must not keep posting to its ERP.
-      inArray(historyDocuments.organizationId, db.select({ id: organizations.id }).from(organizations).where(inArray(organizations.status, ["active", "trial"]))),
+      // A suspended or deleted client, or an ended trial, must not keep posting to its ERP.
+      inArray(historyDocuments.organizationId, db.select({ id: organizations.id }).from(organizations).where(operatingOrganization())),
     ),
     orderBy: [asc(historyDocuments.nextReceiptCheckAt)],
     limit,

@@ -1,9 +1,9 @@
 import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { contractLargeUploads, historyDocuments } from "@/db/schema";
+import { contractCases, contractLargeUploads, historyDocuments } from "@/db/schema";
 import { and, inArray, lt, or, eq, sql } from "drizzle-orm";
-import { PIPELINE_QUEUE } from "@/lib/queue";
+import { CONTRACT_QUEUE, PIPELINE_QUEUE, enqueueContractCase } from "@/lib/queue";
 import { abortMultipartFile, deleteFile } from "@/lib/storage/minio";
 
 function cronAuth(req: NextRequest): boolean {
@@ -37,6 +37,44 @@ const notWaitingOnBatch = sql`NOT EXISTS (
     AND i.created_at > now() - interval '26 hours'
 )`;
 
+// Contract cases have their own queue. One left "uploaded" or "processing"
+// with no job alive (the enqueue failed after the commit, or the job died and
+// ran out of retries) showed "Analizando" forever.
+const noLiveCaseJob = sql`NOT EXISTS (
+  SELECT 1 FROM pgboss.job j
+  WHERE j.name = ${CONTRACT_QUEUE}
+    AND j.state IN ('created', 'retry', 'active')
+    AND j.data->>'caseId' = ${contractCases.id}::text
+)`;
+const STUCK_CASE_MINUTES = 30;
+
+async function reapContractCases(): Promise<{ requeued: number; failed: number }> {
+  const cutoff = new Date(Date.now() - STUCK_CASE_MINUTES * 60_000);
+  const stranded = await db.select({ id: contractCases.id, status: contractCases.status }).from(contractCases)
+    .where(and(inArray(contractCases.status, ["uploaded", "processing"]), lt(contractCases.updatedAt, cutoff), noLiveCaseJob))
+    .limit(50);
+  let requeued = 0, failed = 0;
+  for (const kase of stranded) {
+    try {
+      if (kase.status === "uploaded") {
+        // Never started: start it.
+        await enqueueContractCase(kase.id);
+        requeued++;
+      } else {
+        // Started and died after its retries: running it again could repeat whatever killed it.
+        const moved = await db.update(contractCases)
+          .set({ status: "failed", errorMessage: "El análisis se interrumpió antes de terminar. Vuelve a enviar los documentos del caso.", updatedAt: new Date() })
+          .where(and(eq(contractCases.id, kase.id), eq(contractCases.status, "processing")))
+          .returning({ id: contractCases.id });
+        failed += moved.length;
+      }
+    } catch (error) {
+      console.error("[cron/reap-stuck] contract case", kase.id, error);
+    }
+  }
+  return { requeued, failed };
+}
+
 async function handleGET(req: NextRequest) {
   if (!cronAuth(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -45,6 +83,11 @@ async function handleGET(req: NextRequest) {
   try {
     const stuckMinutes = Number(process.env.STUCK_DOC_MINUTES) || 15;
     const cutoff = new Date(Date.now() - stuckMinutes * 60_000);
+    // A slow provider can keep one healthy reading busy for longer than the
+    // threshold (two models, each with its retries). While its job is alive the
+    // document is left alone, up to this limit: failed under a running job, the
+    // user retried it and two runs worked on the same document.
+    const hardCutoff = new Date(Date.now() - Math.max(stuckMinutes, 45) * 60_000);
 
     const result = await db.update(historyDocuments)
       .set({
@@ -56,7 +99,10 @@ async function handleGET(req: NextRequest) {
       .where(and(
         inArray(historyDocuments.status, [...TRANSIENT_STATES]),
         lt(historyDocuments.updatedAt, cutoff),
-        or(inArray(historyDocuments.status, ["extracting", "processing"]), and(eq(historyDocuments.status, "uploaded"), noLiveJob, notWaitingOnBatch)),
+        or(
+          and(inArray(historyDocuments.status, ["extracting", "processing"]), or(noLiveJob, lt(historyDocuments.updatedAt, hardCutoff))),
+          and(eq(historyDocuments.status, "uploaded"), noLiveJob, notWaitingOnBatch),
+        ),
       ));
 
     const reaped = (result as unknown as { rowCount?: number }).rowCount ?? 0;
@@ -78,7 +124,11 @@ async function handleGET(req: NextRequest) {
         console.error("[cron/reap-stuck] upload cleanup failed", upload.id, error);
       }
     }
-    return NextResponse.json({ ok: true, reaped, expiredUploads, thresholdMinutes: stuckMinutes });
+    const cases = await reapContractCases();
+    // Nothing else removes expired counters, and every login, upload and API
+    // key adds rows.
+    await db.execute(sql`DELETE FROM rate_limits WHERE expires_at < now() - interval '1 day'`).catch((error) => console.error("[cron/reap-stuck] rate_limits", error));
+    return NextResponse.json({ ok: true, reaped, expiredUploads, contractCases: cases, thresholdMinutes: stuckMinutes });
   } catch (err) {
     console.error("[cron/reap-stuck]", err);
     return NextResponse.json({ error: "Internal error" }, { status: 500 });

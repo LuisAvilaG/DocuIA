@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import type { MonitorData, MonitorRow } from "@/lib/admin/monitor";
@@ -50,6 +50,9 @@ export function MonitorView({ initial }: { initial: MonitorData | null }) {
   }, []);
 
   const t = data?.totals;
+  // Dates are formatted only in the browser: rendered on the server (UTC) they
+  // came out different from the browser's and React had to redo the page.
+  const inBrowser = useSyncExternalStore(() => () => {}, () => true, () => false);
   const now = new Date();
 
   return (
@@ -58,7 +61,7 @@ export function MonitorView({ initial }: { initial: MonitorData | null }) {
         <PanelTitle
           avatar={<div className="w-9 h-9 rounded-[10px] flex items-center justify-center text-sm font-bold" style={{ backgroundColor: "oklch(0.22 0.10 240)", color: "oklch(0.65 0.14 182)" }}>D</div>}
           title="Hoy"
-          subtitle={now.toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long" }) + (data ? ` · ${new Date(data.generatedAt).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" })}` : "")}
+          subtitle={inBrowser ? now.toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long" }) + (data ? ` · ${new Date(data.generatedAt).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" })}` : "") : ""}
         />
         {t && (
           <div>
@@ -88,7 +91,7 @@ export function MonitorView({ initial }: { initial: MonitorData | null }) {
         <div className="flex items-baseline justify-between gap-4 -mb-6">
           <h2 className="text-[13px] font-semibold">Actividad por cliente, hoy</h2>
           <span className="text-xs text-muted-foreground">
-            {refreshing ? "actualizando…" : "se actualiza cada minuto"}{data ? ` · ${data.rows.length} con actividad` : ""}
+            {refreshing ? "actualizando…" : "se actualiza cada minuto"}{data ? ` · ${data.rows.length} con actividad o avisos` : ""}
           </span>
         </div>
         {error && <p className="text-sm text-destructive">{error}</p>}
@@ -123,7 +126,7 @@ export function MonitorView({ initial }: { initial: MonitorData | null }) {
         )}
         {data && (
           <p className="text-xs text-muted-foreground -mt-6">
-            {data.idle} cliente{data.idle === 1 ? "" : "s"} sin actividad hoy. <Link href="/admin/clients" className="text-primary">Ver todos</Link>
+            {data.idle} cliente{data.idle === 1 ? "" : "s"} sin actividad ni avisos hoy. <Link href="/admin/clients" className="text-primary">Ver todos</Link>
           </p>
         )}
       </Main>

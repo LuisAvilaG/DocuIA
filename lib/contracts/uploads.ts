@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { contractCases, contractDocuments, contractLargeUploads } from "@/db/schema";
+import { contractArchiveDocuments, contractCases, contractDocuments, contractLargeUploads } from "@/db/schema";
 import { abortMultipartFile, completeMultipartFile, deleteFile, getFileBuffer, getFileRange, getFileSize, listFileParts, startMultipartFile, uploadFilePart } from "@/lib/storage/minio";
 import { matchesFileType } from "@/lib/security/files";
 import { validateDocx } from "@/lib/security/docx";
@@ -11,7 +11,8 @@ export const CONTRACT_CHUNK_BYTES = 8 * 1024 * 1024;
 export const CONTRACT_MAX_PDF_BYTES = 150 * 1024 * 1024;
 const MAX_OTHER_BYTES = 20 * 1024 * 1024;
 const WORD_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-const ALLOWED = new Set(["application/pdf", WORD_MIME, "image/jpeg", "image/png", "image/webp", "image/tiff", "text/plain", "text/xml", "application/xml"]);
+// No TIFF: neither model reads it, and the whole case failed after three paid attempts.
+const ALLOWED = new Set(["application/pdf", WORD_MIME, "image/jpeg", "image/png", "image/webp", "text/plain", "text/xml", "application/xml"]);
 
 export function validateContractUpload(name: string, mimeType: string, size: number): string | null {
   if (!name || name.length > 240 || /[\\/\x00-\x1f]/.test(name)) return "Nombre de archivo inválido";
@@ -123,6 +124,7 @@ export async function addCorrectedDocuments(input: { organizationId: string; use
   if (files.some((u) => u.mimeType === WORD_MIME)) throw new Error("Los casos aceptan PDF, imágenes y texto");
   if (files.some((u) => u.sizeBytes > MAX_OTHER_BYTES) && !await isFeatureEnabled(input.organizationId, "contract_large_documents")) throw new Error("Documentos extensos no habilitados");
 
+  const replacedIds: string[] = [];
   await db.transaction(async (tx) => {
     const [kase] = await tx.select({ status: contractCases.status, resultJson: contractCases.resultJson }).from(contractCases)
       .where(and(eq(contractCases.id, input.caseId), eq(contractCases.organizationId, input.organizationId))).for("update");
@@ -138,7 +140,10 @@ export async function addCorrectedDocuments(input: { organizationId: string; use
         .returning({ id: contractLargeUploads.id });
       if (claimed.length !== 1) throw new Error("El archivo ya fue utilizado por otro caso");
       const replaced = input.items[i].replaces ? byId.get(input.items[i].replaces!) : undefined;
-      if (replaced) await tx.delete(contractDocuments).where(and(eq(contractDocuments.id, replaced.id), eq(contractDocuments.caseId, input.caseId)));
+      if (replaced) {
+        await tx.delete(contractDocuments).where(and(eq(contractDocuments.id, replaced.id), eq(contractDocuments.caseId, input.caseId)));
+        replacedIds.push(replaced.id);
+      }
       const newId = randomUUID();
       await tx.insert(contractDocuments).values({ id: newId, caseId: input.caseId, storageKey: upload.storageKey, originalName: upload.originalName, mimeType: upload.mimeType, detectedType: replaced?.detectedType ?? null });
       // Quien reemplaza un documento le fija el tipo del que sustituye.
@@ -149,4 +154,15 @@ export async function addCorrectedDocuments(input: { organizationId: string; use
     }
     await tx.update(contractCases).set({ status: "uploaded", errorMessage: null, resultJson: { ...result, slots }, updatedAt: new Date() }).where(eq(contractCases.id, input.caseId));
   });
+  // The version that was replaced leaves the Archive too. Left "ready" it kept
+  // answering references with the old text, next to the corrected one.
+  if (replacedIds.length) {
+    const copies = await db.query.contractArchiveDocuments.findMany({
+      where: and(eq(contractArchiveDocuments.organizationId, input.organizationId), inArray(contractArchiveDocuments.caseDocumentId, replacedIds)),
+      columns: { id: true },
+    });
+    for (const copy of copies) {
+      await (await import("./archive")).removeArchiveDocument(copy.id, input.organizationId).catch((error) => console.error("[contracts] no se pudo retirar del Archivo el documento reemplazado", copy.id, error instanceof Error ? error.message : error));
+    }
+  }
 }

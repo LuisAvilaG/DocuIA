@@ -4,6 +4,8 @@ import { useEffect, useId, useRef } from "react";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
 /**
  * Panel lateral modal del rediseño: encabezado con título, cuerpo con scroll y pie con acciones.
  * Escape y el fondo cierran salvo que `locked` (p. ej. mientras sube un lote).
@@ -23,12 +25,27 @@ export function Drawer({ title, description, onClose, locked = false, footer, ch
 
   useEffect(() => {
     const prev = document.activeElement as HTMLElement | null;
-    panel.current?.focus();
+    // A field inside that already took the focus (autoFocus) keeps it.
+    if (!panel.current?.contains(document.activeElement)) panel.current?.focus();
     return () => prev?.focus?.();
   }, []);
 
   useEffect(() => {
-    function onKey(e: KeyboardEvent) { if (e.key === "Escape" && !locked) onClose(); }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape" && !locked) { onClose(); return; }
+      const el = panel.current;
+      if (e.key !== "Tab" || !el) return;
+      // Modal: Tab stays in the panel instead of reaching the page it covers.
+      const at = document.activeElement as HTMLElement | null;
+      const inside = el.contains(at);
+      // A menu or dialog opened from the panel renders outside it and keeps its own focus.
+      if (!inside && at && at !== document.body && at.closest('[role="dialog"], [role="listbox"], [role="menu"]')) return;
+      const items = [...el.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((item) => item.offsetParent !== null);
+      const first = items[0] ?? el, last = items[items.length - 1] ?? el;
+      if (!inside) { e.preventDefault(); first.focus(); }
+      else if (e.shiftKey && (at === first || at === el)) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && at === last) { e.preventDefault(); first.focus(); }
+    }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose, locked]);

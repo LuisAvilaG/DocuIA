@@ -1,5 +1,6 @@
 "use client";
 
+import { useInBrowser } from "@/lib/use-in-browser";
 import { useEffect, useState, useTransition } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -57,6 +58,7 @@ export function DocumentsView({
   const router = useRouter();
   const pathname = usePathname();
   const [, startTransition] = useTransition();
+  const inBrowser = useInBrowser();
   const [uploading, setUploading] = useState(openUpload);
   const [q, setQ] = useState(filters.q);
 
@@ -78,7 +80,9 @@ export function DocumentsView({
     if (q.trim() === filters.q) return;
     const t = setTimeout(() => go({ q: q.trim() }), 350);
     return () => clearTimeout(t);
-  }, [q]); // eslint-disable-line react-hooks/exhaustive-deps
+    // Also when the filters change: a timer started before "Limpiar" or a tab
+    // change would navigate with the filters it was created with and bring them back.
+  }, [q, filters.q, filters.type, filters.sub, filters.tab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function closeUpload() {
     setUploading(false);
@@ -149,7 +153,7 @@ export function DocumentsView({
               <tbody>
                 {rows.map((r) => (
                   <tr key={r.id} className="border-b border-line-soft last:border-0 hover:bg-secondary/30">
-                    <td className="whitespace-nowrap px-3.5 py-3 text-muted-foreground">{when(r.createdAt)}</td>
+                    <td className="whitespace-nowrap px-3.5 py-3 text-muted-foreground">{inBrowser ? when(r.createdAt) : ""}</td>
                     <td className="whitespace-nowrap px-3.5 py-3">
                       <Link href={`/history/${r.id}`} className="font-semibold text-link hover:underline">{r.numDoc ?? `#${r.id}`}</Link>
                       <span className="ml-2 rounded-[5px] bg-tone-mute-bg px-1.5 py-0.5 text-[11.5px] font-semibold text-foreground/70">{TYPE_LABEL[r.documentType] ?? r.documentType}</span>

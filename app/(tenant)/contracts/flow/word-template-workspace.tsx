@@ -53,7 +53,7 @@ export function WordTemplateWorkspace({ flowId, nodeId, fields, initialTemplate,
   useEffect(() => {
     if (!initialTemplate) return;
     let cancelled = false;
-    fetch(`/api/v1/contracts/flow/${flowId}/word-template?nodeId=${encodeURIComponent(nodeId)}`)
+    fetch(`/api/v1/contracts/flow/${flowId}/word-template?nodeId=${encodeURIComponent(nodeId)}&key=${encodeURIComponent(initialTemplate.storageKey)}`)
       .then(async (response) => {
         if (!response.ok) throw new Error("No fue posible cargar la plantilla Word.");
         return response.blob();

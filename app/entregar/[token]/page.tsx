@@ -1,3 +1,4 @@
+import { orgTimeZone } from "@/lib/org-time-zone";
 import type { Metadata } from "next";
 import { readUploadLink, MAX_FILES, MAX_FILE_BYTES, MAX_TOTAL_BYTES } from "@/lib/contracts/upload-links";
 import { DeliveryForm } from "./delivery-form";
@@ -40,7 +41,7 @@ export default async function DeliverPage({ params }: { params: Promise<{ token:
                 </div>
               )}
               <p className="text-xs text-muted-foreground">
-                El enlace vence el {link.expiresAt.toLocaleDateString("es-MX", { day: "numeric", month: "long" })} y sirve para una sola entrega.
+                El enlace vence el {link.expiresAt.toLocaleDateString("es-MX", { day: "numeric", month: "long", timeZone: await orgTimeZone(link.orgId) })} y sirve para una sola entrega.
               </p>
             </section>
             <DeliveryForm token={token} maxFiles={MAX_FILES} maxMb={MAX_FILE_BYTES / 1024 / 1024} maxTotalMb={MAX_TOTAL_BYTES / 1024 / 1024} />

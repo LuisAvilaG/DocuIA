@@ -1,3 +1,6 @@
+import { isOrganizationActive } from "@/lib/auth/jwt";
+import { orgTimeZone } from "@/lib/org-time-zone";
+import { wallClockIn } from "@/lib/time-zone";
 import { withAiUsage } from "@/lib/ai/usage";
 import { randomUUID } from "crypto";
 import { db } from "@/lib/db";
@@ -9,7 +12,7 @@ import { AI_MODELS } from "@/lib/ai/provider";
 import { countPdfPages, extractPdfPages } from "./document-pages";
 import type { DocsByType } from "./validate";
 import { validationRows } from "./validation-rows";
-import { flowSnapshot, loadContractPlan } from "./plan";
+import { flowSnapshot, loadPlanForProcessing } from "./plan";
 import { assembleResults, isAiRule, type AnalysisOutcome } from "./assemble";
 import { buildFlowTrace } from "./trace";
 import { getFeature, isFeatureEnabled } from "@/lib/features";
@@ -84,8 +87,16 @@ export async function createContractCase(input: {
   });
 
   for (const f of input.files) {
-    const storageKey = `contracts/${input.organizationId}/${caseId}/${Date.now()}-${f.fileName}`;
-    await uploadFile(f.buffer, storageKey, f.mimeType);
+    const safeName = f.fileName.replace(/[^\w.\- ]+/g, "_").slice(-150) || "documento";
+    const storageKey = `contracts/${input.organizationId}/${caseId}/${Date.now()}-${safeName}`;
+    try {
+      await uploadFile(f.buffer, storageKey, f.mimeType);
+    } catch (error) {
+      // Without its files the case would sit in "Analizando" with nothing to analyse.
+      await db.delete(contractDocuments).where(eq(contractDocuments.caseId, caseId)).catch(() => undefined);
+      await db.delete(contractCases).where(eq(contractCases.id, caseId)).catch(() => undefined);
+      throw error;
+    }
     await db.insert(contractDocuments).values({
       id: randomUUID(),
       caseId,
@@ -122,6 +133,13 @@ async function processContractCaseInner(caseId: string, injectedDeps?: ContractE
   const kase = await db.query.contractCases.findFirst({ where: eq(contractCases.id, caseId) });
   if (!kase) throw new Error(`Contract case ${caseId} not found`);
 
+  // Suspended or deleted since the case was queued: no analysis is spent on it.
+  if (!await isOrganizationActive(kase.organizationId)) {
+    const message = "La organización está suspendida: el caso no se analizó.";
+    await db.update(contractCases).set({ status: "failed", errorMessage: message, updatedAt: new Date() }).where(eq(contractCases.id, caseId));
+    return;
+  }
+
   const extractionFeature = await getFeature(kase.organizationId, "contract_ai_extraction");
   if (!extractionFeature.isEnabled) {
     // Terminal, not retried: without this the case stayed "En cola" forever.
@@ -146,7 +164,7 @@ async function processContractCaseInner(caseId: string, injectedDeps?: ContractE
   try {
     const [docs, plan, validationsFeature, learnings] = await Promise.all([
       db.query.contractDocuments.findMany({ where: eq(contractDocuments.caseId, caseId) }),
-      loadContractPlan(kase.organizationId, kase.flowId),
+      loadPlanForProcessing(kase),
       isFeatureEnabled(kase.organizationId, "contract_advanced_validations"),
       db.query.contractExtractionLearnings.findMany({
         where: and(eq(contractExtractionLearnings.organizationId, kase.organizationId), eq(contractExtractionLearnings.isActive, true)),
@@ -279,6 +297,11 @@ async function processContractCaseInner(caseId: string, injectedDeps?: ContractE
             for (const page of more) pagesUsed.add(page);
           }
         }
+      } else if (fields.length === 0) {
+        // No fields to read (a document of no known type): sending the whole
+        // file to the model would be a paid call that can return nothing.
+        values = {};
+        citations = {};
       } else {
         ({ values, citations } = await deps.extract(source, typeName, fields, undefined, learningsByType.get(typeKey) ?? [], visualByType.get(typeKey) ?? []));
       }
@@ -338,7 +361,8 @@ async function processContractCaseInner(caseId: string, injectedDeps?: ContractE
       : [];
 
     // Calculations are always deterministic and use the AI items as inputs.
-    const assembled = assembleResults(plan, docsByType, analyses, { validationsEnabled: validationsFeature });
+    // "Not expired" is judged on the client's calendar day, not the server's (UTC).
+    const assembled = assembleResults(plan, docsByType, analyses, { validationsEnabled: validationsFeature, now: wallClockIn(await orgTimeZone(kase.organizationId)) });
     const { calculations, calculationValues } = assembled;
     const validations = referenceNode
       ? [...assembled.validations, ...await archiveValidationsForCase({ organizationId: kase.organizationId, caseDocumentIds: docs.map((doc) => doc.id), name: referenceNode.data.name, severity: referenceNode.data.severity })]
@@ -372,10 +396,11 @@ async function processContractCaseInner(caseId: string, injectedDeps?: ContractE
       }
 
       // El análisis reemplaza el resultado, pero no lo que no le pertenece: las
-      // casillas del caso y el historial de documentos pedidos al contratista.
+      // casillas del caso, el historial de documentos pedidos al contratista y
+      // el de decisiones y documentos generados antes de reabrirlo.
       const [current] = await tx.select({ resultJson: contractCases.resultJson }).from(contractCases).where(eq(contractCases.id, caseId)).for("update");
       const stored = (current?.resultJson && typeof current.resultJson === "object" && !Array.isArray(current.resultJson) ? current.resultJson : {}) as Record<string, unknown>;
-      const kept = Object.fromEntries(["slots", "documentRequest", "documentRequests"].filter((key) => stored[key] !== undefined).map((key) => [key, stored[key]]));
+      const kept = Object.fromEntries(["slots", "documentRequest", "documentRequests", "decisionHistory", "outputHistory"].filter((key) => stored[key] !== undefined).map((key) => [key, stored[key]]));
       await tx.update(contractCases).set({
         status: "validated",
         // Pin the flow actually used; generation and corrections replay this

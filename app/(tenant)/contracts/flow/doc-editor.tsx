@@ -65,7 +65,7 @@ export function DocEditor({ initialHtml, fields, onSave, onClose }: {
   };
 
   return (
-    <div className="fixed inset-0 z-[60] bg-black/40 flex items-center justify-center p-4" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-[60] bg-black/40 flex items-center justify-center p-4">
       <div className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-4xl h-[92vh] flex flex-col overflow-hidden" onMouseDown={(e) => e.stopPropagation()}>
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-border shrink-0">

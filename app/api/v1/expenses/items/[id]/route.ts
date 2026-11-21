@@ -5,7 +5,7 @@ import { getTenantSession } from "@/lib/auth/jwt";
 import { isFeatureEnabled } from "@/lib/features";
 import { db } from "@/lib/db";
 import { expenseDocuments, expenseItems } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { validateExpenseAmounts } from "@/lib/expense/tax-engine";
 import { deleteFile } from "@/lib/storage/minio";
 import {
@@ -44,7 +44,13 @@ async function handleDELETE(_req: NextRequest, { params }: Params) {
     await tx.delete(expenseItems).where(eq(expenseItems.id, id));
     return removed;
   });
-  await Promise.allSettled(documents.filter((d) => d.fileKey).map((d) => deleteFile(d.fileKey!)));
+  // A stored file is only removed when no other receipt row still points at it.
+  const keys = [...new Set(documents.map((d) => d.fileKey).filter((key): key is string => !!key))];
+  const shared = keys.length
+    ? await db.select({ fileKey: expenseDocuments.fileKey }).from(expenseDocuments).where(inArray(expenseDocuments.fileKey, keys))
+    : [];
+  const stillUsed = new Set(shared.map((d) => d.fileKey));
+  await Promise.allSettled(keys.filter((key) => !stillUsed.has(key)).map((key) => deleteFile(key)));
 
   return NextResponse.json({ ok: true });
 }

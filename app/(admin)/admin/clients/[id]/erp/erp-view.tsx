@@ -53,7 +53,8 @@ export function ErpView({ orgId, activeEnvironment, connections, subsidiaries, h
     try {
       const res = await fn();
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) { setMsg({ tone: "err", text: (data.error as string) ?? "No se pudo completar la acción" }); return false; }
+      // Refreshed on failure too: the cards must show what is stored, not what was typed.
+      if (!res.ok) { setMsg({ tone: "err", text: (data.error as string) ?? "No se pudo completar la acción" }); router.refresh(); return false; }
       setMsg({ tone: "ok", text: okText(data) });
       router.refresh();
       return true;

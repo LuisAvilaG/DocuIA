@@ -1,6 +1,9 @@
+import { redirect } from "next/navigation";
+import { requireAdminSession } from "@/lib/auth/admin";
 import { AuditFeed } from "@/components/admin/audit-feed";
 
 export default async function ClientActivityPage({ params }: { params: Promise<{ id: string }> }) {
+  if ((await requireAdminSession()).error) redirect("/admin/login");
   const { id } = await params;
   return (
     <>

@@ -12,7 +12,7 @@ export default async function ExpensesPage() {
 
   const reports = await db.query.expenseReports.findMany({
     where: eq(expenseReports.submitterId, session.sub),
-    with: { items: { columns: { id: true, total: true } } },
+    with: { items: { columns: { id: true, total: true, currency: true } } },
     orderBy: desc(expenseReports.createdAt),
   });
 

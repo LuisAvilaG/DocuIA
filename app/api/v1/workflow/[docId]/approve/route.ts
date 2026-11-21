@@ -7,8 +7,8 @@ import { historyDocuments, subsidiaries } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import { fetchOpenPurchaseOrders } from "@/lib/netsuite/client";
 import { getActiveNsConnection, nsCredentials } from "@/lib/netsuite/connection";
-import { draftFromReviewBody, storedDraft, type NsDraft } from "@/lib/workflow/ns-payload";
-import { gateDraftAgainstPo, loadFeatureFlags, type ApChecks } from "@/lib/workflow/ap-checks";
+import { assignPoLines, draftFromReviewBody, storedDraft, type NsDraft } from "@/lib/workflow/ns-payload";
+import { gateDraftAgainstPo, loadFeatureFlags, vendorRuleFor, type ApChecks } from "@/lib/workflow/ap-checks";
 import { postClaimedDocument } from "@/lib/workflow/post-draft";
 import { reviewCorrections } from "@/lib/workflow/review-corrections";
 import { mergeDocMetrics, poAcceptance } from "@/lib/workflow/doc-metrics";
@@ -91,8 +91,15 @@ async function handlePOST(req: NextRequest, { params }: Params) {
 
   // The review screen blocks this too, but an API client or a stale tab must
   // not be able to post a standalone bill for a vendor that requires a PO.
-  const previous = storedChecks(doc.products);
-  if (!draft.poId && doc.documentType !== "purchase_order" && flags.isEnabled("po_matching") && previous?.vendorRule?.poRequirement === "required") {
+  // The rule is the one of the vendor being posted: the reviewer may have
+  // picked a different vendor than the one read at extraction, whose rule is
+  // what was stored then (and what the review screen no longer shows).
+  const stored = storedChecks(doc.products);
+  const vendorRule = flags.isEnabled("vendor_rules")
+    ? await vendorRuleFor(session.orgId, doc.subsidiaryId, draft.vendorId, flags)
+    : stored?.vendorRule ?? null;
+  const previous: ApChecks | null = stored ? { ...stored, vendorRule } : vendorRule ? { vendorRule, fiscal: null, po: null } : null;
+  if (!draft.poId && doc.documentType !== "purchase_order" && flags.isEnabled("po_matching") && vendorRule?.poRequirement === "required") {
     return NextResponse.json({ error: "Este proveedor requiere una orden de compra. Elige la OC antes de enviar." }, { status: 422 });
   }
 
@@ -108,11 +115,17 @@ async function handlePOST(req: NextRequest, { params }: Params) {
       .set({
         status,
         vendor:   draft.vendorName ?? doc.vendor,
-        products: { ...base, ...extra, approval_draft: draft, approval_requested_by: session.sub } as unknown,
+        products: {
+          ...base, ...extra, approval_draft: draft, approval_requested_by: session.sub,
+          // Posting when the goods arrive needs no second approval if an approver sent it.
+          approval_granted_by: status === "awaiting_receipt" && approver ? session.sub : null,
+        } as unknown,
         poInternalId: draft.poId ?? doc.poInternalId,
         errorMessage: reason,
         ...(status === "awaiting_receipt"
-          ? { awaitingSince: doc.awaitingSince ?? now, nextReceiptCheckAt: new Date(now.getTime() + recheckHours * 3_600_000) }
+          // A reviewer who chooses to wait again starts a new wait: keeping the
+          // old date would time it out at the next check.
+          ? { awaitingSince: from === "review" ? now : doc.awaitingSince ?? now, nextReceiptCheckAt: new Date(now.getTime() + recheckHours * 3_600_000) }
           : {}),
         updatedAt: now,
       })
@@ -123,9 +136,6 @@ async function handlePOST(req: NextRequest, { params }: Params) {
       : NextResponse.json({ error: CONFLICT }, { status: 409 });
   };
 
-  // The reviewer explicitly hands the document to an approver.
-  if (requestApproval) return park("pending_approval", "Enviada a aprobación por el revisor");
-
   // Check the (possibly edited) draft against its PO before posting it.
   const gate = await gateDraftAgainstPo({
     organizationId: session.orgId,
@@ -134,14 +144,24 @@ async function handlePOST(req: NextRequest, { params }: Params) {
     storedChecks: previous,
     flags,
   });
+  // What is stored with a parked document is the PO analysis of this draft, so
+  // whoever opens it next (the approver) sees the PO that will be billed and
+  // not the one the automatic analysis had picked.
+  const priorPo = previous?.po ?? { openPurchaseOrders: [], suggestions: [], selectedPoId: null, comparison: null, outcome: null, requireReceipt: false, error: null };
+  const gateChecks: Record<string, unknown> = gate.comparison
+    ? { ap_checks: { ...(previous ?? { vendorRule, fiscal: null }), po: { ...priorPo, selectedPoId: draft.poId, comparison: gate.comparison, outcome: gate.outcome, error: null } } }
+    : !draft.poId && previous?.po
+    ? { ap_checks: { ...previous, po: { ...previous.po, selectedPoId: null, comparison: null, outcome: null } } }
+    : {};
+
+  // The reviewer explicitly hands the document to an approver.
+  if (requestApproval) return park("pending_approval", "Enviada a aprobación por el revisor", gateChecks);
+
   // Without the PO there is nothing to compare against: posting now would skip
   // tolerances, approval and the receipt check. The automatic path stops too.
   if (gate.error) {
     return NextResponse.json({ error: `No se pudo comparar la factura con la OC: ${gate.error}. Inténtalo de nuevo.` }, { status: 502 });
   }
-  const gateChecks = gate.comparison && previous?.po
-    ? { ap_checks: { ...previous, po: { ...previous.po, selectedPoId: draft.poId, comparison: gate.comparison, outcome: gate.outcome } } }
-    : {};
   // Diferencia con la OC y cómo se acepta (métrica «Diferencias con la OC»).
   if (gate.comparison && gate.outcome && gate.outcome.kind !== "await_receipt") {
     const c = gate.comparison;
@@ -160,7 +180,7 @@ async function handlePOST(req: NextRequest, { params }: Params) {
   // With the approval workflow on, whoever reviews a low-confidence document
   // still needs someone with approval permission to post it.
   if (from === "review" && flags.isEnabled("approval_workflow") && !approver) {
-    return park("pending_approval", null);
+    return park("pending_approval", null, gateChecks);
   }
 
   // Claim the document atomically: of two concurrent approvals only one moves
@@ -173,7 +193,11 @@ async function handlePOST(req: NextRequest, { params }: Params) {
 
   // Back to the state it was claimed from on failure: a failed approval must
   // not turn a pending-approval document into one any reviewer can post.
-  const result = await postClaimedDocument({ doc: claimed[0], draft, approvedBy: session.sub, revertTo: from });
+  // The PO line of each line comes from the comparison just made over these
+  // same lines, never from what the browser sent. Only for posting: a parked
+  // draft stays as the reviewer left it.
+  const toPost = gate.comparison ? { ...draft, lines: assignPoLines(draft.lines, gate.comparison.lines) } : draft;
+  const result = await postClaimedDocument({ doc: claimed[0], draft: toPost, approvedBy: session.sub, revertTo: from });
   if (!result.ok) {
     console.error("[workflow/approve]", result.error);
     return NextResponse.json({ error: result.error }, { status: 502 });

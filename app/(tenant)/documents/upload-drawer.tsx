@@ -29,7 +29,8 @@ interface Item {
 }
 
 const BULK_MAX = 20;
-const DOC_ACCEPT = ".pdf,.jpg,.jpeg,.png,.webp,.tif,.tiff,application/pdf,image/jpeg,image/png,image/webp,image/tiff";
+// No TIFF: the models do not read it and the document ended "Con error".
+const DOC_ACCEPT = ".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp";
 const XML_ACCEPT = ".xml,text/xml,application/xml";
 const SETTLED = new Set<ItemStatus>(["review", "completed", "pending_approval", "awaiting_receipt", "failed"]);
 const NEEDS = new Set<ItemStatus>(["review", "pending_approval", "awaiting_receipt", "failed"]);
@@ -200,8 +201,9 @@ export function UploadDrawer({ subsidiaries, bulkEnabled, onClose, onUploaded }:
       } catch { /* reintenta en la siguiente vuelta */ }
       await sleep(POLL_MS);
     }
-    if (!alive.current) return;
-    setPhase("done");
+    // The list is refreshed even if the panel was closed meanwhile, as its
+    // own text invites to do.
+    if (alive.current) setPhase("done");
     onUploaded();
   }
 

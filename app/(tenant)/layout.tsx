@@ -34,7 +34,7 @@ export default async function TenantLayout({ children }: { children: React.React
   const featuresMap  = Object.fromEntries(resolvedFeatures.map(f => [f.id, f.isEnabled]));
   const dryRunActive = resolvedFeatures.find(f => f.id === "netsuite_dry_run")?.isEnabled ?? false;
   const qaFeature    = resolvedFeatures.find(f => f.id === "qa_mode");
-  const qaUntil      = qaFeature && qaModeActive(qaFeature.isEnabled, qaFeature.config, org.activeNsEnvironment) && activeProducts.has("ap_automation")
+  const qaUntil      = qaFeature && qaModeActive(qaFeature.isEnabled, qaFeature.config, org.activeNsEnvironment, new Date(), org.timezone) && activeProducts.has("ap_automation")
     ? new Date(`${String(qaFeature.config.expires_on)}T12:00:00Z`).toLocaleDateString("es-MX", { day: "numeric", month: "short" })
     : null;
 

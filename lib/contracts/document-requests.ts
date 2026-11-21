@@ -26,7 +26,7 @@ export function suggestContractorEmail(docs: Array<{ values: Record<string, unkn
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[c]!));
 
 /** Cuerpo del correo: plantilla del cliente (si la hay), mensaje, motivo y documentos pedidos. */
-export function buildRequestEmail(opts: { template?: string | null; senderName?: string | null; caseTitle: string; message: string; reason: string; documents: string[]; uploadUrl?: string | null; expiresAt?: Date | null }): { subject: string; html: string } {
+export function buildRequestEmail(opts: { template?: string | null; senderName?: string | null; caseTitle: string; message: string; reason: string; documents: string[]; uploadUrl?: string | null; expiresAt?: Date | null; /** The client's zone: the day the link ends is theirs, not the server's. */ timeZone?: string }): { subject: string; html: string } {
   const sender = opts.senderName?.trim() || "DocuIA";
   const parts = [
     opts.template?.trim() ? `<p>${esc(opts.template.trim()).replace(/\n/g, "<br>")}</p>` : "",
@@ -35,7 +35,7 @@ export function buildRequestEmail(opts: { template?: string | null; senderName?:
     opts.documents.length ? `<p><b>Documentos que necesitamos:</b></p><ul>${opts.documents.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>` : "",
     opts.uploadUrl
       ? `<p><a href="${esc(opts.uploadUrl)}" style="display:inline-block;background:#0E7C70;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:600">Subir los documentos</a></p>` +
-        `<p style="color:#6B6F7E;font-size:13px">No necesitas cuenta.${opts.expiresAt ? ` El enlace vence el ${esc(opts.expiresAt.toLocaleDateString("es-MX", { day: "numeric", month: "long" }))}` : ""} y sirve para una sola entrega.</p>`
+        `<p style="color:#6B6F7E;font-size:13px">No necesitas cuenta.${opts.expiresAt ? ` El enlace vence el ${esc(opts.expiresAt.toLocaleDateString("es-MX", { day: "numeric", month: "long", timeZone: opts.timeZone }))}` : ""} y sirve para una sola entrega.</p>`
       : "",
     `<p style="color:#6B6F7E;font-size:13px">${esc(sender)} · ${esc(opts.caseTitle)}</p>`,
   ];

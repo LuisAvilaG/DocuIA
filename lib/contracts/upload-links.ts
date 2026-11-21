@@ -49,11 +49,13 @@ export async function readUploadLink(token: string, now = new Date()): Promise<L
   if (link.expiresAt <= now) return { ok: false, reason: "expired" };
   const [kase, org] = await Promise.all([
     db.query.contractCases.findFirst({ where: and(eq(contractCases.id, link.caseId), eq(contractCases.organizationId, link.organizationId)), columns: { title: true, status: true } }),
-    db.query.organizations.findFirst({ where: eq(organizations.id, link.organizationId), columns: { name: true, status: true } }),
+    db.query.organizations.findFirst({ where: eq(organizations.id, link.organizationId), columns: { name: true, status: true, trialEndsAt: true } }),
   ]);
   if (!kase || kase.status !== "awaiting_documents") return { ok: false, reason: "closed" };
   // Un cliente suspendido o eliminado ya no recibe entregas ni gasta análisis.
   if (!org || (org.status !== "active" && org.status !== "trial")) return { ok: false, reason: "closed" };
+  // Igual que el acceso a la app: una prueba vencida cuenta como suspendida.
+  if (org.status === "trial" && org.trialEndsAt && org.trialEndsAt <= now) return { ok: false, reason: "closed" };
   return {
     ok: true, linkId: link.id, orgId: link.organizationId, caseId: link.caseId, orgName: org?.name ?? "",
     caseTitle: kase.title ?? "Caso", documents: Array.isArray(link.documentsJson) ? (link.documentsJson as string[]) : [],

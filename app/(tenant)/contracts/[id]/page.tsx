@@ -1,3 +1,6 @@
+import { isProductActive } from "@/lib/products";
+import { orgTimeZone } from "@/lib/org-time-zone";
+import { friendlyError } from "@/lib/ap/friendly-error";
 import { caseVerdict, findingLevel } from "@/lib/contracts/validate";
 import { redirect, notFound } from "next/navigation";
 import { canApprove } from "@/lib/auth/permissions";
@@ -5,11 +8,12 @@ import Link from "next/link";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
 import { contractAiAnalysisResults, contractArchiveDocuments, contractCases, contractDocuments, contractValidations, contractFlows, orgUsers, tenantAuditLog } from "@/db/schema";
-import { and, eq, asc, inArray } from "drizzle-orm";
+import { and, eq, asc, inArray, or, sql } from "drizzle-orm";
 import { FileText } from "lucide-react";
 import { CaseStatusPill, Notice, SectionTitle, StageNav, StatusPill, type Stage } from "@/components/kit";
 import { CaseActions } from "./actions";
-import { CaseDocuments, type CaseDoc } from "./case-documents";
+import type { CaseDoc } from "./case-documents";
+import { CaseDocuments } from "./case-documents-lazy";
 import { CaseChecks } from "./case-checks-lazy";
 import type { CheckFinding } from "./case-checks";
 import { evidenceFromQuotes, type EvidenceRef } from "@/lib/contracts/evidence";
@@ -20,6 +24,7 @@ import { CaseActivity, type CaseActivityItem } from "./case-activity";
 import { caseApprovalRules } from "@/lib/contracts/approval-state";
 import { canAccessTenantArea } from "@/lib/auth/permissions";
 import { ResubmitPanel } from "./resubmit-panel";
+import { RetryAnalysis } from "./retry-analysis";
 import { AiAnalysisResults } from "./ai-analysis-results";
 import { OutputDownloads } from "./output-downloads";
 
@@ -36,12 +41,16 @@ export default async function ContractCasePage({ params, searchParams }: { param
   // login page can refresh the tenant session and return the user here instead
   // of looking like the case unexpectedly signed them out.
   if (!session) redirect(`/login?returnTo=${encodeURIComponent(`/cases/${id}`)}`);
+  // Same gate as the list of cases: a case stays out of reach once the product is off.
+  if (!(await isProductActive(session.orgId, "contract_intelligence"))) redirect("/dashboard");
 
   const kase = await db.query.contractCases.findFirst({
     where: and(eq(contractCases.id, id), eq(contractCases.organizationId, session.orgId)),
   });
   if (!kase) notFound();
 
+  // Dates below are formatted on the server (UTC): they need the client's zone.
+  const timeZone = await orgTimeZone(session.orgId);
   const [documents, validations, analyses, validationsEnabled, generationEnabled, approvalFeature, activeFlow, auditRows, users] = await Promise.all([
     db.query.contractDocuments.findMany({ where: eq(contractDocuments.caseId, id) }),
     db.query.contractValidations.findMany({ where: eq(contractValidations.caseId, id) }),
@@ -53,8 +62,13 @@ export default async function ContractCasePage({ params, searchParams }: { param
       where: and(eq(contractFlows.id, kase.flowId), eq(contractFlows.organizationId, session.orgId)),
       columns: { id: true, name: true, graphJson: true },
     }) : Promise.resolve(null),
+    // Only the events of this case: the page reloads every few seconds while
+    // the case is analysed, and the whole log of the organization was read each time.
     db.query.tenantAuditLog.findMany({
-      where: eq(tenantAuditLog.organizationId, session.orgId),
+      where: and(
+        eq(tenantAuditLog.organizationId, session.orgId),
+        or(eq(tenantAuditLog.resourceId, id), sql`${tenantAuditLog.metadata}->>'caseId' = ${id}`),
+      ),
       columns: { id: true, userId: true, userEmail: true, action: true, resourceId: true, metadata: true, createdAt: true },
       orderBy: [asc(tenantAuditLog.createdAt)],
     }),
@@ -102,7 +116,7 @@ export default async function ContractCasePage({ params, searchParams }: { param
   // Hallazgos numerados: bloqueos, luego advertencias, luego lo que no se pudo verificar.
   const rank = (v: (typeof validations)[number]) => (v.ok === false ? 0 : 2) + (v.severity === "block" ? 0 : 1);
   const findings: CheckFinding[] = validations
-    .filter((v) => v.ok !== true && !(v.ok === null && v.severity === "info"))
+    .filter((v) => findingLevel(v) !== null)
     .sort((a, b) => rank(a) - rank(b) || a.id - b.id)
     .map((v) => ({
       id: v.id, ruleName: v.ruleName ?? "Validación", severity: (v.severity ?? "warn") as CheckFinding["severity"], subject: v.subject, status: v.status,
@@ -111,6 +125,10 @@ export default async function ContractCasePage({ params, searchParams }: { param
       evidence: Array.isArray(v.evidenceJson) ? v.evidenceJson as EvidenceRef[] : evidenceFromQuotes([v.citation]),
     }));
   const passedChecks = validations.filter((v) => v.ok === true).map((v) => ({ id: v.id, ruleName: v.ruleName ?? "Validación", subject: v.subject, status: v.status }));
+  // Informative rules that did not pass: never a finding (the header and the
+  // stage already say so), but listed apart so nothing the analysis saw is hidden.
+  const infoNotes = validations.filter((v) => v.ok !== true && findingLevel(v) === null)
+    .map((v) => ({ id: v.id, ruleName: v.ruleName ?? "Validación", subject: v.subject, reason: v.reason ?? "", verified: v.ok !== null }));
   const checkDocs = docs.map((d) => ({
     id: d.id, name: d.originalName || d.detectedType || "Documento",
     kind: ((d.mimeType ?? "").includes("pdf") ? "pdf" : (d.mimeType ?? "").startsWith("image/") ? "image" : "other") as "pdf" | "image" | "other",
@@ -155,7 +173,10 @@ export default async function ContractCasePage({ params, searchParams }: { param
   const typeWarnings = (Array.isArray(result.documents) ? result.documents : [])
     .filter((d) => d.typeWarning)
     .map((d) => ({ name: docs.find((x) => x.id === d.documentId)?.originalName ?? "Un documento", text: d.typeWarning! }));
-  const deciding = kase.status === "validated" || kase.status === "review";
+  // "Por decidir" only where someone decides: without the approval workflow an
+  // analysed case is finished ("Analizado") and nothing waits on anyone.
+  const analysed = kase.status === "validated" || kase.status === "review";
+  const deciding = analysed && approvalFeature.isEnabled;
   const waitingDocs = kase.status === "awaiting_documents";
   const stages: Stage[] = [
     { key: "docs", label: "Documentos", detail: isProcessing ? "Leyendo…" : `${totalFields} datos · ${docs.length} documento${docs.length === 1 ? "" : "s"}`, state: isProcessing ? "run" : kase.status === "failed" ? "err" : unknownDocs || typeWarnings.length ? "warn" : "ok", href: "?etapa=docs" },
@@ -169,11 +190,12 @@ export default async function ContractCasePage({ params, searchParams }: { param
     decided
       ? { key: "dec", label: "Decisión", detail: [rejected ? "Rechazado" : "Aprobado", result.decision?.byEmail].filter(Boolean).join(" · "), state: rejected ? "err" : "ok", href: "?etapa=dec" }
       : waitingDocs ? { key: "dec", label: "Decisión", detail: "Esperando documentos", state: "now", href: "?etapa=dec" }
+      : !approvalFeature.isEnabled ? { key: "dec", label: "Decisión", detail: "No aplica", state: "off" }
       : { key: "dec", label: "Decisión", detail: deciding ? "Pendiente" : "Después del análisis", state: deciding ? "now" : "off", href: deciding ? "?etapa=dec" : undefined },
     !generationEnabled
       ? { key: "doc", label: "Documento", detail: "No aplica", state: "off" }
       : result.outputKey ? { key: "doc", label: "Documento", detail: "Generado", state: "ok", href: "?etapa=doc" }
-      : { key: "doc", label: "Documento", detail: approvalFeature.isEnabled ? "Al aprobar" : "Al terminar", state: "off", href: deciding || decided ? "?etapa=doc" : undefined },
+      : { key: "doc", label: "Documento", detail: approvalFeature.isEnabled ? "Al aprobar" : "Al terminar", state: "off", href: analysed || decided ? "?etapa=doc" : undefined },
   ];
   const valid = new Set([...stages.filter((st) => st.href).map((st) => st.key), "activity"]);
   const fallback = isProcessing || kase.status === "failed" ? "docs"
@@ -181,8 +203,8 @@ export default async function ContractCasePage({ params, searchParams }: { param
     : validationsEnabled && validations.length ? "checks" : "docs";
   const tab = etapa && valid.has(etapa) ? etapa : fallback;
   const caseTitle = kase.title || `Caso ${kase.id.slice(0, 8)}`;
-  const statusPill = deciding
-    ? <StatusPill tone={blocks ? "err" : warns ? "warn" : "ok"}>Por decidir{blocks ? ` · ${blocks} bloqueo${blocks === 1 ? "" : "s"}` : ""}</StatusPill>
+  const statusPill = analysed
+    ? <StatusPill tone={blocks ? "err" : warns ? "warn" : "ok"}>{deciding ? "Por decidir" : "Analizado"}{blocks ? ` · ${blocks} bloqueo${blocks === 1 ? "" : "s"}` : ""}</StatusPill>
     : <CaseStatusPill status={kase.status} detail={(kase.status === "approved" || kase.status === "generated") && result.outputKey ? "documento generado" : null} />;
   const creator = kase.createdBy ? userNames.get(kase.createdBy) : null;
   const isWord = result.outputMime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
@@ -197,7 +219,7 @@ export default async function ContractCasePage({ params, searchParams }: { param
           {statusPill}
         </div>
         <p className="mt-1.5 text-[13px] text-muted-foreground">
-          {[activeFlow ? `${activeFlow.name}${flowVersion ? ` v${flowVersion}` : ""}${configuredValidations !== null ? ` · ${configuredValidations} control${configuredValidations === 1 ? "" : "es"}` : ""}` : null, `creado ${new Date(kase.createdAt).toLocaleString("es-MX", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}`, creator ? `por ${creator}` : null].filter(Boolean).join(" · ")}
+          {[activeFlow ? `${activeFlow.name}${flowVersion ? ` v${flowVersion}` : ""}${configuredValidations !== null ? ` · ${configuredValidations} control${configuredValidations === 1 ? "" : "es"}` : ""}` : null, `creado ${new Date(kase.createdAt).toLocaleString("es-MX", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone })}`, creator ? `por ${creator}` : null].filter(Boolean).join(" · ")}
         </p>
         <StageNav className="mt-4.5" label="Etapas del caso" stages={stages} current={tab} aux={[{ key: "activity", label: "Actividad", href: "?etapa=activity", count: activity.length }]} />
       </div>
@@ -215,15 +237,17 @@ export default async function ContractCasePage({ params, searchParams }: { param
           {kase.status === "failed" && (
             <div role="alert" className="rounded-xl border border-[#E9C6C2] bg-tone-err-bg px-5 py-4">
               <b className="block text-base font-semibold text-tone-err">El análisis no terminó</b>
-              <p className="mt-1 text-[13.5px]">{kase.errorMessage?.split("\n")[0] ?? "Ocurrió un error al analizar los documentos."}</p>
-              <p className="mt-2 text-[13px] text-muted-foreground">Revisa que los documentos sean los que pide el flujo y crea el caso de nuevo, o pide a un administrador que revise el flujo.</p>
+              <p className="mt-1 text-[13.5px]">{friendlyError(kase.errorMessage?.split("\n")[0]) ?? "Ocurrió un error al analizar los documentos."}</p>
+              <p className="mt-2 text-[13px] text-muted-foreground">Si fue una falla pasajera, vuelve a analizarlo. Si se repite, revisa que los documentos sean los que pide el flujo o pide a un administrador que revise el flujo.</p>
+              {canAccessTenantArea(session.role, { area: "contracts", permission: "write" }) && <RetryAnalysis caseId={kase.id} />}
             </div>
           )}
 
           {waitingDocs && (
             <ResubmitPanel caseId={kase.id} request={result.documentRequest ?? null}
               documents={docs.map((d) => ({ id: d.id, label: d.originalName || d.detectedType || "Documento" }))}
-              canWrite={canAccessTenantArea(session.role, { area: "contracts", permission: "write" })} />
+              canWrite={canAccessTenantArea(session.role, { area: "contracts", permission: "write" })}
+              canCancel={canApprove(session.role, "contracts")} />
           )}
 
           {tab === "docs" && typeWarnings.length > 0 && (
@@ -263,7 +287,7 @@ export default async function ContractCasePage({ params, searchParams }: { param
               {validations.length === 0 ? (
                 <p className="text-sm text-muted-foreground">Este flujo no tiene controles. Se agregan en el editor del flujo.</p>
               ) : (
-                <CaseChecks docs={checkDocs} findings={findings} passed={passedChecks} />
+                <CaseChecks docs={checkDocs} findings={findings} passed={passedChecks} notes={infoNotes} />
               )}
               <AiAnalysisResults analyses={analyses} />
             </section>
@@ -280,7 +304,7 @@ export default async function ContractCasePage({ params, searchParams }: { param
                       <li key={st.key} className="flex flex-wrap items-center justify-between gap-2 rounded-[10px] border border-border bg-card px-4 py-2.5 text-[13.5px]">
                         <span><b className="font-semibold">{st.label}</b><span className="text-muted-foreground"> · {st.approvers.mode === "any" ? "cualquier persona con permiso" : `${st.approvers.userIds.length} persona${st.approvers.userIds.length === 1 ? "" : "s"} asignada${st.approvers.userIds.length === 1 ? "" : "s"}`}</span></span>
                         {signed
-                          ? <StatusPill tone="ok">Aprobó {userNames.get(signed.byId) ?? signed.byEmail ?? "—"} · {new Date(signed.at).toLocaleString("es-MX", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</StatusPill>
+                          ? <StatusPill tone="ok">Aprobó {userNames.get(signed.byId) ?? signed.byEmail ?? "—"} · {new Date(signed.at).toLocaleString("es-MX", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone })}</StatusPill>
                           : <StatusPill tone="warn">Pendiente</StatusPill>}
                       </li>
                     );
@@ -310,7 +334,7 @@ export default async function ContractCasePage({ params, searchParams }: { param
             </section>
           )}
 
-          {tab === "activity" && <CaseActivity items={activity} />}
+          {tab === "activity" && <CaseActivity items={activity} timeZone={timeZone} />}
         </div>
       </div>
     </div>

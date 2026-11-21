@@ -1,3 +1,5 @@
+import { orgTimeZone } from "@/lib/org-time-zone";
+import { wallClockIn } from "@/lib/time-zone";
 import { db } from "@/lib/db";
 import { contractAiAnalysisResults, contractCases, contractDocuments } from "@/db/schema";
 import { eq } from "drizzle-orm";
@@ -68,7 +70,7 @@ export async function calculateContractRevalidation(
     },
   }));
 
-  const assembled = assembleResults(plan, docsByType, analyses, { validationsEnabled });
+  const assembled = assembleResults(plan, docsByType, analyses, { validationsEnabled, now: wallClockIn(await orgTimeZone(kase.organizationId)) });
   const refNode = plan.flow?.nodes.find((node) => node.kind === "reference_lookup");
   const validations = refNode
     ? [...assembled.validations, ...await archiveValidationsForCase({ organizationId: kase.organizationId, caseDocumentIds: documents.map((document) => document.id), name: refNode.data.name, severity: refNode.data.severity })]

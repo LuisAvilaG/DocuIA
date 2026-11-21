@@ -46,6 +46,10 @@ export function buildNsPayload(draft: NsDraft, ctx: {
   poConfig?:      PoConfig;
 }): Record<string, unknown> {
   const poConfig = ctx.poConfig ?? {};
+  // An invoice matched line by line to its PO usually covers one delivery. The
+  // ERP builds the bill from every open PO line, so the ones this invoice does
+  // not bill must go to zero or the bill would be for the whole pending PO.
+  const matchedToPoLines = Boolean(draft.poId) && draft.lines.some((l) => l.po_line);
   return {
     documentType:                    ctx.documentType,
     dry_run:                         ctx.dryRun,
@@ -60,10 +64,37 @@ export function buildNsPayload(draft: NsDraft, ctx: {
     location_internal_id:            draft.locationId,
     po_internal_id:                  draft.poId,
     apply_to_po_lines:               poConfig.apply_to_po_lines ?? true,
-    set_unselected_po_lines_to_zero: poConfig.set_unselected_po_lines_to_zero ?? false,
+    set_unselected_po_lines_to_zero: matchedToPoLines || (poConfig.set_unselected_po_lines_to_zero ?? false),
     allow_additional_lines:          poConfig.allow_additional_lines ?? true,
-    line_items:                      draft.lines,
+    line_items:                      draft.poId ? mergeLinesOnSamePoLine(draft.lines) : draft.lines,
   };
+}
+
+/**
+ * The ERP bills each PO line once, so two invoice lines on the same PO line
+ * (one item delivered in two lots) would overwrite each other: they are added up.
+ */
+export function mergeLinesOnSamePoLine(lines: NsDraft["lines"]): NsDraft["lines"] {
+  const merged: NsDraft["lines"] = [];
+  const byPoLine = new Map<string, number>();
+  for (const line of lines) {
+    const at = line.po_line ? byPoLine.get(line.po_line) : undefined;
+    if (at === undefined) {
+      if (line.po_line) byPoLine.set(line.po_line, merged.length);
+      merged.push({ ...line });
+      continue;
+    }
+    const first = merged[at];
+    const amount = first.amount !== null && line.amount !== null ? Math.round((first.amount + line.amount) * 100) / 100 : null;
+    const quantity = first.quantity + line.quantity;
+    merged[at] = {
+      ...first,
+      quantity,
+      amount,
+      rate: amount !== null && quantity ? Math.round((amount / quantity) * 1e6) / 1e6 : first.rate,
+    };
+  }
+  return merged;
 }
 
 function str(value: unknown): string | null {
@@ -101,18 +132,42 @@ export function draftFromUiPayload(payload: Pick<UiPayload, "document">): NsDraf
   };
 }
 
+type PoLineSource = { index: number; poLine: string | null; allocations?: Array<{ poLine: string; quantity: number }> };
+
+/**
+ * Ties each draft line to the PO line the comparison gave it. A line that
+ * spans several PO lines (15 units over two PO lines of 10) is split, one part
+ * per PO line, with the amount shared in proportion. `sourceIndex` maps the
+ * position in the draft to the index the comparison used.
+ */
+export function assignPoLines(lines: NsDraft["lines"], comparison: PoLineSource[], sourceIndex: (position: number) => number = (k) => k): NsDraft["lines"] {
+  const byIndex = new Map(comparison.map((c) => [c.index, c]));
+  return lines.flatMap((line, k) => {
+    const cmp = byIndex.get(sourceIndex(k));
+    const parts = (cmp?.allocations ?? []).filter((a) => a.quantity > 0);
+    if (parts.length < 2 || !line.quantity) return [{ ...line, po_line: cmp?.poLine ?? null }];
+    let left = line.amount;
+    return parts.map((part, i) => {
+      const amount = left === null || line.amount === null ? null
+        : i === parts.length - 1 ? Math.round(left * 100) / 100
+        : Math.round(line.amount * (part.quantity / line.quantity) * 100) / 100;
+      if (left !== null && amount !== null) left -= amount;
+      return { ...line, quantity: part.quantity, amount, po_line: part.poLine };
+    });
+  });
+}
+
 /** Auto-process draft plus the PO chosen by the AP checks, with each line tied to its PO line. */
 export function draftWithPo(payload: Pick<UiPayload, "document" | "ap_checks">): NsDraft {
   const draft = draftFromUiPayload(payload);
   const po = payload.ap_checks?.po;
   if (!po?.selectedPoId) return draft;
-  const poLineByIndex = new Map((po.comparison?.lines ?? []).map((l) => [l.index, l.poLine]));
   // draftFromUiPayload keeps only mapped lines; walk the source lines to keep indexes aligned.
   const mappedIndexes = payload.document.lines.map((l, i) => (l.selected_item_id ? i : -1)).filter((i) => i >= 0);
   return {
     ...draft,
     poId: po.selectedPoId,
-    lines: draft.lines.map((line, k) => ({ ...line, po_line: poLineByIndex.get(mappedIndexes[k]) ?? null })),
+    lines: assignPoLines(draft.lines, po.comparison?.lines ?? [], (k) => mappedIndexes[k]),
   };
 }
 
@@ -128,7 +183,7 @@ export function draftFromReviewBody(body: unknown): NsDraft | string {
     .map((l) => ({
       internal_id:        str(l.internal_id) ?? "",
       item_document_name: typeof l.item_document_name === "string" ? l.item_document_name : "",
-      quantity:           num(l.quantity) ?? 0,
+      quantity:           num(l.quantity),
       rate:               num(l.rate),
       amount:             num(l.amount),
       unit:               str(l.unit),
@@ -136,6 +191,12 @@ export function draftFromReviewBody(body: unknown): NsDraft | string {
     }))
     .filter((l) => l.internal_id);
   if (!lines.length) return "Se requiere al menos una línea con ítem del ERP";
+  const noQuantity = lines.findIndex((l) => l.quantity === null);
+  if (noQuantity >= 0) return `La línea ${noQuantity + 1} no tiene cantidad`;
+  // Without either, the ERP prices the line by itself (item default or zero)
+  // and the bill no longer adds up to the document.
+  const noPrice = lines.findIndex((l) => l.rate === null && l.amount === null);
+  if (noPrice >= 0) return `La línea ${noPrice + 1} no tiene precio ni importe`;
   return {
     vendorId,
     vendorName:    str(b.vendor_name),
@@ -145,7 +206,7 @@ export function draftFromReviewBody(body: unknown): NsDraft | string {
     currency:      str(b.currency),
     locationId:    str(b.location_internal_id),
     poId:          str(b.po_internal_id),
-    lines,
+    lines:         lines.map((l) => ({ ...l, quantity: l.quantity ?? 0 })),
   };
 }
 

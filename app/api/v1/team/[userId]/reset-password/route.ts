@@ -1,3 +1,4 @@
+import { logAudit } from "@/lib/audit/log";
 import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
@@ -30,6 +31,11 @@ async function handlePOST(_req: NextRequest, { params }: Params) {
       .where(eq(orgUsers.id, userId));
     await tx.update(authSessions).set({ revokedAt: new Date() })
       .where(and(eq(authSessions.userId, userId), eq(authSessions.userType, "org_user")));
+  });
+
+  await logAudit({
+    orgId: session.orgId, userId: session.sub, userEmail: session.email, action: "team.password_reset",
+    resourceType: "org_user", resourceId: user.id, metadata: { email: user.email, role: user.role },
   });
 
   return NextResponse.json({ ok: true, tempPassword });

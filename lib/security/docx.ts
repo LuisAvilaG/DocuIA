@@ -2,12 +2,42 @@ import { fromBuffer, type Entry, type ZipFile } from "yauzl";
 
 // Field codes that fetch or execute external content. They are only dangerous
 // inside a field instruction, never as ordinary words ("Link de pago").
-const DANGEROUS_FIELD = /\b(DDEAUTO|DDE|INCLUDETEXT|INCLUDEPICTURE|LINK)\b/i;
+// The code is the first word of the instruction; the rest are its arguments
+// (the URL of a HYPERLINK may well contain "link").
+const DANGEROUS_FIELD = /^[\s"']*(DDEAUTO|DDE|INCLUDETEXT|INCLUDEPICTURE|LINK)(?![A-Za-z])/i;
 
-function fieldInstructions(xml: string): string {
-  const complex = [...xml.matchAll(/<w:instrText\b[^>]*>([\s\S]*?)<\/w:instrText>/gi)].map((m) => m[1]);
-  const simple = [...xml.matchAll(/<w:fldSimple\b[^>]*\bw:instr\s*=\s*("[^"]*"|'[^']*')/gi)].map((m) => m[1]);
-  return [...complex, ...simple].join(" ");
+const decodeEntities = (text: string) => text
+  .replace(/&#(x?)([0-9a-f]+);/gi, (_m, hex: string, code: string) => String.fromCodePoint(parseInt(code, hex ? 16 : 10) || 32))
+  .replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, "&");
+
+/**
+ * The instruction of every field, one string per field. Word splits an
+ * instruction into several runs and joins them with nothing in between, so
+ * "INCLUDE" + "PICTURE" is INCLUDEPICTURE: the runs of a field are
+ * concatenated as Word does, and each field is kept apart from the next.
+ */
+export function fieldInstructions(xml: string): string[] {
+  const fields: string[] = [];
+  const open: string[] = [];
+  const token = /<w:fldChar\b[^>]*\bw:fldCharType\s*=\s*["'](begin|separate|end)["'][^>]*>|<w:instrText\b[^>]*>([\s\S]*?)<\/w:instrText>/gi;
+  for (const m of xml.matchAll(token)) {
+    if (m[1]) {
+      const type = m[1].toLowerCase();
+      if (type === "begin") open.push("");
+      else if (type === "end" && open.length) fields.push(open.pop()!);
+    } else if (open.length) {
+      open[open.length - 1] += m[2];
+    } else {
+      fields.push(m[2]);
+    }
+  }
+  fields.push(...open);
+  for (const m of xml.matchAll(/<w:fldSimple\b[^>]*\bw:instr\s*=\s*(?:"([^"]*)"|'([^']*)')/gi)) fields.push(m[1] ?? m[2] ?? "");
+  return fields.map(decodeEntities);
+}
+
+export function hasDangerousField(xml: string): boolean {
+  return fieldInstructions(xml).some((instruction) => DANGEROUS_FIELD.test(instruction));
 }
 
 // External relationships are fetched by Word/LibreOffice (images, frames,
@@ -68,7 +98,7 @@ export async function validateDocx(buffer: Buffer): Promise<void> {
             const text = Buffer.concat(chunks).toString("utf8").replace(/&#(?:x([0-9a-f]+)|(\d+));/gi, (_, hex, dec) => String.fromCodePoint(Math.min(0x10ffff, parseInt(hex || dec, hex ? 16 : 10))));
             if (text.includes("\0") || /<!DOCTYPE|<!ENTITY|<[^>]*altChunk\b|macroEnabled|vbaProject/i.test(text)
               || (/\.rels$/i.test(name) && hasForbiddenRelationship(text))
-              || DANGEROUS_FIELD.test(fieldInstructions(text))) {
+              || hasDangerousField(text)) {
               return fail(new Error("La plantilla contiene vínculos externos o contenido activo no permitido"));
             }
           }

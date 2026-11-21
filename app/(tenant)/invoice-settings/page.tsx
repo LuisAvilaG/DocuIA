@@ -47,7 +47,7 @@ export default async function InvoiceSettingsPage({ searchParams }: { searchPara
 
   const [resolved, org, subs, rules] = await Promise.all([
     getAllFeatures(session.orgId),
-    db.query.organizations.findFirst({ where: eq(organizations.id, session.orgId), columns: { autoProcessThreshold: true, activeNsEnvironment: true } }),
+    db.query.organizations.findFirst({ where: eq(organizations.id, session.orgId), columns: { autoProcessThreshold: true, activeNsEnvironment: true, timezone: true } }),
     db.query.subsidiaries.findMany({ where: eq(subsidiaries.organizationId, session.orgId), columns: { id: true, name: true, nsSubsidiaryId: true, currency: true, invoiceFormat: true, isActive: true }, orderBy: [subsidiaries.name] }),
     listVendorRules(session.orgId).catch(() => []),
   ]);
@@ -66,7 +66,7 @@ export default async function InvoiceSettingsPage({ searchParams }: { searchPara
       .filter(Boolean).slice(0, 4).join(" · ");
     let extra: string | null = null;
     if (id === "vendor_rules") extra = `${rules.length} regla${rules.length === 1 ? "" : "s"}`;
-    if (id === "qa_mode" && qaModeActive(f.isEnabled, f.config, org?.activeNsEnvironment)) extra = `Activo hasta ${String(f.config.expires_on)}`;
+    if (id === "qa_mode" && qaModeActive(f.isEnabled, f.config, org?.activeNsEnvironment, new Date(), org?.timezone)) extra = `Activo hasta ${String(f.config.expires_on)}`;
     if (id === "sandbox_test_send" || id === "qa_mode") extra = [extra, org?.activeNsEnvironment === "sandbox" ? "ERP en sandbox" : "Solo con el ERP en sandbox"].filter(Boolean).join(" · ");
     return {
       id,

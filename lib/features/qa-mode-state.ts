@@ -16,11 +16,11 @@ export async function qaModeState(organizationId: string, now = new Date()): Pro
     getFeature(organizationId, "qa_mode").catch(() => null),
     db.query.organizations.findFirst({
       where: eq(organizations.id, organizationId),
-      columns: { activeNsEnvironment: true },
+      columns: { activeNsEnvironment: true, timezone: true },
     }),
   ]);
   if (!feature) return { active: false, expiresOn: null, config: null };
-  const active = qaModeActive(feature.isEnabled, feature.config, org?.activeNsEnvironment, now);
+  const active = qaModeActive(feature.isEnabled, feature.config, org?.activeNsEnvironment, now, org?.timezone);
   const config = feature.config as unknown as QaConfig;
   return { active, expiresOn: active ? config.expires_on : null, config: active ? config : null };
 }

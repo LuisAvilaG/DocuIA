@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { nsConnections } from "@/db/schema";
 import { getFeature, isFeatureEnabled } from "@/lib/features";
 import { decryptField } from "@/lib/crypto/encrypt";
+import { operatingOrganization } from "@/lib/auth/jwt";
 import type { NSCredentials } from "@/lib/netsuite/oauth";
 import {
   syncClasses,
@@ -22,7 +23,9 @@ async function handleGET(req: NextRequest) {
   if (!cronAuth(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   try {
+    // Only clients that may operate, like the other crons.
     const orgs = await db.query.organizations.findMany({
+      where: operatingOrganization(),
       columns: { id: true, activeNsEnvironment: true },
     });
     const summary: Record<string, unknown> = {};
@@ -45,15 +48,16 @@ async function handleGET(req: NextRequest) {
         continue;
       }
 
-      const credentials: NSCredentials = {
-        accountId: connection.accountId,
-        consumerKey: decryptField(connection.consumerKey),
-        consumerSecret: decryptField(connection.consumerSecret),
-        tokenId: decryptField(connection.tokenId),
-        tokenSecret: decryptField(connection.tokenSecret),
-      };
-
       try {
+        // Inside the try: damaged credentials of one client must not stop the rest.
+        const credentials: NSCredentials = {
+          accountId: connection.accountId,
+          consumerKey: decryptField(connection.consumerKey),
+          consumerSecret: decryptField(connection.consumerSecret),
+          tokenId: decryptField(connection.tokenId),
+          tokenSecret: decryptField(connection.tokenSecret),
+        };
+
         const [categories, departments, classes, employees] = await Promise.all([
           syncExpenseCategories(org.id, null, credentials),
           syncDepartments(org.id, null, credentials),

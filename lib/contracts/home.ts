@@ -1,9 +1,11 @@
 // Datos de «Hoy» en Contratos: lo que espera una decisión, los últimos 30 días y
 // el uso por flujo. Sin vencimientos (se revisan con el control Fecha y vigencia).
+import { isFeatureEnabled } from "@/lib/features";
 import { findingLevel } from "./validate";
+import { friendlyError } from "@/lib/ap/friendly-error";
 import { db } from "@/lib/db";
 import { contractCases, contractFlows, contractValidations, statusEvents } from "@/db/schema";
-import { and, desc, eq, gte, inArray, sql, or, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, sql, or, isNull } from "drizzle-orm";
 
 export type AttentionTone = "err" | "warn" | "ok";
 
@@ -43,14 +45,23 @@ async function findingsByCase(caseIds: string[]) {
 export async function getContractsHome(orgId: string, now = new Date()) {
   const since = new Date(now.getTime() - 30 * 86_400_000);
   const org = eq(contractCases.organizationId, orgId);
+  // Without the approval workflow nobody decides: an analysed case is done and
+  // nothing "waits for your decision".
+  const approval = await isFeatureEnabled(orgId, "contract_approval_workflow");
+  const finished: readonly string[] = approval ? DONE : [...DONE, ...DECIDE];
 
-  const [flows, waiting, failed, analyzing, recent] = await Promise.all([
+  const [flows, waiting, failed, analyzing, recent, waitingCount] = await Promise.all([
     db.query.contractFlows.findMany({ where: eq(contractFlows.organizationId, orgId), columns: { id: true, name: true } }),
-    db.query.contractCases.findMany({ where: and(org, inArray(contractCases.status, [...DECIDE])), columns: { id: true, title: true, flowId: true, updatedAt: true }, orderBy: [desc(contractCases.updatedAt)], limit: 40 }),
+    approval
+      ? db.query.contractCases.findMany({ where: and(org, inArray(contractCases.status, [...DECIDE])), columns: { id: true, title: true, flowId: true, updatedAt: true }, orderBy: [asc(contractCases.updatedAt)], limit: 40 })
+      : Promise.resolve([] as Array<{ id: string; title: string | null; flowId: string | null; updatedAt: Date }>),
     db.query.contractCases.findMany({ where: and(org, eq(contractCases.status, "failed"), gte(contractCases.updatedAt, since)), columns: { id: true, title: true, flowId: true, updatedAt: true, errorMessage: true }, orderBy: [desc(contractCases.updatedAt)], limit: 5 }),
     db.$count(contractCases, and(org, inArray(contractCases.status, ["uploaded", "processing"]))),
     db.select({ id: contractCases.id, flowId: contractCases.flowId, status: contractCases.status, createdAt: contractCases.createdAt })
       .from(contractCases).where(and(org, gte(contractCases.createdAt, since))),
+    // The headline's number: the list above is capped (and takes the cases that
+    // have waited longest, which are the ones "Para atender" must not leave out).
+    approval ? db.$count(contractCases, and(org, inArray(contractCases.status, [...DECIDE]))) : Promise.resolve(0),
   ]);
   const flowName = new Map(flows.map((f) => [f.id, f.name]));
   const nameOf = (id: string | null) => (id ? flowName.get(id) ?? "Flujo eliminado" : "Sin flujo");
@@ -82,7 +93,7 @@ export async function getContractsHome(orgId: string, now = new Date()) {
   const rank: Record<AttentionTone, number> = { err: 0, warn: 1, ok: 2 };
   const attention: AttentionItem[] = [
     ...waiting.map((c) => ({ id: c.id, title: c.title ?? "Caso sin título", flowName: nameOf(c.flowId), ...tone(c.id), since: c.updatedAt.toISOString(), cta: "Decidir" })),
-    ...failed.map((c) => ({ id: c.id, title: c.title ?? "Caso sin título", flowName: nameOf(c.flowId), tone: "err" as const, label: "Error", detail: c.errorMessage?.split("\n")[0] ?? "El análisis no terminó.", since: c.updatedAt.toISOString(), cta: "Revisar" })),
+    ...failed.map((c) => ({ id: c.id, title: c.title ?? "Caso sin título", flowName: nameOf(c.flowId), tone: "err" as const, label: "Error", detail: friendlyError(c.errorMessage?.split("\n")[0]) ?? "El análisis no terminó.", since: c.updatedAt.toISOString(), cta: "Revisar" })),
   ].sort((a, b) => rank[a.tone] - rank[b.tone] || a.since.localeCompare(b.since)).slice(0, 8);
 
   const byFlow = new Map<string, FlowUsage>();
@@ -90,7 +101,7 @@ export async function getContractsHome(orgId: string, now = new Date()) {
     const key = c.flowId ?? "none";
     const u = byFlow.get(key) ?? { flowId: c.flowId, name: nameOf(c.flowId), cases: 0, done: 0, findings: 0, medianSec: null };
     u.cases++;
-    if ((DONE as readonly string[]).includes(c.status)) u.done++;
+    if (finished.includes(c.status)) u.done++;
     const f = findings.get(c.id);
     if (f && (f.blocks || f.warns)) u.findings++;
     byFlow.set(key, u);
@@ -98,12 +109,12 @@ export async function getContractsHome(orgId: string, now = new Date()) {
   for (const [key, u] of byFlow) u.medianSec = median(recent.filter((c) => (c.flowId ?? "none") === key).map((c) => secsByCase.get(c.id)).filter((x): x is number => x !== undefined));
 
   return {
-    waiting: waiting.length,
+    waiting: waitingCount,
     analyzing,
     attention,
     last30: {
       created: recent.length,
-      done: recent.filter((c) => (DONE as readonly string[]).includes(c.status)).length,
+      done: recent.filter((c) => finished.includes(c.status)).length,
       medianSec: median([...secsByCase.values()]),
       findings: recent.filter((c) => { const f = findings.get(c.id); return Boolean(f && (f.blocks || f.warns)); }).length,
     },

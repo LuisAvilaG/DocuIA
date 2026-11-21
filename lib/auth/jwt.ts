@@ -5,7 +5,7 @@ import { jwtSecret, refreshSecret } from "@/lib/env";
 import { isTenantIpAllowed } from "@/lib/security/ip-allowlist";
 import { db } from "@/lib/db";
 import { apiKeys, authSessions, orgUsers, organizations, platformAdmins } from "@/db/schema";
-import { and, eq, gt, isNull, inArray } from "drizzle-orm";
+import { and, eq, gt, isNull, inArray, ne, or } from "drizzle-orm";
 import { isFeatureEnabled } from "@/lib/features";
 import type { TenantHomePath } from "@/lib/products";
 import { accessPayloadSchema, refreshPayloadSchema } from "./token-payload";
@@ -82,9 +82,21 @@ async function validateSession(token: string, type: AccessTokenPayload["type"], 
   return { ...payload, role: user.role, email: user.email };
 }
 
+/**
+ * Organizations allowed to operate: active, or on a trial that has not ended.
+ * A trial past `trial_ends_at` is treated like a suspended organization; a
+ * trial without an end date never expires.
+ */
+export function operatingOrganization() {
+  return and(
+    inArray(organizations.status, ["active", "trial"]),
+    or(ne(organizations.status, "trial"), isNull(organizations.trialEndsAt), gt(organizations.trialEndsAt, new Date())),
+  );
+}
+
 export async function isOrganizationActive(orgId: string): Promise<boolean> {
   return Boolean(await db.query.organizations.findFirst({
-    where: and(eq(organizations.id, orgId), inArray(organizations.status, ["active", "trial"])),
+    where: and(eq(organizations.id, orgId), operatingOrganization()),
     columns: { id: true },
   }));
 }

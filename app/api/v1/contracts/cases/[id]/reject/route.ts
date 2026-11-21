@@ -19,7 +19,7 @@ async function handlePOST(req: NextRequest, { params }: { params: Promise<{ id: 
 
   const kase = await db.query.contractCases.findFirst({
     where: and(eq(contractCases.id, id), eq(contractCases.organizationId, session.orgId)),
-    columns: { id: true, status: true, resultJson: true },
+    columns: { id: true, status: true },
   });
   if (!kase) return NextResponse.json({ error: "Caso no encontrado" }, { status: 404 });
   if (kase.status !== "validated") {
@@ -30,13 +30,23 @@ async function handlePOST(req: NextRequest, { params }: { params: Promise<{ id: 
   const reason = typeof body?.reason === "string" ? body.reason.trim() : "";
   if (!reason) return NextResponse.json({ error: "Escribe un motivo para rechazar el caso." }, { status: 400 });
 
-  const prev = (kase.resultJson ?? {}) as Record<string, unknown>;
-  const rejected = await db.update(contractCases).set({
-    status: "rejected",
-    resultJson: { ...prev, decision: { action: "reject", reason, byId: session.sub, byEmail: session.email, at: new Date().toISOString() } },
-    updatedAt: new Date(),
-  }).where(and(eq(contractCases.id, id), eq(contractCases.status, "validated"))).returning({ id: contractCases.id });
-  if (!rejected.length) return NextResponse.json({ error: "El caso cambió mientras lo revisabas. Recarga la página." }, { status: 409 });
+  // Same lock as approving: the decision is written over the result stored
+  // now, so a signature recorded since the read above is not dropped.
+  const rejected = await db.transaction(async (tx) => {
+    const [current] = await tx.select({ status: contractCases.status, resultJson: contractCases.resultJson })
+      .from(contractCases)
+      .where(and(eq(contractCases.id, id), eq(contractCases.organizationId, session.orgId)))
+      .for("update");
+    if (!current || current.status !== "validated") return false;
+    const prev = (current.resultJson ?? {}) as Record<string, unknown>;
+    await tx.update(contractCases).set({
+      status: "rejected",
+      resultJson: { ...prev, decision: { action: "reject", reason, byId: session.sub, byEmail: session.email, at: new Date().toISOString() } },
+      updatedAt: new Date(),
+    }).where(eq(contractCases.id, id));
+    return true;
+  });
+  if (!rejected) return NextResponse.json({ error: "El caso cambió mientras lo revisabas. Recarga la página." }, { status: 409 });
 
   await logAudit({ orgId: session.orgId, userId: session.sub, userEmail: session.email, action: "contract.rejected", resourceType: "contract_case", resourceId: id, metadata: { reason } });
   return NextResponse.json({ ok: true, status: "rejected" });

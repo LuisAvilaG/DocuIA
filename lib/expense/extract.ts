@@ -5,6 +5,7 @@
  */
 
 import { generateJson } from "@/lib/ai/provider";
+import { parseLocaleNumber } from "@/lib/numbers";
 
 export type ExpenseDocumentType = "invoice" | "receipt" | "cuenta_cobro" | "documento_equivalente" | "unknown";
 
@@ -28,24 +29,41 @@ function normalize(v: unknown): string {
   return String(v ?? "").replace(/\s+/g, " ").trim();
 }
 
-function toNumber(v: unknown): number | null {
-  let s = String(v ?? "").replace(/[$€£¥\s]/g, "").trim();
-  if (!s) return null;
+/**
+ * Amount as the model returned it. Parsed as text on purpose, so a model that
+ * answers 1.610 for "1.610" (thousands) is still read as 1610, and "45,90" is
+ * 45.9 instead of 4590. An amount with exactly three decimals is therefore
+ * read as thousands: on a receipt that is what it almost always is.
+ */
+export function toNumber(v: unknown): number | null {
+  const n = parseLocaleNumber(String(v ?? ""));
+  return n !== null && n >= 0 ? n : null;
+}
 
-  // European format: 1.234,56 or 1.234 (dot = thousands, comma = decimal)
-  if (/^\d{1,3}(\.\d{3})+(,\d+)?$/.test(s)) {
-    s = s.replace(/\./g, "").replace(",", ".");
-  // US format: 1,234.56 or 1,234 (comma = thousands, dot = decimal)
-  } else if (/^\d{1,3}(,\d{3})+(\.\d+)?$/.test(s)) {
-    s = s.replace(/,/g, "");
-  } else {
-    // Ambiguous single comma — strip it (treat as thousands separator)
-    s = s.replace(/,/g, "");
-  }
+/**
+ * The amount exactly as the model wrote it in its answer. JSON.parse turns
+ * `12.500` into 12.5 before anyone can read it as twelve thousand five hundred,
+ * so the digits are taken from the text of the answer when they are there.
+ */
+export function amountFromAnswer(rawText: string, raw: Record<string, unknown>, key: string): number | null {
+  const literal = rawText.match(new RegExp(`"${key}"\\s*:\\s*"?\\s*(-?[\\d.,]*\\d)`))?.[1];
+  return toNumber(literal ?? raw[key]);
+}
 
-  s = s.replace(/[^\d.\-]/g, "");
-  const n = Number(s);
-  return Number.isFinite(n) && n >= 0 ? n : null;
+/** A date the form's date field can hold (YYYY-MM-DD), or none. */
+export function toIsoDate(v: unknown): string | null {
+  const text = normalize(v);
+  const valid = (y: number, m: number, d: number) => {
+    const date = new Date(Date.UTC(y, m - 1, d));
+    return y > 1990 && y < 2100 && date.getUTCMonth() === m - 1 && date.getUTCDate() === d
+      ? `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}` : null;
+  };
+  const iso = text.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  if (iso) return valid(Number(iso[1]), Number(iso[2]), Number(iso[3]));
+  // Day first, as receipts in Latin America print it.
+  const dmy = text.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})\b/);
+  if (dmy) return valid(Number(dmy[3]), Number(dmy[2]), Number(dmy[1]));
+  return null;
 }
 
 function detectDocType(raw: Record<string, unknown>): ExpenseDocumentType {
@@ -140,12 +158,15 @@ export async function extractExpenseDocument(
   const vendorName      = normalize(raw.vendor_name)     || null;
   const vendorNit       = normalize(raw.vendor_nit)      || null;
   const invoiceNumber   = normalize(raw.invoice_number)  || null;
-  const invoiceDate     = normalize(raw.invoice_date)    || null;
-  const subtotal        = toNumber(raw.subtotal);
-  const taxAmount       = toNumber(raw.tax_amount);
-  const retentionAmount = toNumber(raw.retention_amount);
-  const total           = toNumber(raw.total);
-  const currency        = normalize(raw.currency).toUpperCase() || "COP";
+  // Anything that is not a real date reaches the form as "no date": a date
+  // field shows other text as empty while it still holds it, and saving failed.
+  const invoiceDate     = toIsoDate(raw.invoice_date);
+  const subtotal        = amountFromAnswer(rawText, raw, "subtotal");
+  const taxAmount       = amountFromAnswer(rawText, raw, "tax_amount");
+  const retentionAmount = amountFromAnswer(rawText, raw, "retention_amount");
+  const total           = amountFromAnswer(rawText, raw, "total");
+  // Empty when the receipt does not print it: the form applies the organization's currency.
+  const currency        = normalize(raw.currency).toUpperCase();
   const documentType    = detectDocType(raw);
 
   const fieldConfidence: Record<string, number> = {

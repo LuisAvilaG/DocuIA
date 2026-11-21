@@ -20,7 +20,9 @@ function xmlEscape(value: string): string {
 
 /** The "expresión impresa" the SAT expects: emisor, receptor, total and UUID. */
 export function satExpression(input: { emisorRfc: string; receptorRfc: string; total: number; uuid: string }): string {
-  const clean = (rfc: string) => rfc.trim().toUpperCase();
+  // Inside the expression "&" separates its parts, so the one in an RFC
+  // ("A&B010101AB1") is written &amp;, as the SAT's service asks.
+  const clean = (rfc: string) => rfc.trim().toUpperCase().replace(/&/g, "&amp;");
   return `?re=${clean(input.emisorRfc)}&rr=${clean(input.receptorRfc)}&tt=${input.total.toFixed(2)}&id=${input.uuid.trim().toUpperCase()}`;
 }
 

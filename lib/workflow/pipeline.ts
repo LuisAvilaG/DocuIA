@@ -1,15 +1,15 @@
 import { randomUUID } from "crypto";
 import { db } from "@/lib/db";
 import { historyDocuments, exceptionQueue, organizations, subsidiaries, usageDaily } from "@/db/schema";
-import { and, eq, ne, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, ne, or, sql } from "drizzle-orm";
 import { uploadFile } from "@/lib/storage/minio";
 import { extractFromFile, mapInvoice, configuredEffort } from "./extract";
 import { parseJsonObject } from "@/lib/ai/provider";
-import { mergeDocMetrics } from "./doc-metrics";
+import { mergeDocMetrics, poAcceptance } from "./doc-metrics";
 import { reviewReason } from "./review-reason";
 import { withAiUsage } from "@/lib/ai/usage";
 import { buildUiPayload } from "./match";
-import { processInNetSuite } from "./process-ns";
+import { erpWarningNote, processInNetSuite } from "./process-ns";
 import { buildNsPayload, draftWithPo } from "./ns-payload";
 import { qaModeState } from "@/lib/features/qa-mode-state";
 import { buildQaPlan, qaAppliesTo, recordQaSend } from "./qa-send";
@@ -17,7 +17,7 @@ import { runApChecks } from "./ap-checks";
 import { erpExtras } from "./erp-extras";
 import type { CfdiData } from "./cfdi-parser";
 import { logWorkflow } from "./log";
-import { cfdiNotInvoiceReason, findPoReference, parseCfdi } from "./cfdi-parser";
+import { cfdiInvoiceNumber, cfdiNotInvoiceReason, findPoReference, parseCfdi } from "./cfdi-parser";
 import { deliverWebhooks } from "@/lib/webhooks/deliver";
 import { getAllFeatures, isFeatureEnabled } from "@/lib/features";
 import { validateExtraction, type ExtractionValidationConfig } from "./validation";
@@ -163,10 +163,14 @@ async function runPipelineInner(input: PipelineInput): Promise<PipelineResult> {
   let docId: number;
   if (input.documentId) {
     // Queue path: row already exists (status "uploaded") — move it to extracting.
+    // Claimed by status: a job the queue delivers again (expired or retried)
+    // must not restart a document that already reached review or the ERP.
     docId = input.documentId;
-    await db.update(historyDocuments)
+    const claimed = await db.update(historyDocuments)
       .set({ status: "extracting", updatedAt: new Date() })
-      .where(eq(historyDocuments.id, docId));
+      .where(and(eq(historyDocuments.id, docId), inArray(historyDocuments.status, ["uploaded", "extracting", "failed"])))
+      .returning({ id: historyDocuments.id });
+    if (!claimed.length) return { status: "failed", documentId: docId, error: "El documento ya fue procesado; no se vuelve a leer." };
   } else {
     const [doc] = await db
       .insert(historyDocuments)
@@ -226,7 +230,7 @@ async function runPipelineInner(input: PipelineInput): Promise<PipelineResult> {
           format:        "general",
           vendor:        cfdiData.emisorNombre || cfdiData.emisorRfc,
           vendorRfc:     cfdiData.emisorRfc,
-          invoiceNumber: cfdiData.folio || cfdiData.uuid.slice(0, 8),
+          invoiceNumber: cfdiInvoiceNumber(cfdiData),
           invoiceDate:   cfdiData.fecha ? cfdiData.fecha.slice(0, 10) : "",
           dueDate:       "",
           purchaseOrder: findPoReference(xmlText),
@@ -309,7 +313,9 @@ async function runPipelineInner(input: PipelineInput): Promise<PipelineResult> {
       metaJson:       { promptTokens: extraction.promptTokens, completionTokens: extraction.completionTokens, cachedTokens: extraction.cachedTokens ?? 0, fallbackReason: extraction.fallbackReason ?? null, uncertainFields: extraction.invoice.uncertainFields },
     });
 
-    if (validationConfig) {
+    // Only for what the model read. A CFDI is parsed, not read, and its total
+    // may include local taxes (ISH) the lines + IVA formula does not know.
+    if (validationConfig && !isCfdiXml) {
       const validation = validateExtraction(extraction.invoice, validationConfig);
       if (validation.level === "error") {
         throw new Error(
@@ -337,13 +343,24 @@ async function runPipelineInner(input: PipelineInput): Promise<PipelineResult> {
     // ── 4. Duplicate detection (after extraction — we need vendor + number) ──
     let qaDuplicateOf: number | null = null;
     if (detectDupes && extraction.invoice.vendor && extraction.invoice.invoiceNumber) {
+      const sameNumber = and(
+        eq(historyDocuments.vendor, extraction.invoice.vendor),
+        eq(historyDocuments.numDoc, extraction.invoice.invoiceNumber),
+      );
+      const uuid = cfdi?.uuid ? cfdi.uuid.toUpperCase() : null;
       const existing = await db.query.historyDocuments.findFirst({
         where: and(
           eq(historyDocuments.organizationId, input.organizationId),
-          eq(historyDocuments.vendor, extraction.invoice.vendor),
-          eq(historyDocuments.numDoc, extraction.invoice.invoiceNumber),
+          // The fiscal UUID identifies a CFDI even when the vendor was renamed on approval.
+          uuid ? or(sameNumber, eq(historyDocuments.cfdiUuid, uuid)) : sameNumber,
           ne(historyDocuments.id, docId),
           ne(historyDocuments.status, "failed"),
+          // "Completed" without an ERP record was a dry run: nothing was created,
+          // so it must not block the real invoice.
+          or(ne(historyDocuments.status, "completed"), isNotNull(historyDocuments.netsuiteDocId)),
+          // Test documents of a QA round went to the sandbox: they do not make
+          // the real invoice a duplicate. Inside a round they still count.
+          qa ? undefined : eq(historyDocuments.isQa, false),
         ),
       });
       if (existing && qa?.skip_duplicates) {
@@ -351,7 +368,7 @@ async function runPipelineInner(input: PipelineInput): Promise<PipelineResult> {
         qaDuplicateOf = existing.id;
       } else if (existing) {
         // Monto que se habría pagado dos veces (métrica «Duplicados evitados»).
-        await mergeDocMetrics(docId, { duplicate: { of: existing.id, amount: extraction.invoice.total ?? null, currency: extraction.invoice.currency ?? null, at: new Date().toISOString() } }).catch(() => {});
+        await mergeDocMetrics(docId, { duplicate: { of: existing.id, amount: extraction.invoice.total ?? null, currency: extraction.invoice.currency || null, at: new Date().toISOString() } }).catch(() => {});
         throw new Error(
           `Factura duplicada: ${extraction.invoice.vendor} #${extraction.invoice.invoiceNumber} ya existe (doc #${existing.id})`
         );
@@ -359,10 +376,12 @@ async function runPipelineInner(input: PipelineInput): Promise<PipelineResult> {
     }
 
     // ── 5. Update history with extracted header ───────────────────────────
+    // Status stays "extracting" until the decision below: a document in review
+    // must already carry its matched payload.
     await db.update(historyDocuments).set({
-      status:           "review",
-      vendor:           extraction.invoice.vendor || null,
-      numDoc:           extraction.invoice.invoiceNumber || null,
+      // Cut to the column size: a long legal name must not fail the update.
+      vendor:           extraction.invoice.vendor.slice(0, 191) || null,
+      numDoc:           extraction.invoice.invoiceNumber.slice(0, 191) || null,
       total:            extraction.invoice.total?.toString() ?? null,
       extractionEngine: extraction.model,
       fallbackUsed:     extraction.fallbackUsed,
@@ -408,6 +427,7 @@ async function runPipelineInner(input: PipelineInput): Promise<PipelineResult> {
       payload,
       cfdi,
       flags:          feat,
+      qa:             qa ? { skipDuplicates: Boolean(qa.skip_duplicates) } : null,
     });
     payload.ap_checks = checks;
     const poId = checks.po?.selectedPoId ?? null;
@@ -446,6 +466,8 @@ async function runPipelineInner(input: PipelineInput): Promise<PipelineResult> {
       !rule?.neverAutoProcess &&
       payload.confidence.overall >= threshold &&
       payload.document.lines.every((l) => l.selected_item_id !== null) &&
+      // A line with neither price nor amount would be priced by the ERP itself.
+      payload.document.lines.every((l) => l.rate !== null || l.amount !== null) &&
       Boolean(payload.document.vendor.selected_internal_id);
 
     // ── 7b. Matched, but the goods are not in the warehouse yet ─────────────
@@ -476,6 +498,7 @@ async function runPipelineInner(input: PipelineInput): Promise<PipelineResult> {
     if (!autoProcess || decision.next === "review") {
       await db.update(historyDocuments)
         .set({
+          status: "review",
           products: payload as unknown,
           poInternalId: poId,
           // Motivo final, para el lote terminado y la lista de Documentos.
@@ -582,10 +605,34 @@ async function runPipelineInner(input: PipelineInput): Promise<PipelineResult> {
     );
     if (qaPlan) await recordQaSend(docId, qaPlan, nsResult, input.requestedBy ?? null, qaDuplicateOf);
 
+    // Same record a manual approval leaves: the posted lines, the PO and the
+    // data the metrics read once products holds only those lines.
+    const poComparison = checks.po?.comparison;
+    const poResult = checks.po?.outcome;
+    await mergeDocMetrics(docId, {
+      sent: { vendorId: sendDraft.vendorId, reviewedBy: null },
+      ...(poComparison && poResult ? { po: {
+        poId: poComparison.poInternalId, invoiceTotal: poComparison.invoiceTotal, poTotal: poComparison.poTotal,
+        difference: poComparison.totalDifference, differencePct: poComparison.totalDifferencePct,
+        withinTolerance: poComparison.totalWithinTolerance, linesWithinTolerance: poComparison.counts.price_within_tolerance ?? 0,
+        outcome: poResult.kind, accepted: poAcceptance(poComparison, poResult.kind), by: null, at: new Date().toISOString(),
+      } } : {}),
+    }).catch(() => {});
+
     await db.update(historyDocuments).set({
       status:        "completed",
       netsuiteDocId: nsResult.internalId ?? null,
       urlNetsuite:   nsResult.recordUrl ?? null,
+      poInternalId:  poId,
+      products:      sendDraft.lines.map((l) => ({
+        description: l.item_document_name,
+        quantity:    l.quantity,
+        unitPrice:   l.rate,
+        total:       l.amount,
+        nsItemId:    l.internal_id,
+        unit:        l.unit,
+      })) as unknown,
+      errorMessage:  erpWarningNote(nsResult.warnings),
       updatedAt:     new Date(),
     }).where(eq(historyDocuments.id, docId));
 
@@ -596,7 +643,7 @@ async function runPipelineInner(input: PipelineInput): Promise<PipelineResult> {
       step:      "process_ns",
       status:    "SUCCESS",
       durationMs: Date.now() - t3,
-      metaJson:  { netsuiteId: nsResult.internalId, recordUrl: nsResult.recordUrl, dryRun },
+      metaJson:  { netsuiteId: nsResult.internalId, recordUrl: nsResult.recordUrl, dryRun, warnings: nsResult.warnings },
     });
 
     void deliverWebhooks(input.organizationId, "document.completed", {
@@ -618,7 +665,9 @@ async function runPipelineInner(input: PipelineInput): Promise<PipelineResult> {
           const selectedCandidate = l.candidates.find((c) => c.internal_id === l.selected_item_id);
           return {
             subsidiaryId:       input.subsidiaryId,
-            vendor:             extraction.invoice.vendor || "",
+            // The vendor name of the ERP, the one the memory is looked up by and
+            // a manual approval saves; the legal name on the document never matched it.
+            vendor:             payload.document.vendor.name || extraction.invoice.vendor || "",
             vendorItemName:     l.description,
             netsuiteInternalId: l.selected_item_id!,
             netsuiteItemName:   selectedCandidate?.name ?? null,

@@ -33,6 +33,12 @@ const creds: NSCredentials = {
   tokenId: env("NS_TOKEN_ID"),
   tokenSecret: env("NS_TOKEN_SECRET"),
 };
+// It saves real vendor bills, so the account must be a sandbox (NetSuite names
+// them 1234567_SB1) unless someone insists.
+if (!/_SB\d*$/i.test(creds.accountId) && process.env.NS_PROBE_ALLOW_PRODUCTION !== "1") {
+  console.error(`La cuenta ${creds.accountId} no es un sandbox (no termina en _SB…). Este script crea vendor bills reales y no se ejecuta contra producción.`);
+  process.exit(1);
+}
 const url = buildRestletUrl(creds.accountId, env("NS_PROCESS_SCRIPT"), env("NS_PROCESS_DEPLOY"));
 
 // The failing bill from the execution log (Sysco · MERA JFK T8 · NAYA JFK T8).

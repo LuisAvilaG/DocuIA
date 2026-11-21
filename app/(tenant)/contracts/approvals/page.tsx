@@ -22,16 +22,24 @@ export default async function ContractApprovalsPage() {
   // Por decidir: solo casos con la validación terminada. Decididos: últimos 90 días.
   // eslint-disable-next-line react-hooks/purity
   const since = new Date(Date.now() - 90 * 86_400_000);
-  const rows = await db.query.contractCases.findMany({
-    where: and(
-      eq(contractCases.organizationId, session.orgId),
-      inArray(contractCases.status, ["validated", "approved", "generated", "rejected"]),
-      gte(contractCases.updatedAt, since),
-    ),
-    columns: { id: true, title: true, status: true, flowId: true, createdBy: true, createdAt: true, updatedAt: true, resultJson: true },
-    orderBy: [desc(contractCases.updatedAt)],
-    limit: 300,
-  });
+  // Two queries: the 90 days and the row limit are for decided cases only. A
+  // case waiting for a decision stays in the inbox however old it is.
+  const columns = { id: true, title: true, status: true, flowId: true, createdBy: true, createdAt: true, updatedAt: true, resultJson: true } as const;
+  const [pendingRows, decidedRows] = await Promise.all([
+    db.query.contractCases.findMany({
+      where: and(eq(contractCases.organizationId, session.orgId), eq(contractCases.status, "validated")),
+      columns, orderBy: [desc(contractCases.updatedAt)], limit: 500,
+    }),
+    db.query.contractCases.findMany({
+      where: and(
+        eq(contractCases.organizationId, session.orgId),
+        inArray(contractCases.status, ["approved", "generated", "rejected"]),
+        gte(contractCases.updatedAt, since),
+      ),
+      columns, orderBy: [desc(contractCases.updatedAt)], limit: 300,
+    }),
+  ]);
+  const rows = [...pendingRows, ...decidedRows];
   const ids = rows.map((r) => r.id);
   const [flows, documents, validations, users, validationsEnabled] = await Promise.all([
     db.query.contractFlows.findMany({ where: eq(contractFlows.organizationId, session.orgId), columns: { id: true, name: true } }),

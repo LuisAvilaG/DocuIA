@@ -4,8 +4,9 @@
 // página donde está la cita y se explican en la lista de la derecha.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
-import { ChevronLeft, ChevronRight, CheckCircle2, MinusCircle } from "lucide-react";
+import { ChevronLeft, ChevronRight, CheckCircle2, Info, MinusCircle } from "lucide-react";
 import { matchQuote, type Box, type EvidenceRef, type WordBox } from "@/lib/contracts/evidence";
+import { pageWords, type PdfTextDoc } from "@/lib/contracts/pdf-words";
 
 pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 
@@ -15,38 +16,16 @@ export interface CheckFinding {
   ok: boolean | null; reason: string; ai: boolean; evidence: EvidenceRef[];
 }
 export interface CheckPassed { id: number; ruleName: string; subject: string; status: string }
+/** An informative rule that did not pass (or could not be verified): shown, never counted. */
+export interface CheckNote { id: number; ruleName: string; subject: string; reason: string; verified: boolean }
 
 type Located = { docId: string; page: number; box: Box | null };
-type PdfDoc = { numPages: number; getPage: (n: number) => Promise<PdfPage> };
-type PdfPage = { view: number[]; getTextContent: () => Promise<{ items: Array<{ str?: string; transform?: number[]; width?: number; height?: number }> }> };
+type PdfDoc = PdfTextDoc;
 
 const MAX_SCAN_PAGES = 80;
 const TONE = { block: "#B3261E", warn: "#B07C0E", unknown: "#6B6560" } as const;
 const toneOf = (f: CheckFinding) => (f.ok === false && f.severity === "block" ? "block" : f.ok === false || f.severity === "block" ? "warn" : "unknown");
 const severityText = (f: CheckFinding) => f.ok === false && f.severity === "block" ? "Bloquea la aprobación" : f.ok === false ? "A revisar" : "No se pudo verificar";
-
-/** Palabras con posición (0–1) de una página, desde la capa de texto del PDF. */
-async function pageWords(pdf: PdfDoc, n: number): Promise<WordBox[]> {
-  const page = await pdf.getPage(n);
-  const [vx, vy, vx2, vy2] = page.view;
-  const W = vx2 - vx, H = vy2 - vy;
-  const { items } = await page.getTextContent();
-  const out: WordBox[] = [];
-  for (const it of items) {
-    if (!it.str || !it.transform || !it.width) continue;
-    const [, , c, d, e, f] = it.transform;
-    const fontH = Math.hypot(c, d) || it.height || 10;
-    const len = it.str.length;
-    const re = /\S+/g;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(it.str))) {
-      const x1 = e - vx + it.width * (m.index / len);
-      const x2 = e - vx + it.width * ((m.index + m[0].length) / len);
-      out.push({ text: m[0], x1: x1 / W, x2: x2 / W, y1: 1 - (f - vy + fontH * 0.85) / H, y2: 1 - (f - vy - fontH * 0.2) / H });
-    }
-  }
-  return out;
-}
 
 function useWidth<T extends HTMLElement>() {
   const ref = useRef<T>(null);
@@ -61,10 +40,13 @@ function useWidth<T extends HTMLElement>() {
   return [ref, width] as const;
 }
 
-export function CaseChecks({ docs, findings, passed }: { docs: CheckDoc[]; findings: CheckFinding[]; passed: CheckPassed[] }) {
+export function CaseChecks({ docs, findings, passed, notes = [] }: { docs: CheckDoc[]; findings: CheckFinding[]; passed: CheckPassed[]; notes?: CheckNote[] }) {
   const [active, setActive] = useState<number | null>(findings[0]?.id ?? null);
-  const [docId, setDocId] = useState<string | null>(() => findings.flatMap((f) => f.evidence).find((e) => e.documentId)?.documentId ?? docs[0]?.id ?? null);
-  const [page, setPage] = useState(() => findings[0]?.evidence.find((e) => e.page)?.page ?? 1);
+  // Document and page come from one same citation: the open finding's, or the
+  // first one that names a document. (Taken apart, the page could be another document's.)
+  const [start] = useState(() => findings[0]?.evidence.find((e) => e.documentId) ?? findings.flatMap((f) => f.evidence).find((e) => e.documentId) ?? null);
+  const [docId, setDocId] = useState<string | null>(start?.documentId ?? docs[0]?.id ?? null);
+  const [page, setPage] = useState(start?.page ?? 1);
   const [numPages, setNumPages] = useState(0);
   const [located, setLocated] = useState<Record<string, Located>>({});
   const [showPassed, setShowPassed] = useState(false);
@@ -200,6 +182,17 @@ export function CaseChecks({ docs, findings, passed }: { docs: CheckDoc[]; findi
               <li key={p.id} className="flex items-start gap-2"><CheckCircle2 aria-hidden className="mt-0.5 size-3.5 shrink-0 text-tone-ok" /><span><b className="font-medium">{p.ruleName}</b> · {p.subject}</span></li>
             ))}
           </ul>
+        )}
+        {notes.length > 0 && (
+          <div className="rounded-[10px] border border-border bg-card px-3.5 py-2.5 text-[12.5px]">
+            <p className="font-semibold">{notes.length} nota{notes.length === 1 ? "" : "s"} informativa{notes.length === 1 ? "" : "s"}</p>
+            <p className="text-xs text-muted-foreground">No cuentan como hallazgos ni frenan la aprobación.</p>
+            <ul className="mt-1.5 flex flex-col gap-1.5">
+              {notes.map((n) => (
+                <li key={n.id} className="flex items-start gap-2"><Info aria-hidden className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" /><span><b className="font-medium">{n.ruleName}</b>{n.subject !== "—" ? ` · ${n.subject}` : ""}{n.reason ? `: ${n.reason}` : ""}{n.verified ? "" : " (no se pudo verificar)"}</span></li>
+              ))}
+            </ul>
+          </div>
         )}
         <ol className="flex flex-col gap-2">
           {findings.map((f) => {

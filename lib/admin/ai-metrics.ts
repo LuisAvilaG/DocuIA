@@ -63,7 +63,7 @@ export async function loadAdminAiMetrics(days = 30): Promise<AdminAiMetrics> {
         (select count(*) from exception_queue x where x.organization_id = o.id and x.status in ('pending', 'in_progress'))::int as open,
         (select count(*) from exception_queue x where x.organization_id = o.id and x.failure_stage = 'process' and x.created_at >= ${from})::int as erp,
         (select count(*) from contract_cases c where c.organization_id = o.id and c.status = 'failed' and c.updated_at >= ${from})::int as failed
-      from organizations o`),
+      from organizations o where o.deleted_at is null`),
     rows<{ org: string; name: string }>(sql`
       select o.id as org, o.name from org_features f join organizations o on o.id = f.organization_id
       where f.feature_id = 'qa_mode' and f.admin_granted and o.deleted_at is null`),

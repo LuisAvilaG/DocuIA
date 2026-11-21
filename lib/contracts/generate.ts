@@ -13,8 +13,12 @@ function pdfSafe(s: string): string {
   return s
     .replace(/[−–—]/g, "-").replace(/…/g, "...").replace(/∞/g, "inf")
     .replace(/≤/g, "<=").replace(/≥/g, ">=").replace(/↔/g, "<->").replace(/→/g, "->")
-    .replace(/[""]/g, '"').replace(/['']/g, "'").replace(/•/g, "-")
-    .replace(/[^\x00-\xFF]/g, "?");
+    // Written as escapes: typed literally, an editor turned them into straight quotes.
+    .replace(/[\u201C\u201D\u201E]/g, '"').replace(/[\u2018\u2019\u201A]/g, "'").replace(/•/g, "-")
+    .replace(/[^\x00-\xFF]/g, "?")
+    // Control characters have no WinAnsi glyph either. Tabs and line breaks
+    // stay: the callers split on them.
+    .replace(/[\x00-\x08\x0E-\x1F\x7F-\x9F]/g, "");
 }
 
 function flatten(v: unknown): string {
@@ -34,12 +38,13 @@ function flatten(v: unknown): string {
 export function renderTemplate(
   body: string,
   data: Record<string, unknown>,
+  escape: (value: string) => string = (value) => value,
 ): { text: string; missing: string[] } {
   const missing: string[] = [];
   const text = body.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_m, key: string) => {
     const val = flatten(data[key]);
     if (!val) { if (!missing.includes(key)) missing.push(key); return PLACEHOLDER; }
-    return val;
+    return escape(val);
   });
   return { text, missing };
 }
@@ -228,7 +233,9 @@ export async function renderHtmlPdf(
   data: Record<string, unknown>,
   opts: { title?: string } = {},
 ): Promise<{ bytes: Uint8Array; missing: string[] }> {
-  const rendered = renderTemplate(html, data);
+  // Values go into HTML that is parsed next: unescaped, "Juan <juan@x.com>" was
+  // read as a tag and dropped from the document.
+  const rendered = renderTemplate(html, data, (value) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"));
   const root = parse(rendered.text);
 
   const pdf = await PDFDocument.create();
@@ -266,6 +273,10 @@ export async function renderHtmlPdf(
         const ns: Style = { ...st };
         if (tag === "b" || tag === "strong") ns.bold = true;
         if (tag === "i" || tag === "em") ns.italic = true;
+        // The editor writes them as inline styles (styleWithCSS), not as tags.
+        const css = child.getAttribute("style") ?? "";
+        if (/font-weight\s*:\s*(bold|[6-9]00)/i.test(css)) ns.bold = true;
+        if (/font-style\s*:\s*italic/i.test(css)) ns.italic = true;
         const col = parseColor(child.getAttribute("style")) ?? parseColor(child.getAttribute("color"));
         if (col) ns.color = col;
         collect(child, ns, out);
@@ -288,9 +299,17 @@ export async function renderHtmlPdf(
     };
     for (const r of runs) {
       const f = fontFor(r.st), color = r.st.color ?? ink;
-      for (const p of pdfSafe(r.text).split(/(\s+|\n)/)) {
-        if (p === "") continue;
-        if (p === "\n") { flush(); continue; }
+      for (const part of pdfSafe(r.text).split(/(\s+)/)) {
+        if (part === "") continue;
+        let p = part;
+        if (/^\s+$/.test(part)) {
+          // A whitespace run is one line break per "\n" it holds (a blank line
+          // is two), otherwise a single space: tabs and "\r" cannot be drawn.
+          const breaks = part.split("\n").length - 1;
+          for (let i = 0; i < breaks; i++) flush();
+          if (breaks > 0) continue;
+          p = " ";
+        }
         const w = f.widthOfTextAtSize(p, size);
         if (lineW + w > maxW && lineWords.length) flush();
         lineWords.push({ t: p, f, w, color }); lineW += w;

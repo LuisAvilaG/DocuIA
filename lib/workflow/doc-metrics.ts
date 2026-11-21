@@ -12,6 +12,8 @@ export interface DocMetrics {
   mapping?: { lines: number; assigned: number; fromMemory: number };
   /** Factura detectada como duplicada: de cuál y por cuánto. */
   duplicate?: { of: number; amount: number | null; currency: string | null; at: string };
+  /** Proveedor del ERP y quién pidió la aprobación; al enviar, products deja de tenerlos. */
+  sent?: { vendorId: string | null; reviewedBy: string | null };
   /** Diferencia con la OC al enviar y cómo se aceptó. */
   po?: {
     poId: string; invoiceTotal: number; poTotal: number; difference: number; differencePct: number;

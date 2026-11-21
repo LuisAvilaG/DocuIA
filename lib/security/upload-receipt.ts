@@ -2,7 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { jwtSecret } from "@/lib/env";
 import { z } from "zod";
 
-const schema = z.object({ orgId: z.string(), userId: z.string(), fileKey: z.string(), mimeType: z.string(), originalName: z.string(), expires: z.number() });
+const schema = z.object({ orgId: z.string(), userId: z.string(), fileKey: z.string(), mimeType: z.string(), originalName: z.string(), expires: z.number(), ocrConfidence: z.number().min(0).max(1).optional() });
 type Receipt = z.infer<typeof schema>;
 function signature(payload: string): Buffer {
   return createHmac("sha256", jwtSecret()).update(`expense-upload:${payload}`).digest();

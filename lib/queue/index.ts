@@ -1,4 +1,8 @@
 import { PgBoss } from "pg-boss";
+import { and, eq, inArray } from "drizzle-orm";
+import { db, dbSsl } from "@/lib/db";
+import { historyDocuments } from "@/db/schema";
+import { isOrganizationActive } from "@/lib/auth/jwt";
 import { runPipeline } from "@/lib/workflow/pipeline";
 import { getFileBuffer } from "@/lib/storage/minio";
 import { processContractCase } from "@/lib/contracts/pipeline";
@@ -44,7 +48,8 @@ export async function getBoss(): Promise<PgBoss> {
   booting = (async () => {
     const url = process.env.DATABASE_URL;
     if (!url) throw new Error("DATABASE_URL is required for the job queue");
-    const b = new PgBoss(url);
+    // Same TLS policy as the main pool (lib/db).
+    const b = new PgBoss({ connectionString: url, ...(dbSsl ? { ssl: dbSsl } : {}) });
     b.on("error", (err) => console.error("[pg-boss]", err));
     await b.start();
     await b.createQueue(PIPELINE_QUEUE);  // idempotent
@@ -94,6 +99,48 @@ async function scheduleBatchPoll(batchId: string, attempt: number, afterSeconds:
   });
 }
 
+// ── Shutdown ──────────────────────────────────────────────────────────
+let stopping: Promise<void> | null = null;
+
+/**
+ * Stops fetching new jobs and waits up to `timeoutMs` for the ones in flight;
+ * whatever is still running after that is marked failed so it retries on the
+ * next boot instead of sitting "active" until it expires. Idempotent.
+ */
+export function stopQueue(timeoutMs = 25_000): Promise<void> {
+  if (stopping) return stopping;
+  stopping = (async () => {
+    const b = boss ?? (booting ? await booting.catch(() => null) : null);
+    if (!b) return;
+    await b.stop({ graceful: true, timeout: timeoutMs });
+  })();
+  return stopping;
+}
+
+let shutdownRegistered = false;
+
+/**
+ * Graceful shutdown: on a deploy or stop, let in-flight jobs finish (bounded)
+ * before the process goes away. Next.js installs its own SIGTERM/SIGINT
+ * handlers and exits once HTTP requests drain; only when those are disabled
+ * (NEXT_MANUAL_SIG_HANDLE) is this handler responsible for exiting.
+ */
+export function stopQueueOnShutdown(): void {
+  if (shutdownRegistered) return;
+  shutdownRegistered = true;
+  let shuttingDown = false;
+  const shutdown = (signal: NodeJS.Signals) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[queue] ${signal} received, stopping job queue`);
+    stopQueue()
+      .catch((err) => console.error("[queue] job queue stop failed:", err))
+      .finally(() => { if (process.env.NEXT_MANUAL_SIG_HANDLE) process.exit(0); });
+  };
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
+}
+
 // ── Enqueue ───────────────────────────────────────────────────────────
 export async function enqueuePipeline(job: PipelineJob): Promise<string | null> {
   const b = await getBoss();
@@ -131,6 +178,14 @@ export async function startPipelineWorker(): Promise<void> {
   await b.work<PipelineJob>(PIPELINE_QUEUE, { localConcurrency: pipelineConcurrency() }, async (jobs) => {
     for (const job of jobs) {
       const d = job.data;
+      // Suspended or deleted since the upload: nothing is read with AI or sent
+      // to its ERP. The document is left failed with the reason, to retry later.
+      if (!await isOrganizationActive(d.organizationId)) {
+        await db.update(historyDocuments)
+          .set({ status: "failed", errorMessage: "La organización está suspendida: el documento no se procesó. Reinténtalo cuando se restablezca el acceso.", updatedAt: new Date() })
+          .where(and(eq(historyDocuments.id, d.documentId), inArray(historyDocuments.status, ["uploaded", "extracting"])));
+        continue;
+      }
       const buffer = await getFileBuffer(d.storageKey); // throws → job retried
       await runPipeline({
         organizationId:       d.organizationId,
@@ -153,8 +208,14 @@ export async function startPipelineWorker(): Promise<void> {
     for (const job of jobs) {
       const d = job.data;
       if (d.kind === "collect") {
-        const batchId = await collectBatch(d.organizationId, enqueuePipeline);
-        if (batchId) await scheduleBatchPoll(batchId, 1, 120);
+        if (!await isOrganizationActive(d.organizationId)) continue;
+        // One batch per pass until nothing is pending: a collection takes only
+        // as many files as fit in one request.
+        for (let pass = 0; pass < 20; pass++) {
+          const batchId = await collectBatch(d.organizationId, enqueuePipeline);
+          if (!batchId) break;
+          await scheduleBatchPoll(batchId, 1, 120);
+        }
       } else {
         const state = await pollBatch(d.batchId, enqueuePipeline);
         if (state === "pending") {

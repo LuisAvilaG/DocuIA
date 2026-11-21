@@ -14,6 +14,8 @@ interface Props {
   items: Record<string, CatalogItem[]>;
   vendors: Record<string, CatalogVendor[]>;
   locations: Record<string, CatalogLocation[]>;
+  /** Which lists reached the page's limit and are therefore incomplete. */
+  cut?: { items: boolean; vendors: boolean; locations: boolean };
   isAdmin: boolean;
 }
 
@@ -25,7 +27,7 @@ const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
   { id: "locations", label: "Ubicaciones",  icon: MapPin },
 ];
 
-export function CatalogsClient({ subsidiaries, selectedSub, items, vendors, locations, isAdmin }: Props) {
+export function CatalogsClient({ subsidiaries, selectedSub, items, vendors, locations, cut, isAdmin }: Props) {
   const router = useRouter();
   const setSelectedSub = (id: string) => { setSyncMsg(null); router.push(`/catalogs?sub=${encodeURIComponent(id)}`); };
   const [tab, setTab]     = useState<Tab>("items");
@@ -138,6 +140,11 @@ export function CatalogsClient({ subsidiaries, selectedSub, items, vendors, loca
       </label>
 
       <div className="mt-3.5 overflow-x-auto rounded-xl border border-border bg-card">
+        {cut?.[tab] && (
+          <p className="border-b border-border bg-secondary/50 px-3.5 py-2.5 text-[13px] text-muted-foreground">
+            Esta lista es más larga de lo que cabe en la pantalla: se muestran los primeros {(tab === "locations" ? 2000 : 5000).toLocaleString("es-MX")} por nombre, y la búsqueda solo recorre esos. Lo que no aparece aquí sigue disponible al revisar una factura.
+          </p>
+        )}
         {tab === "items"     && <ItemsTable items={filteredItems} />}
         {tab === "vendors"   && <VendorsTable vendors={filteredVendors} />}
         {tab === "locations" && <LocationsTable locations={filteredLocations} />}

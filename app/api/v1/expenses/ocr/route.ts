@@ -54,13 +54,17 @@ async function handlePOST(req: NextRequest) {
     const fileKey = `expenses/${session.orgId}/${randomUUID()}-${file.name.replace(/[^a-zA-Z0-9.\-_]/g, "_")}`;
 
     await uploadFile(buffer, fileKey, file.type);
-    const uploadReceipt = signUploadReceipt({ orgId: session.orgId, userId: session.sub, fileKey, mimeType: file.type, originalName: file.name.slice(0, 255) });
+    const receipt = { orgId: session.orgId, userId: session.sub, fileKey, mimeType: file.type, originalName: file.name.slice(0, 255) };
+    const uploadReceipt = signUploadReceipt(receipt);
 
     // The receipt is stored either way: when OCR is unavailable the person
     // types the data and the file still travels with the expense line.
     try {
       const ocrResult = await withAiUsage({ orgId: session.orgId, source: "gastos" }, () => extractExpenseDocument(buffer, file.type, { apiKey }));
-      return NextResponse.json({ ok: true, fileKey, uploadReceipt, ocr: ocrResult });
+      // How sure the reading was goes inside the signed receipt, so it is saved
+      // with the document (the report warns about a doubtful reading) without
+      // taking the browser's word for it.
+      return NextResponse.json({ ok: true, fileKey, uploadReceipt: signUploadReceipt({ ...receipt, ocrConfidence: ocrResult.confidence }), ocr: ocrResult });
     } catch (err) {
       console.error("[expenses/ocr] extraction failed", err instanceof Error ? err.message : err);
       return NextResponse.json({ ok: true, fileKey, uploadReceipt, ocr: null, ocrError: ocrErrorMessage(err) });

@@ -35,6 +35,9 @@ function FileIcon({ size = 10, lines = false }: { size?: number; lines?: boolean
 // Sobrevive al doble-montaje de StrictMode en dev: la línea de tiempo del
 // preloader corre una sola vez por carga y no debe cancelarse en el remount.
 let preloaderPlayed = false;
+// The element whose intro is animating right now. Coming back to the home by
+// client navigation mounts a new #lpre that no timeline will ever hide.
+let preloaderRunning: HTMLElement | null = null;
 
 function ExtractIcon() {
   return (
@@ -90,6 +93,7 @@ export default function LandingClient() {
     const showPre = !reduced && !preSeen && !preloaderPlayed;
     if (showPre) {
       preloaderPlayed = true;
+      preloaderRunning = pre;
       try { sessionStorage.setItem("lp-pre", "1"); } catch { /* modo privado */ }
       gsap.timeline()
         .fromTo(".lpre-ring", { scale: 0.6, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.6, ease: "power3.out", stagger: 0.08 }, 0)
@@ -100,8 +104,10 @@ export default function LandingClient() {
         .to(".lpre-ring", { scale: 2.6, opacity: 0, duration: 0.75, ease: "power3.in", stagger: 0.05 }, 1.7)
         .to(".lpre-wd", { opacity: 0, scale: 1.1, duration: 0.4, ease: "power2.in" }, 1.85)
         .to(pre, { autoAlpha: 0, duration: 0.5, ease: "power2.out",
-          onComplete: () => { pre.style.display = "none"; } }, 2.05);
-    } else if (!preloaderPlayed) {
+          onComplete: () => { pre.style.display = "none"; preloaderRunning = null; } }, 2.05);
+    } else if (preloaderRunning !== pre) {
+      // Not this element's animation (StrictMode remounts keep the same node,
+      // and that one must stay): nothing will hide it, so it is hidden now.
       pre.style.display = "none";
     }
     const introDelay = showPre ? 2.0 : 0;
@@ -274,8 +280,11 @@ export default function LandingClient() {
         gsap.set(track, { x: bandX });
         skewTo(gsap.utils.clamp(-12, 12, -v * 0.32));
       };
-      gsap.ticker.add(bandTick);
-      cleanups.push(() => gsap.ticker.remove(bandTick));
+      // Still with "reduce motion", like the rest of the effects.
+      if (!reduced) {
+        gsap.ticker.add(bandTick);
+        cleanups.push(() => gsap.ticker.remove(bandTick));
+      }
 
       /* ── La plataforma en acción: tres escenas ── */
       const drows = gsap.utils.toArray<HTMLElement>(".drow");
@@ -303,6 +312,7 @@ export default function LandingClient() {
           sim.call(() => { setSt(i, "st-ok", i === 4 ? "Validado · PDF" : "Completado"); bumpDocs(); }, undefined, t + 1.15);
         }
       });
+      sim.addLabel("queueDone", "+=0.6");
       sim.to(drows, { opacity: 0, y: -8, duration: 0.4, stagger: 0.06, ease: "power2.in" }, "+=2.2")
          .call(() => drows.forEach((_, i) => setSt(i, "st-proc", "Procesando")));
 
@@ -348,6 +358,9 @@ export default function LandingClient() {
          .to("#sceneC", { autoAlpha: 0, duration: 0.45 }, "C+=7.6")
          .call(() => { const s = $("xst"); s.className = "st st-exc"; s.innerHTML = "<i></i>En aprobación"; setSb(0); })
          .to("#sceneA", { autoAlpha: 1, duration: 0.45 });
+      // With "reduce motion" the simulation does not loop: it rests on the first
+      // scene with its queue already processed.
+      if (reduced) { sim.scrollTrigger?.kill(); sim.pause("queueDone", false); }
 
       gsap.fromTo("#shot", { scale: 0.95 }, {
         scale: 1, ease: "none",
@@ -749,7 +762,7 @@ export default function LandingClient() {
             <div className="sec-item reveal"><h3>Tus documentos son tuyos</h3><p>No se usan para entrenar modelos. Se procesan, se guardan bajo tu control y punto.</p></div>
             <div className="sec-item reveal"><h3>Retención configurable</h3><p>Tú decides cuánto tiempo se conservan los documentos y sus datos, según tus políticas y las de tus clientes.</p></div>
           </div>
-          <p className="sec-note reveal">¿Tu equipo de seguridad o cumplimiento tiene preguntas? <a data-contact>Hablemos directamente</a>.</p>
+          <p className="sec-note reveal">¿Tu equipo de seguridad o cumplimiento tiene preguntas? <a href="#" data-contact>Hablemos directamente</a>.</p>
         </div>
       </section>
 

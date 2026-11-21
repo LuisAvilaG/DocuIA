@@ -1,4 +1,5 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
+import { requireAdminSession } from "@/lib/auth/admin";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { nsConnections, subsidiaries, catalogItems, catalogVendors, catalogLocations, expenseCategories, catalogDepartments, catalogClasses, orgUsers } from "@/db/schema";
@@ -7,6 +8,7 @@ import { loadOneOrgFacts } from "@/lib/admin/health";
 import { ErpView, type ConnectionRow, type SubsidiaryRow } from "./erp-view";
 
 export default async function ClientErpPage({ params }: { params: Promise<{ id: string }> }) {
+  if ((await requireAdminSession()).error) redirect("/admin/login");
   const { id } = await params;
   const facts = await loadOneOrgFacts(id);
   if (!facts) notFound();

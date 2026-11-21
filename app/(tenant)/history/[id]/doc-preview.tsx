@@ -48,7 +48,8 @@ function Markers({ markers, page, onMarker }: { markers?: LineMarker[]; page?: n
 
 function mimeFromExt(ext: string): "pdf" | "image" | "xml" | "unknown" {
   if (ext === "pdf") return "pdf";
-  if (["jpg", "jpeg", "png", "webp", "tiff", "tif"].includes(ext)) return "image";
+  // TIFF is left out: browsers cannot draw it, and a broken image is worse than no preview.
+  if (["jpg", "jpeg", "png", "webp"].includes(ext)) return "image";
   if (ext === "xml") return "xml";
   return "unknown";
 }
@@ -120,6 +121,24 @@ function BboxHighlight({ bbox, page }: { bbox: BBox | undefined; page?: number }
       }}
     />
   );
+}
+
+// Every response forbids framing (X-Frame-Options: DENY), so an iframe of the
+// XML stays blank. The text is fetched and shown as it is.
+function XmlText({ url, maxHeight }: { url: string; maxHeight: number }) {
+  const [state, setState] = useState<{ url: string; text: string | null; failed: boolean }>({ url, text: null, failed: false });
+  useEffect(() => {
+    let cancelled = false;
+    fetch(url)
+      .then((res) => (res.ok ? res.text() : Promise.reject(new Error(String(res.status)))))
+      .then((text) => { if (!cancelled) setState({ url, text, failed: false }); })
+      .catch(() => { if (!cancelled) setState({ url, text: null, failed: true }); });
+    return () => { cancelled = true; };
+  }, [url]);
+  const current = state.url === url ? state : { text: null, failed: false };
+  if (current.failed) return <p className="text-sm text-muted-foreground">No se pudo cargar el XML.</p>;
+  if (current.text === null) return <p className="text-sm text-muted-foreground">Cargando…</p>;
+  return <pre className="overflow-auto whitespace-pre-wrap break-all font-mono text-[11.5px] leading-relaxed text-foreground" style={{ maxHeight }}>{current.text}</pre>;
 }
 
 export function DocPreview({ docId, activeBbox, fileExt, markers, onMarker }: DocPreviewProps) {
@@ -222,12 +241,7 @@ export function DocPreview({ docId, activeBbox, fileExt, markers, onMarker }: Do
         {kind === "xml" && (
           <div className="w-full max-w-prose bg-card border border-border rounded-xl overflow-auto p-4">
             <p className="text-xs text-muted-foreground mb-2 font-mono">XML CFDI</p>
-            <iframe
-              src={fileUrl}
-              title="CFDI XML"
-              className="w-full border-0"
-              style={{ height: `${Math.round(renderWidth * 1.3)}px` }}
-            />
+            <XmlText url={fileUrl} maxHeight={Math.round(renderWidth * 1.3)} />
           </div>
         )}
 

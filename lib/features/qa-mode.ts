@@ -2,6 +2,8 @@
 // dura 7 días por defecto y como máximo 30. Funciones puras; la consulta a la base
 // vive en qa-mode-state.ts.
 
+import { dayIn, safeTimeZone } from "@/lib/time-zone";
+
 export const QA_DEFAULT_DAYS = 7;
 export const QA_MAX_DAYS = 30;
 const DAY_MS = 86_400_000;
@@ -71,10 +73,12 @@ export function qaModeActive(
   config: Record<string, unknown> | null | undefined,
   environment: string | null | undefined,
   now = new Date(),
+  /** The client's zone: the last day ends at its midnight, not at UTC's (6 pm in Mexico). */
+  timeZone?: string | null,
 ): boolean {
   if (!granted || environment !== "sandbox") return false;
   const expires = String(config?.expires_on ?? "");
-  return validDay(expires) && expires >= isoDay(now);
+  return validDay(expires) && expires >= (timeZone ? dayIn(safeTimeZone(timeZone), now) : isoDay(now));
 }
 
 /** Número del documento enviado en modo QA: «F-1001» + «-QA{n}» → «F-1001-QA2». */

@@ -30,7 +30,7 @@ async function guard() {
 }
 
 async function flowFor(orgId: string, id: string) {
-  return db.query.contractFlows.findFirst({ where: and(eq(contractFlows.id, id), eq(contractFlows.organizationId, orgId)), columns: { graphJson: true } });
+  return db.query.contractFlows.findFirst({ where: and(eq(contractFlows.id, id), eq(contractFlows.organizationId, orgId)), columns: { graphJson: true, draftJson: true } });
 }
 
 async function handlePOST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -64,9 +64,20 @@ async function handleGET(req: NextRequest, { params }: { params: Promise<{ id: s
   const nodeId = req.nextUrl.searchParams.get("nodeId") ?? "";
   const flow = await flowFor(access.session.orgId, id);
   if (!flow) return NextResponse.json({ error: "Flujo no encontrado." }, { status: 404 });
-  const graph = flowGraphSchema.safeParse(flow.graphJson);
-  const node = graph.success ? graph.data.nodes.find((entry) => entry.id === nodeId && entry.kind === "generate") : null;
-  const template = node?.kind === "generate" && isWordTemplate(node.data.wordTemplate) ? node.data.wordTemplate : null;
+  // The draft first: it is what the editor has open, and a template uploaded
+  // since the last publication exists only there.
+  let template: WordTemplateConfig | null = null;
+  // The editor may ask for the template it just uploaded, which no saved graph
+  // has yet: its key is accepted when it belongs to this flow of this organization.
+  const key = req.nextUrl.searchParams.get("key") ?? "";
+  if (key.startsWith(`contracts/${access.session.orgId}/flows/${id}/word-templates/`) && isOrgWordTemplateKey(key, access.session.orgId)) {
+    template = { storageKey: key, originalName: "plantilla.docx", mimeType: WORD_MIME, mappings: [] };
+  }
+  for (const source of template ? [] : [flow.draftJson, flow.graphJson]) {
+    const graph = source ? flowGraphSchema.safeParse(source) : null;
+    const node = graph?.success ? graph.data.nodes.find((entry) => entry.id === nodeId && entry.kind === "generate") : null;
+    if (node?.kind === "generate" && isWordTemplate(node.data.wordTemplate)) { template = node.data.wordTemplate; break; }
+  }
   if (!template) return NextResponse.json({ error: "No hay una plantilla Word guardada para este nodo." }, { status: 404 });
   if (!isOrgWordTemplateKey(template.storageKey, access.session.orgId)) return NextResponse.json({ error: "Plantilla no permitida" }, { status: 403 });
   try {

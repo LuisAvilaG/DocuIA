@@ -5,10 +5,11 @@ import { getTenantSession } from "@/lib/auth/jwt";
 import { canAccessTenantArea, canApprove } from "@/lib/auth/permissions";
 import { requireApAutomation } from "@/lib/products";
 import { db } from "@/lib/db";
-import { exceptionQueue, historyDocuments, nsConnections, organizations, orgUsers, subsidiaries } from "@/db/schema";
+import { catalogItems, exceptionQueue, historyDocuments, nsConnections, organizations, orgUsers, subsidiaries } from "@/db/schema";
 import { and, eq, inArray } from "drizzle-orm";
 import { getFeature, isFeatureEnabled } from "@/lib/features";
-import { storedDraft } from "@/lib/workflow/ns-payload";
+import { storedDraft, type NsDraft } from "@/lib/workflow/ns-payload";
+import { orgTimeZone } from "@/lib/org-time-zone";
 import type { ApChecks } from "@/lib/workflow/ap-checks";
 import type { LineStatus } from "@/lib/workflow/po-match";
 import { sandboxTestSendAvailable, testSendsOf } from "@/lib/workflow/test-send";
@@ -37,7 +38,57 @@ const LINE_STATUS: Record<LineStatus, { label: string; tone: Tone }> = {
 
 const money = (n: number | null | undefined, currency?: string | null) =>
   n == null ? "—" : `$${n.toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${currency ? ` ${currency}` : ""}`;
-const when = (d: Date) => d.toLocaleString("es-MX", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+// Formatted on the server, so the client's zone has to be given: the process runs in UTC.
+const whenIn = (timeZone: string) => (d: Date) => d.toLocaleString("es-MX", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone });
+
+/** The draft a reviewer already sent (for approval or to wait for the goods), if the document has one. */
+function reviewedDraft(products: unknown): NsDraft | null {
+  const saved = products && typeof products === "object" && !Array.isArray(products) ? (products as { approval_draft?: NsDraft }).approval_draft : null;
+  return saved && Array.isArray(saved.lines) && saved.lines.length ? saved : null;
+}
+
+/**
+ * A document that comes back to review opens as the reviewer left it, not as
+ * it was first read: the vendor, the items, the lines removed. Each line of the
+ * draft keeps the candidates and the position on the page of the line it came from.
+ */
+async function payloadFromDraft(products: unknown, draft: NsDraft, subsidiaryId: string): Promise<unknown> {
+  type ReadLine = { description?: string | null; candidates?: Array<{ internal_id: string }> } & Record<string, unknown>;
+  const payload = products as { document: { vendor: Record<string, unknown> & { name?: string | null }; lines: ReadLine[] } & Record<string, unknown> } & Record<string, unknown>;
+  const read = payload.document?.lines ?? [];
+  const used = new Set<number>();
+  const paired = draft.lines.map((d) => {
+    const i = read.findIndex((r, k) => !used.has(k) && (r.description ?? "") === d.item_document_name);
+    if (i >= 0) used.add(i);
+    return { d, from: i >= 0 ? read[i] : null };
+  });
+  // Items picked from the catalog search are not among the candidates: their names are looked up.
+  const unknown = [...new Set(paired.filter(({ d, from }) => !from?.candidates?.some((c) => c.internal_id === d.internal_id)).map(({ d }) => d.internal_id))];
+  const names = unknown.length
+    ? await db.select({ id: catalogItems.internalId, name: catalogItems.name, itemid: catalogItems.itemid }).from(catalogItems)
+        .where(and(eq(catalogItems.subsidiaryId, subsidiaryId), inArray(catalogItems.internalId, unknown)))
+    : [];
+  const nameOf = new Map(names.map((n) => [n.id, n]));
+  const lines = paired.map(({ d, from }, k) => ({
+    ...(from ?? { item_code: "", uom: null, candidates: [], match_status: "NOT_FOUND", recommendation_source: "catalog", confidence: 0 }),
+    line_no: k + 1,
+    description: d.item_document_name,
+    quantity: d.quantity,
+    rate: d.rate,
+    amount: d.amount,
+    selected_item_id: d.internal_id,
+    selected_unit_id: d.unit,
+    ...(nameOf.has(d.internal_id) ? { catalog_name: nameOf.get(d.internal_id)?.name ?? undefined, catalog_itemid: nameOf.get(d.internal_id)?.itemid ?? undefined } : {}),
+  }));
+  return {
+    ...payload,
+    document: {
+      ...payload.document,
+      vendor: { ...payload.document.vendor, selected_internal_id: draft.vendorId, name: draft.vendorName ?? payload.document.vendor.name ?? null },
+      lines,
+    },
+  };
+}
 
 interface ViewLine { description: string; itemId: string | null; quantity: number | null; amount: number | null }
 
@@ -71,14 +122,16 @@ export default async function InvoiceDetailPage({ params, searchParams }: {
   }).catch(() => null);
   if (!doc) notFound();
 
-  const [sub, storageEnabled, poProcessingEnabled, poMatchingEnabled, approvalWorkflow, sandboxGate] = await Promise.all([
+  const [sub, storageEnabled, poProcessingEnabled, poMatchingEnabled, approvalWorkflow, sandboxGate, timeZone] = await Promise.all([
     db.query.subsidiaries.findFirst({ where: eq(subsidiaries.id, doc.subsidiaryId), columns: { name: true } }),
     isFeatureEnabled(session.orgId, "document_storage"),
     isFeatureEnabled(session.orgId, "po_processing"),
     isFeatureEnabled(session.orgId, "po_matching"),
     isFeatureEnabled(session.orgId, "approval_workflow"),
     sandboxTestSendAvailable(session.orgId),
+    orgTimeZone(session.orgId),
   ]);
+  const when = whenIn(timeZone);
 
   const isPo = doc.documentType === "purchase_order";
   const isCfdi = doc.documentType === "xml_cfdi";
@@ -95,6 +148,8 @@ export default async function InvoiceDetailPage({ params, searchParams }: {
   // ── Por revisar: pantalla de trabajo con edición ──────────────────────────
   if (doc.status === "review") {
     if (!doc.products) notFound();
+    const reviewed = reviewedDraft(doc.products);
+    const payload = reviewed ? await payloadFromDraft(doc.products, reviewed, doc.subsidiaryId) : doc.products;
     return (
       <ReviewClient
         docId={doc.id}
@@ -112,7 +167,10 @@ export default async function InvoiceDetailPage({ params, searchParams }: {
         initialTab={parseInvoiceTab(tabParam)}
         subsidiaryName={sub?.name ?? null}
         isCfdi={isCfdi}
-        payload={doc.products as unknown as Parameters<typeof ReviewClient>[0]["payload"]}
+        canWrite={canWrite}
+        initialPoId={reviewed ? reviewed.poId : undefined}
+        initialLocationId={reviewed?.locationId ?? null}
+        payload={payload as unknown as Parameters<typeof ReviewClient>[0]["payload"]}
       />
     );
   }
@@ -310,7 +368,7 @@ export default async function InvoiceDetailPage({ params, searchParams }: {
                       <p className="mt-2 text-[12.5px] text-muted-foreground">Durante el modo QA cada envío usa otro número para que el ERP lo cree aunque ya exista.</p>
                     </section>
                   )}
-                  {sandboxTest || testSends.length > 0 ? (
+                  {(sandboxTest && draft) || testSends.length > 0 ? (
                     <section>
                       <SectionTitle title="Envíos de prueba a sandbox" aside={testSends.length ? String(testSends.length) : undefined} />
                       <div className="mt-3"><SandboxTestSend docId={doc.id} history={testSends} disabled={!sandboxTest || !draft} /></div>

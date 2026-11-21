@@ -13,7 +13,7 @@ type PayloadLike = {
   document?: {
     vendor?: { selected_internal_id?: string | null };
     invoice_number?: string | null; invoice_date?: string | null; due_date?: string | null; currency?: string | null;
-    lines?: Array<{ selected_item_id?: string | null; quantity?: number | null; rate?: number | null; amount?: number | null }>;
+    lines?: Array<{ description?: string | null; selected_item_id?: string | null; quantity?: number | null; rate?: number | null; amount?: number | null }>;
   };
 };
 
@@ -34,8 +34,14 @@ export function reviewCorrections(payload: unknown, draft: NsDraft): Record<stri
   if (doc.currency && draft.currency && !same(doc.currency, draft.currency)) add("currency");
   const read = doc.lines ?? [];
   if (read.length !== draft.lines.length) add("line_count");
-  for (let i = 0; i < Math.min(read.length, draft.lines.length); i++) {
-    const r = read[i], d = draft.lines[i];
+  // The draft leaves out lines without an item, so positions do not line up:
+  // each posted line is paired with the read line of the same description.
+  const used = new Set<number>();
+  for (const d of draft.lines) {
+    const i = read.findIndex((r, k) => !used.has(k) && same(r.description, d.item_document_name));
+    if (i < 0) continue;
+    used.add(i);
+    const r = read[i];
     if (r.selected_item_id && r.selected_item_id !== d.internal_id) add("item");
     if (!sameNum(r.quantity, d.quantity)) add("quantity");
     if (!sameNum(r.rate, d.rate)) add("rate");

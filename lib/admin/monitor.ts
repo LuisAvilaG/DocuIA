@@ -1,5 +1,6 @@
 // "Hoy" monitor for the platform home: what every client processed today and
 // whether anything looks off, plus the health of the shared machinery.
+import { dayIn, startOfDayIn } from "@/lib/time-zone";
 import { db } from "@/lib/db";
 import {
   historyDocuments, contractCases, expenseReports, exceptionQueue, usageDaily, workflowRuntimeLogs, orgFeatures,
@@ -35,10 +36,11 @@ export interface MonitorData {
   idle: number;
 }
 
+// One day for the whole monitor: Mexico City's, whatever each client's zone.
+// (The server's day ended at 6 pm there.)
+const MONITOR_ZONE = "America/Mexico_City";
 function startOfToday(): Date {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d;
+  return startOfDayIn(MONITOR_ZONE);
 }
 
 function isoDay(d: Date): string {
@@ -49,11 +51,14 @@ export async function getTodayMonitor(): Promise<MonitorData> {
   const start = startOfToday();
   const since12h = new Date(Date.now() - 12 * 3_600_000);
   const hourAgo = sql<number>`floor(extract(epoch from (now() - ${historyDocuments.createdAt})) / 3600)::int`;
+  const caseHourAgo = sql<number>`floor(extract(epoch from (now() - ${contractCases.createdAt})) / 3600)::int`;
   const facts = await loadOrgFacts();
   const ids = [...facts.keys()];
-  const today = isoDay(new Date());
+  // Usage is stored by the server's (UTC) date: after 6 pm in Mexico that is
+  // already tomorrow's row, so the monitor's day takes both.
+  const usageDays = [...new Set([dayIn(MONITOR_ZONE), isoDay(new Date())])];
 
-  const [docs, cases, reports, review, exceptions, usage, errors, hourly, qa] = ids.length ? await Promise.all([
+  const [docs, cases, reports, review, exceptions, usage, errors, hourly, qa, caseHourly] = ids.length ? await Promise.all([
     db.select({ organizationId: historyDocuments.organizationId, n: count(), last: max(historyDocuments.createdAt) }).from(historyDocuments)
       .where(and(inArray(historyDocuments.organizationId, ids), gte(historyDocuments.createdAt, start))).groupBy(historyDocuments.organizationId),
     db.select({ organizationId: contractCases.organizationId, n: count(), last: max(contractCases.createdAt) }).from(contractCases)
@@ -67,8 +72,12 @@ export async function getTodayMonitor(): Promise<MonitorData> {
     }).from(historyDocuments).where(and(inArray(historyDocuments.organizationId, ids), inArray(historyDocuments.status, ["review", "pending_approval"]))).groupBy(historyDocuments.organizationId),
     db.select({ organizationId: exceptionQueue.organizationId, n: count() }).from(exceptionQueue)
       .where(and(inArray(exceptionQueue.organizationId, ids), inArray(exceptionQueue.status, ["pending", "in_progress"]))).groupBy(exceptionQueue.organizationId),
-    db.select({ organizationId: usageDaily.organizationId, primary: usageDaily.aiPrimaryCalls, fallback: usageDaily.aiFallbackCalls, errors: usageDaily.errors })
-      .from(usageDaily).where(and(inArray(usageDaily.organizationId, ids), eq(usageDaily.date, today))),
+    db.select({
+      organizationId: usageDaily.organizationId,
+      primary: sql<number>`coalesce(sum(${usageDaily.aiPrimaryCalls}), 0)::int`,
+      fallback: sql<number>`coalesce(sum(${usageDaily.aiFallbackCalls}), 0)::int`,
+      errors: sql<number>`coalesce(sum(${usageDaily.errors}), 0)::int`,
+    }).from(usageDaily).where(and(inArray(usageDaily.organizationId, ids), inArray(usageDaily.date, usageDays))).groupBy(usageDaily.organizationId),
     db.select({ organizationId: historyDocuments.organizationId, n: count() }).from(historyDocuments)
       .where(and(inArray(historyDocuments.organizationId, ids), eq(historyDocuments.status, "failed"), gte(historyDocuments.updatedAt, start))).groupBy(historyDocuments.organizationId),
     db.select({ organizationId: historyDocuments.organizationId, hour: hourAgo, n: count() })
@@ -76,12 +85,15 @@ export async function getTodayMonitor(): Promise<MonitorData> {
       .groupBy(historyDocuments.organizationId, hourAgo),
     db.select({ organizationId: orgFeatures.organizationId, config: orgFeatures.configJson }).from(orgFeatures)
       .where(and(inArray(orgFeatures.organizationId, ids), eq(orgFeatures.featureId, "qa_mode"), eq(orgFeatures.adminGranted, true))),
-  ]) : [[], [], [], [], [], [], [], [], []];
+    db.select({ organizationId: contractCases.organizationId, hour: caseHourAgo, n: count() })
+      .from(contractCases).where(and(inArray(contractCases.organizationId, ids), gte(contractCases.createdAt, since12h)))
+      .groupBy(contractCases.organizationId, caseHourAgo),
+  ]) : [[], [], [], [], [], [], [], [], [], []];
 
   const one = <T extends { organizationId: string }>(rows: T[]) => new Map(rows.map((r) => [r.organizationId, r]));
   const docsBy = one(docs), casesBy = one(cases), reportsBy = one(reports), reviewBy = one(review), excBy = one(exceptions), usageBy = one(usage), errBy = one(errors), qaBy = one(qa);
   const sparkBy = new Map<string, number[]>();
-  for (const h of hourly) {
+  for (const h of [...hourly, ...caseHourly]) {
     const arr = sparkBy.get(h.organizationId) ?? new Array(12).fill(0);
     const idx = 11 - Math.min(11, Math.max(0, Number(h.hour)));
     arr[idx] += Number(h.n);
@@ -95,7 +107,8 @@ export async function getTodayMonitor(): Promise<MonitorData> {
     const u = usageBy.get(f.id);
     const primary = Number(u?.primary ?? 0), fallback = Number(u?.fallback ?? 0);
     totalPrimary += primary; totalFallback += fallback;
-    const fallbackPct = primary > 0 ? Math.round((fallback / primary) * 100) : null;
+    // Each document counts in one of the two, never both: the share is over their sum.
+    const fallbackPct = primary + fallback > 0 ? Math.round((fallback / (primary + fallback)) * 100) : null;
     const docsToday = Number(docsBy.get(f.id)?.n ?? 0);
     const casesToday = Number(casesBy.get(f.id)?.n ?? 0);
     const reportsToday = Number(reportsBy.get(f.id)?.n ?? 0);
@@ -103,12 +116,12 @@ export async function getTodayMonitor(): Promise<MonitorData> {
     const inReview = Number(reviewBy.get(f.id)?.review ?? 0) + Number(reviewBy.get(f.id)?.approvals ?? 0) + Number(excBy.get(f.id)?.n ?? 0);
     const health = healthFromFacts(f);
     const qaConfig = qaBy.get(f.id)?.config as Record<string, unknown> | undefined;
-    const qaUntil = qaConfig && qaModeActive(true, qaConfig, f.activeNsEnvironment) ? String(qaConfig.expires_on) : null;
+    const qaUntil = qaConfig && qaModeActive(true, qaConfig, f.activeNsEnvironment, new Date(), f.timezone) ? String(qaConfig.expires_on) : null;
     const products = new Set(f.products.filter((p) => p.status !== "disabled").map((p) => p.key));
 
     let status: MonitorRow["status"];
     if (f.status === "suspended") status = { label: "Suspendida", tone: "mute" };
-    else if (fallbackPct !== null && fallbackPct >= 25 && primary >= 5) { status = { label: `Fallback de IA ${fallbackPct} %`, tone: "warn" }; outliers++; }
+    else if (fallbackPct !== null && fallbackPct >= 25 && primary + fallback >= 5) { status = { label: `Fallback de IA ${fallbackPct} %`, tone: "warn" }; outliers++; }
     else if (errorsToday > 0) status = { label: `${errorsToday} error${errorsToday === 1 ? "" : "es"} hoy`, tone: "err" };
     else if (health.tone === "err") status = { label: health.label, tone: "err" };
     else if (health.pending && health.pending.key !== "first_run") status = { label: health.label, tone: "warn" };
@@ -142,10 +155,10 @@ export async function getTodayMonitor(): Promise<MonitorData> {
     docsToday: rows.reduce((s, r) => s + r.docsToday, 0),
     casesToday: rows.reduce((s, r) => s + r.casesToday, 0),
     reportsToday: rows.reduce((s, r) => s + r.reportsToday, 0),
-    inReview: review.reduce((s, r) => s + Number(r.review), 0) + exceptions.reduce((s, r) => s + Number(r.n), 0),
-    approvals: review.reduce((s, r) => s + Number(r.approvals), 0),
+    inReview: all.reduce((s, f) => s + Number(reviewBy.get(f.id)?.review ?? 0) + Number(excBy.get(f.id)?.n ?? 0), 0),
+    approvals: all.reduce((s, f) => s + Number(reviewBy.get(f.id)?.approvals ?? 0), 0),
     errorsToday: rows.reduce((s, r) => s + r.errorsToday, 0),
-    fallbackPct: totalPrimary > 0 ? Math.round((totalFallback / totalPrimary) * 100) : null,
+    fallbackPct: totalPrimary + totalFallback > 0 ? Math.round((totalFallback / (totalPrimary + totalFallback)) * 100) : null,
     outliers,
   };
 

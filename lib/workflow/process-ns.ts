@@ -26,6 +26,9 @@ function parseDateForNS(value: string): string {
 }
 
 function toNum(v: unknown): number | null {
+  // Number(null) and Number("") are 0: an amount that was never read must not
+  // reach the ERP as a zero price.
+  if (v === null || v === undefined || v === "") return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }
@@ -91,6 +94,37 @@ function buildRestletBody(payload: Record<string, unknown>): Record<string, unkn
   };
 }
 
+// Warnings of the process script that change what was posted. The record is
+// already saved when they arrive, so they are reported, not swallowed.
+const ERP_WARNINGS: Record<string, string> = {
+  CURRENCY_NOT_SET:                "la moneda del documento no se aplicó: quedó en la moneda del proveedor",
+  CURRENCY_NOT_FOUND:              "la moneda del documento no existe en el ERP: quedó en la moneda del proveedor",
+  RATE_NOT_APPLIED:                "un precio no se aplicó",
+  NO_MATCHED_PO_LINE:              "una línea no se encontró en la OC y no se incluyó",
+  LINE_SKIPPED_NO_ITEM:            "una línea sin ítem no se incluyó",
+  EXPENSE_LINE_SKIPPED_NO_ACCOUNT: "una línea de gasto sin cuenta no se incluyó",
+  PO_LINE_FALLBACK:                "una línea no encontró su línea de la OC y se aplicó a otra del mismo ítem",
+  UNIT_NOT_SET:                    "una unidad de medida no se aplicó",
+  CUSTOM_FIELD_NOT_SET:            "un campo adicional no se aplicó",
+  ATTACHMENT_FAILED:               "no se pudo adjuntar el archivo",
+  ATTACHMENT_FOLDER_MISSING:       "no se pudo adjuntar el archivo (falta la carpeta en el ERP)",
+  ATTACHMENTS_OVER_LIMIT:          "solo se adjuntaron los primeros cuatro archivos",
+  EXTERNAL_ID_NOT_SET:             "el registro quedó sin el identificador de DocuIA",
+};
+
+export function erpWarnings(nsData: Record<string, unknown> | null | undefined): string[] {
+  const raw = Array.isArray(nsData?.warnings) ? nsData.warnings : [];
+  const messages = raw
+    .map((w) => ERP_WARNINGS[String((w as { code?: unknown } | null)?.code ?? "")])
+    .filter((m): m is string => Boolean(m));
+  return [...new Set(messages)];
+}
+
+/** Note kept on a posted document whose record was saved with warnings. */
+export function erpWarningNote(warnings: string[]): string | null {
+  return warnings.length ? `Creada en el ERP con avisos: ${warnings.join("; ")}. Revisa el registro en el ERP.` : null;
+}
+
 function buildRecordUrl(documentType: string, accountId: string, internalId: string): string {
   if (!accountId || !internalId) return "";
   const normalizedId = accountId.replace(/_/g, "-").toLowerCase();
@@ -108,6 +142,7 @@ export async function processInNetSuite(
   internalId: string | null;
   recordUrl: string | null;
   error: string | null;
+  warnings: string[];
   nsResponse: Record<string, unknown>;
 }> {
   const org = await db.query.organizations.findFirst({
@@ -162,6 +197,17 @@ export async function processInNetSuite(
     );
   }
 
+  // Found by vendor + number and not by this document's own id: it is another
+  // record (typed by hand, or the number was misread). Linking to it would mark
+  // this document as posted when nothing was created for it.
+  if (isAlreadyExists && nsData?.matched_by === "document_number") {
+    const found = normalize(nsData?.vendor_bill_internal_id || nsData?.purchase_order_internal_id || "");
+    throw new Error(
+      `Ya existe en el ERP un registro de este proveedor con el número ${normalize(restletBody.invoice_number) || "indicado"}` +
+      `${found ? ` (id ${found})` : ""}; no se creó otro. Revisa el número del documento o el registro existente.`
+    );
+  }
+
   const internalId = normalize(
     nsData?.vendor_bill_internal_id || nsData?.purchase_order_internal_id || nsData?.internal_id || nsData?.id || ""
   ) || null;
@@ -176,6 +222,7 @@ export async function processInNetSuite(
     internalId,
     recordUrl: recordUrl || null,
     error: null,
+    warnings: erpWarnings(nsData),
     nsResponse: nsData,
   };
 }

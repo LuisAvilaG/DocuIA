@@ -88,14 +88,18 @@ export function describeAdminAction(row: {
     case "org.deleted":
       return "Marcó la organización para eliminación (recuperable 30 días).";
     case "org.purged":
-      return "Purgó definitivamente los datos de la organización.";
+      return `Purgó definitivamente los datos de la organización${after.files !== undefined ? ` (${str(after.files)} archivos, ${str(after.tables)} tablas)` : ""}.`;
+    case "org.purge_failed":
+      return `No pudo purgar los datos de la organización: ${str(after.error)}`;
+    case "org.undeleted":
+      return "Recuperó la organización marcada para eliminación; quedó suspendida.";
     case "org.plan_changed":
       return `Cambió el plan de ${str(before.planId)} a ${str(after.planId)}.`;
     case "products.updated":
       return `Actualizó los productos contratados (${str(after.summary)}).`;
     case "netsuite_connection.created":
     case "netsuite_connection.updated":
-      return `Guardó credenciales ERP de ${str(after.environment)} (cuenta ${str(after.accountId)})${after.tested === true ? ", probadas" : after.tested === false ? ", sin probar" : ""}.`;
+      return `Guardó credenciales ERP de ${str(after.environment)} (cuenta ${str(after.accountId)})${after.tested === true ? ", probadas" : after.tested === false ? ", la prueba falló" : ", sin probar"}.`;
     case "netsuite_connection.tested":
       return `Probó la conexión ERP de ${str(after.environment)}: ${after.ok ? "correcta" : `falló (${str(after.error)})`}.`;
     case "netsuite_scripts.updated":

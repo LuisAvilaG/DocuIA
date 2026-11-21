@@ -1,5 +1,7 @@
+import { logAudit } from "@/lib/audit/log";
 import { withApiSecurity } from "@/lib/security/http";
 import { isTenantRole } from "@/lib/auth/permissions";
+import { emailSchema } from "@/lib/auth/input";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
@@ -27,7 +29,12 @@ async function handlePOST(req: NextRequest) {
       return NextResponse.json({ error: "Email requerido" }, { status: 400 });
     }
 
-    const normalized = email.toLowerCase().trim();
+    // Same normalisation and format check as login.
+    const parsedEmail = emailSchema.safeParse(email);
+    if (!parsedEmail.success) {
+      return NextResponse.json({ error: "Email inválido" }, { status: 400 });
+    }
+    const normalized = parsedEmail.data;
     const safeRole   = isTenantRole(role) ? role : "operator";
 
     // Email is globally unique across the platform.
@@ -73,6 +80,11 @@ async function handlePOST(req: NextRequest) {
         tempPassword,
         appUrl,
       }),
+    });
+
+    await logAudit({
+      orgId: session.orgId, userId: session.sub, userEmail: session.email, action: "team.user_invited",
+      resourceType: "org_user", resourceId: userId, metadata: { email: normalized, role: safeRole },
     });
 
     return NextResponse.json({ ok: true, userId, tempPassword }, { status: 201 });

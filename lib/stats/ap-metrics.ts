@@ -4,6 +4,7 @@
 // por subsidiaria. Salen de status_events, workflow_runtime_logs,
 // exception_queue, item_mappings y history_documents.metrics_json.
 
+import { orgTimeZone } from "@/lib/org-time-zone";
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { periodRange, type StatsFilters } from "./ap-stats";
@@ -82,7 +83,7 @@ export function erpRejectionBucket(reason: string | null, code: string | null): 
 }
 
 export async function loadApMetrics(f: StatsFilters): Promise<ApMetrics> {
-  const range = periodRange(f.period);
+  const range = periodRange(f.period, new Date(), await orgTimeZone(f.organizationId));
   const from = range.from, to = range.to;
   const trendFrom = new Date(Date.now() - 12 * 7 * 86_400_000);
   const scope = docScope(f, from, to);
@@ -155,11 +156,13 @@ export async function loadApMetrics(f: StatsFilters): Promise<ApMetrics> {
       select l.meta_json->>'fallbackReason' as reason, count(*)::int as count, sum(count(*)) over ()::int as total
       from workflow_runtime_logs l
       where l.organization_id = ${f.organizationId} and l.step = 'extract' and l.status = 'SUCCESS' and l.created_at >= ${from} and l.created_at < ${to}
+        ${f.vendor ? sql`and l.vendor = ${f.vendor}` : sql``}
       group by 1`),
     rows<{ month: string; pct: number }>(sql`
       select date_trunc('month', l.created_at) as month, round(100.0 * count(*) filter (where l.fallback_used) / count(*))::int as pct
       from workflow_runtime_logs l
       where l.organization_id = ${f.organizationId} and l.step = 'extract' and l.status = 'SUCCESS' and l.created_at >= now() - interval '6 months'
+        ${f.vendor ? sql`and l.vendor = ${f.vendor}` : sql``}
       group by 1 order by 1`),
     rows<{ week: string; lines: number; memory: number }>(sql`
       select date_trunc('week', h.created_at) as week, sum((h.metrics_json->'mapping'->>'lines')::int)::int as lines,
@@ -177,6 +180,8 @@ export async function loadApMetrics(f: StatsFilters): Promise<ApMetrics> {
       from history_documents h left join history_documents o on o.id = (h.metrics_json->'duplicate'->>'of')::bigint
       where h.organization_id = ${f.organizationId} and h.created_at >= ${from} and h.created_at < ${to} and h.metrics_json ? 'duplicate'
         ${f.subsidiaryId ? sql`and h.subsidiary_id = ${f.subsidiaryId}` : sql``}
+        ${f.vendor ? sql`and coalesce(h.vendor, o.vendor) = ${f.vendor}` : sql``}
+        ${f.includeQa ? sql`` : sql`and h.is_qa = false`}
       order by h.created_at desc`),
     rows<{ vendor: string | null; invoices: number; tolerance: number; approval: number; difference: number }>(sql`
       select coalesce(h.vendor, 'Sin proveedor') as vendor, count(*)::int as invoices,
@@ -189,7 +194,9 @@ export async function loadApMetrics(f: StatsFilters): Promise<ApMetrics> {
     rows<{ reason: string | null; code: string | null }>(sql`
       select x.failure_reason as reason, x.error_code as code from exception_queue x
       where x.organization_id = ${f.organizationId} and x.failure_stage = 'process' and x.created_at >= ${from} and x.created_at < ${to}
-        ${f.subsidiaryId ? sql`and x.subsidiary_id = ${f.subsidiaryId}` : sql``}`),
+        ${f.subsidiaryId ? sql`and x.subsidiary_id = ${f.subsidiaryId}` : sql``}
+        ${f.vendor ? sql`and exists (select 1 from history_documents d where d.id = x.document_id and d.vendor = ${f.vendor})` : sql``}
+        ${f.includeQa ? sql`` : sql`and not exists (select 1 from history_documents d where d.id = x.document_id and d.is_qa)`}`),
     rows<{ name: string | null; count: number; median: number | null }>(sql`
       with ev as (
         select e.entity_id, e.to_status, e.changed_at,

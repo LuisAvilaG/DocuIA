@@ -42,6 +42,7 @@ export function ArchiveClient({ canRemove }: { canRemove: boolean }) {
     setDocuments(data.documents);
   }, [query, status]);
 
+  const codeFor = useRef<string | null>(null);
   const loadSelected = useCallback(async () => {
     if (!selectedId) return;
     const request = ++selectedRequest.current;
@@ -50,7 +51,12 @@ export function ArchiveClient({ canRemove }: { canRemove: boolean }) {
     if (!response.ok) throw new Error(data.error ?? "No se pudo abrir el documento");
     if (request !== selectedRequest.current) return;
     setSelected(data);
-    setCode(data.document.documentCode ?? "");
+    // Only when another document is opened: the 5-second poll runs this too,
+    // and would put back the saved code over what is being typed.
+    if (codeFor.current !== selectedId) {
+      codeFor.current = selectedId;
+      setCode(data.document.documentCode ?? "");
+    }
   }, [selectedId]);
 
   useEffect(() => { const timer = setTimeout(() => { loadList().catch((cause) => setError(cause.message)).finally(() => setLoading(false)); }, 250); return () => clearTimeout(timer); }, [loadList]);
@@ -143,7 +149,7 @@ export function ArchiveClient({ canRemove }: { canRemove: boolean }) {
             <Upload aria-hidden className="size-5 text-link" />
             <b className="text-sm font-semibold">{file ? file.name : "Elige el documento"}</b>
             <span className="text-[12.5px] text-muted-foreground">PDF, Word, imagen o texto</span>
-            <input type="file" accept=".pdf,.docx,.txt,.xml,.png,.jpg,.jpeg,.tiff" onChange={(event) => setFile(event.target.files?.[0] ?? null)} className="mt-2 text-[12.5px]" />
+            <input type="file" accept=".pdf,.docx,.txt,.xml,.png,.jpg,.jpeg" onChange={(event) => setFile(event.target.files?.[0] ?? null)} className="mt-2 text-[12.5px]" />
           </label>
           {progress && <p role="status" className="text-[13px] text-link">{progress}</p>}
           <p className="text-[12.5px] text-muted-foreground">Queda disponible para cartas futuras; si una referencia estaba pendiente, se enlaza al cargar su origen.</p>

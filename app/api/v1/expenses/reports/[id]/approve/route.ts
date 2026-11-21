@@ -5,7 +5,8 @@ import { canApprove } from "@/lib/auth/permissions";
 import { isFeatureEnabled } from "@/lib/features";
 import { db } from "@/lib/db";
 import { expenseReports, expenseItems, orgUsers } from "@/db/schema";
-import { eq, and, inArray, sum } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
+import { formatExpenseTotals } from "@/lib/expense/totals";
 import { sendEmail, buildExpenseApprovedEmail } from "@/lib/email/send";
 import { logAudit } from "@/lib/audit/log";
 
@@ -46,15 +47,13 @@ async function handlePOST(req: NextRequest, { params }: Params) {
     .returning({ id: expenseReports.id });
   if (!approved.length) return NextResponse.json({ error: "El informe cambió de estado mientras lo procesabas. Recarga la página." }, { status: 409 });
 
-  // Calculate total for email
-  const [totalRow] = await db
-    .select({ total: sum(expenseItems.total) })
+  // Calculate total for email (one figure per currency, never a mixed sum)
+  const totalItems = await db
+    .select({ total: expenseItems.total, currency: expenseItems.currency })
     .from(expenseItems)
     .where(eq(expenseItems.reportId, id));
 
-  const totalFormatted = totalRow?.total
-    ? `$${Number(totalRow.total).toLocaleString("es-CO", { maximumFractionDigits: 0 })}`
-    : "—";
+  const totalFormatted = totalItems.length ? formatExpenseTotals(totalItems) : "—";
 
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
   await sendEmail({

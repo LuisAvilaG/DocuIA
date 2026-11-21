@@ -6,6 +6,8 @@ import { STAGES, type ApMetrics } from "@/lib/stats/ap-metrics";
 
 const num = (n: number) => n.toLocaleString("es-MX");
 const money = (n: number, currency: string) => {
+  // Currency not read: the amount alone, not labelled as dollars.
+  if (!currency) return `$${n.toLocaleString("es-MX", { maximumFractionDigits: 0 })}`;
   try { return n.toLocaleString("es-MX", { style: "currency", currency: currency || "USD", maximumFractionDigits: 0 }); }
   catch { return `${currency} ${n.toLocaleString("es-MX", { maximumFractionDigits: 0 })}`; }
 };

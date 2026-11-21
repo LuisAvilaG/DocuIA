@@ -82,6 +82,8 @@ interface ReviewLine extends MatchedLine {
   catalog_itemid?: string;
   catalog_unit_id?: string | null;
   catalog_unit_name?: string | null;
+  /** Added by the reviewer: its description, quantity and price are typed in. */
+  manual?: boolean;
 }
 
 interface CatalogSearchItem {
@@ -103,6 +105,8 @@ interface PurchaseOrderOption {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+const lineInput = "min-h-9 w-full rounded-lg border border-[#D6D2C8] bg-white px-2.5 text-[13.5px] text-foreground outline-none focus:border-primary read-only:bg-secondary/40";
 
 function fmt(n: number) {
   return n.toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -127,6 +131,9 @@ export function ReviewClient({
   initialTab = "lines",
   subsidiaryName = null,
   isCfdi = false,
+  initialPoId,
+  initialLocationId = null,
+  canWrite = true,
 }: {
   docId: number;
   subsidiaryId: string;
@@ -146,6 +153,11 @@ export function ReviewClient({
   initialTab?: InvoiceTab;
   subsidiaryName?: string | null;
   isCfdi?: boolean;
+  /** PO and location of a draft already reviewed (a document that came back to review). */
+  initialPoId?: string | null;
+  initialLocationId?: string | null;
+  /** false for read-only roles: the document is shown but cannot be sent. */
+  canWrite?: boolean;
 }) {
   const router = useRouter();
   const doc = payload.document;
@@ -155,10 +167,11 @@ export function ReviewClient({
     const found = doc.vendor.options.find(v => v.internal_id === (doc.vendor.selected_internal_id ?? ""));
     return found?.name ?? doc.vendor.name ?? "";
   });
-  const [locationId, setLocationId] = useState("");
+  const [locationId, setLocationId] = useState(initialLocationId ?? "");
   const initialPo = apChecks?.po ?? null;
   const poEnabled = poMatchingEnabled || poProcessingEnabled;
-  const [poId, setPoId] = useState(initialPo?.selectedPoId ?? "");
+  // No PO when the PO features are off: it could not be changed and the server would refuse it.
+  const [poId, setPoId] = useState(!poEnabled ? "" : initialPoId !== undefined ? initialPoId ?? "" : initialPo?.selectedPoId ?? "");
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrderOption[]>(initialPo?.openPurchaseOrders ?? []);
   const [poSuggestions, setPoSuggestions] = useState<PoSuggestion[]>(initialPo?.suggestions ?? []);
   const [vendorRule, setVendorRule] = useState<EffectiveVendorRule | null>(apChecks?.vendorRule ?? null);
@@ -184,16 +197,15 @@ export function ReviewClient({
   const [vendorSearchLoading, setVendorSearchLoading] = useState(false);
   const vendorSearchInputRef = useRef<HTMLInputElement>(null);
 
-  // Initialize lines — pre-select first candidate when available
+  // Only what the matching selected is confirmed. A line it left open (several
+  // candidates) shows the first one as a suggestion to accept, not as done:
+  // sent unseen, a guess would also be learned as a mapping a person confirmed.
   const [lines, setLines] = useState<ReviewLine[]>(() =>
-    doc.lines.map((l) => {
-      const first = l.candidates[0] ?? null;
-      return {
-        ...l,
-        confirmed_item_id: l.selected_item_id ?? first?.internal_id ?? null,
-        confirmed_unit_id: l.selected_unit_id ?? first?.unit_id ?? first?.unit_ids?.[0] ?? null,
-      };
-    })
+    doc.lines.map((l) => ({
+      ...l,
+      confirmed_item_id: l.selected_item_id ?? null,
+      confirmed_unit_id: l.selected_unit_id ?? null,
+    }))
   );
 
   // Línea elegida (se resalta en el documento y se edita en el detalle)
@@ -248,20 +260,22 @@ export function ReviewClient({
 
   useEffect(() => {
     if (!vendorSearchOpen || vendorQuery.length < 1) return;
+    // An answer to an earlier query must not replace the results of this one.
+    let cancelled = false;
     const t = setTimeout(async () => {
       try {
         const res = await fetch(
           `/api/v1/catalog/vendors?q=${encodeURIComponent(vendorQuery)}&subsidiaryId=${subsidiaryId}`
         );
-        if (res.ok) {
+        if (res.ok && !cancelled) {
           const data = await res.json();
-          setVendorResults(data.vendors ?? []);
+          if (!cancelled) setVendorResults(data.vendors ?? []);
         }
       } finally {
-        setVendorSearchLoading(false);
+        if (!cancelled) setVendorSearchLoading(false);
       }
     }, 250);
-    return () => clearTimeout(t);
+    return () => { cancelled = true; clearTimeout(t); };
   }, [vendorQuery, vendorSearchOpen, subsidiaryId]);
 
   function selectVendor(id: string, name: string) {
@@ -347,20 +361,21 @@ export function ReviewClient({
 
   useEffect(() => {
     if (searchIdx === null || !searchQuery.trim() || searchQuery.length < 2) return;
+    let cancelled = false;
     const t = setTimeout(async () => {
       try {
         const res = await fetch(
           `/api/v1/catalog/items?q=${encodeURIComponent(searchQuery)}&subsidiaryId=${subsidiaryId}`
         );
-        if (res.ok) {
+        if (res.ok && !cancelled) {
           const data = await res.json();
-          setSearchResults(data.items ?? []);
+          if (!cancelled) setSearchResults(data.items ?? []);
         }
       } finally {
-        setSearchLoading(false);
+        if (!cancelled) setSearchLoading(false);
       }
     }, 300);
-    return () => clearTimeout(t);
+    return () => { cancelled = true; clearTimeout(t); };
   }, [searchQuery, searchIdx, subsidiaryId]);
 
   // ── Line helpers ──────────────────────────────────────────────────────────
@@ -427,7 +442,17 @@ export function ReviewClient({
     });
   }
 
+  // Description, quantity and price of a line added by hand (or read without a price).
+  function editLine(idx: number, patch: Partial<Pick<ReviewLine, "description" | "quantity" | "rate">>) {
+    setLines(prev => prev.map((l, i) => {
+      if (i !== idx) return l;
+      const next = { ...l, ...patch };
+      return { ...next, amount: next.rate !== null ? Math.round(next.quantity * next.rate * 100) / 100 : null };
+    }));
+  }
+
   function addLine() {
+    setActiveLine(lines.length);
     setLines(prev => [
       ...prev,
       {
@@ -446,6 +471,7 @@ export function ReviewClient({
         confidence: 0,
         confirmed_item_id: null,
         confirmed_unit_id: null,
+        manual: true,
       },
     ]);
   }
@@ -462,10 +488,15 @@ export function ReviewClient({
     unit:               l.confirmed_unit_id,
   })), [validLines]);
   const compareKey = poMatchingEnabled && poId ? JSON.stringify([poId, vendorId, lineItems]) : "";
-  const lastCompareKey = useRef(initialPo?.comparison && initialPo.selectedPoId === poId ? JSON.stringify([poId, vendorId, lineItems]) : "");
+  // The comparison that came with the document is indexed over every line read;
+  // the one used here is always made over the lines on screen, so it is asked
+  // again on load and after every change. Until it answers, nothing is sent.
+  const [comparedKey, setComparedKey] = useState("");
+  const [compareAttempt, setCompareAttempt] = useState(0);
+  const compareStale = Boolean(compareKey) && compareKey !== comparedKey;
 
   useEffect(() => {
-    if (!compareKey || compareKey === lastCompareKey.current) return;
+    if (!compareKey || compareKey === comparedKey) return;
     let cancelled = false;
     const t = setTimeout(async () => {
       setCompareLoading(true);
@@ -479,7 +510,7 @@ export function ReviewClient({
         const data = await res.json();
         if (cancelled) return;
         if (!res.ok) { setCompareError(data.error ?? "No se pudo comparar con la OC"); setComparison(null); setOutcome(null); return; }
-        lastCompareKey.current = compareKey;
+        setComparedKey(compareKey);
         setComparison(data.comparison ?? null);
         setOutcome(data.outcome ?? null);
       } catch {
@@ -489,7 +520,7 @@ export function ReviewClient({
       }
     }, 500);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [compareKey, docId, poId, vendorId, lineItems]);
+  }, [compareKey, comparedKey, compareAttempt, docId, poId, vendorId, lineItems]);
 
   function choosePo(id: string) {
     setPoId(id);
@@ -501,7 +532,7 @@ export function ReviewClient({
   // The draft as the reviewer sees it: what approval posts and what a sandbox
   // test send uses, so both go to the ERP with the same lines.
   function reviewBody(): Record<string, unknown> {
-    const current = comparison && comparison.poInternalId === poId ? comparison : null;
+    const current = !compareStale && comparison && comparison.poInternalId === poId ? comparison : null;
     return {
       vendor_internal_id:   vendorId,
       vendor_name:          vendorName || null,
@@ -522,6 +553,8 @@ export function ReviewClient({
     setSubmitError("");
     if (!vendorId) { setSubmitError("Selecciona un proveedor del ERP antes de aprobar."); return; }
     if (!validLines.length) { setSubmitError("Asigna al menos un ítem del ERP para poder aprobar."); return; }
+    if (validLines.some(l => l.rate === null && l.amount === null)) { setSubmitError("Hay líneas sin precio. Captura cantidad y precio, o quítalas."); return; }
+    if (validLines.some(l => l.manual && (!l.description.trim() || l.quantity <= 0))) { setSubmitError("Completa la descripción y la cantidad de la línea agregada."); return; }
     setSubmitting(true);
     try {
       const res = await fetch(`/api/v1/workflow/${docId}/approve`, {
@@ -542,12 +575,13 @@ export function ReviewClient({
   }
 
   const assignedCount = lines.filter(l => l.confirmed_item_id).length;
+  const unpricedCount = validLines.filter(l => l.rate === null && l.amount === null).length;
   const missingCount  = lines.length - assignedCount;
   const overallPct    = Math.round(payload.confidence.overall * 100);
 
   // ── Action bar: what happens when the reviewer sends the document ─────────
   type ActionButton = { label: string; run: () => void; disabled?: boolean };
-  const liveOutcome = poMatchingEnabled && poId && comparison?.poInternalId === poId ? outcome : null;
+  const liveOutcome = poMatchingEnabled && poId && !compareStale && comparison?.poInternalId === poId ? outcome : null;
   const parksForApproval = approvalWorkflow && !canApprove;
   const sendLabel = parksForApproval ? "Enviar a aprobación" : "Aprobar y enviar al ERP";
   const ruleName = vendorRule?.ruleId ? vendorRule.ruleLabel.replace(/^(Categoría|Proveedor): /, "") : null;
@@ -557,7 +591,10 @@ export function ReviewClient({
     if (poMatchingEnabled && vendorRule?.poRequirement === "required" && !poId) {
       return { tone: "err", message: "Este proveedor exige orden de compra: elige una para continuar.", primary: { label: sendLabel, run: send, disabled: true } };
     }
-    if (poMatchingEnabled && poId && compareLoading) {
+    if (poMatchingEnabled && poId && compareError) {
+      return { tone: "err", message: <>No se pudo comparar con la OC: {compareError}</>, primary: { label: "Reintentar comparación", run: () => setCompareAttempt(n => n + 1) } };
+    }
+    if (poMatchingEnabled && poId && (compareLoading || compareStale)) {
       return { tone: "none", message: "Comparando con la OC…", primary: { label: sendLabel, run: send, disabled: true } };
     }
     switch (liveOutcome?.kind) {
@@ -619,7 +656,7 @@ export function ReviewClient({
       enabled: poEnabled,
       required: poMatchingEnabled && vendorRule?.poRequirement === "required",
       selected: poId || null,
-      comparison: comparison?.poInternalId === poId ? comparison : null,
+      comparison: !compareStale && comparison?.poInternalId === poId ? comparison : null,
       outcome: liveOutcome,
       suggestions: poSuggestions.length,
       loading: compareLoading,
@@ -649,8 +686,8 @@ export function ReviewClient({
                 <CheckCircle2 className="w-4 h-4 text-emerald-500" />
               </div>
               <div className="flex-1">
-                <p className="text-sm font-semibold text-foreground">Documento enviado al ERP</p>
-                <p className="text-xs text-muted-foreground mt-0.5">La transacción fue creada exitosamente</p>
+                <p className="text-sm font-semibold text-foreground">{submitResult.netsuiteId ? "Documento enviado al ERP" : "Validado en modo prueba"}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">{submitResult.netsuiteId ? "La transacción fue creada exitosamente" : "El ERP aceptó los datos; no se creó ninguna transacción."}</p>
               </div>
             </div>
 
@@ -1001,6 +1038,19 @@ export function ReviewClient({
                         ))}
                       </ul>
                     )}
+                    {(sel.manual || (sel.rate === null && sel.amount === null)) && (
+                      <div className="grid grid-cols-[minmax(0,1fr)_88px_112px] gap-2.5 text-[12.5px] text-muted-foreground">
+                        <label className="flex flex-col gap-1">Descripción
+                          <input type="text" value={sel.description} onChange={(e) => editLine(selIdx, { description: e.target.value })} readOnly={!sel.manual} className={lineInput} />
+                        </label>
+                        <label className="flex flex-col gap-1">Cantidad
+                          <input type="number" min="0" step="any" value={sel.quantity} onChange={(e) => editLine(selIdx, { quantity: e.target.value === "" ? 0 : Number(e.target.value) })} className={lineInput} />
+                        </label>
+                        <label className="flex flex-col gap-1">Precio unitario
+                          <input type="number" min="0" step="any" value={sel.rate ?? ""} onChange={(e) => editLine(selIdx, { rate: e.target.value === "" ? null : Number(e.target.value) })} className={lineInput} />
+                        </label>
+                      </div>
+                    )}
                     <div className="flex flex-wrap gap-2">
                       <button type="button" onClick={() => setSearchIdx(selIdx)} className={btn("text", "sm", "px-0 text-link")}><Search />Buscar otro ítem</button>
                       <button type="button" onClick={() => deleteLine(selIdx)} className={btn("text", "sm", "ml-auto px-0 hover:text-tone-err")}><Trash2 />Quitar línea</button>
@@ -1014,6 +1064,9 @@ export function ReviewClient({
                     ? <span className="font-semibold text-tone-ok">✓ Las líneas cuadran con el documento</span>
                     : <span className="font-semibold text-tone-warn">Las líneas suman ${fmt(balance.sum)}; el subtotal es ${fmt(balance.expected)}</span>}
                 </p>
+                {unpricedCount > 0 && (
+                  <p className="text-[12.5px] text-tone-warn">{unpricedCount} línea{unpricedCount === 1 ? "" : "s"} sin precio: captúralo para poder enviar.</p>
+                )}
                 {missingCount > 0 && (
                   <p className="text-[12.5px] text-tone-warn">{missingCount} línea{missingCount === 1 ? "" : "s"} sin ítem se omitirá{missingCount === 1 ? "" : "n"} al enviar. Asígnales un ítem o quítalas.</p>
                 )}
@@ -1092,14 +1145,14 @@ export function ReviewClient({
           action.tone === "err" ? "border-tone-err/20 bg-tone-err-bg" : action.tone === "warn" ? "border-tone-warn/20 bg-tone-warn-bg" : "border-border bg-card",
         )}>
           {action.tone !== "none" && <AlertCircle className={cn("size-4 shrink-0", action.tone === "err" ? "text-tone-err" : "text-tone-warn")} aria-hidden="true" />}
-          <p className="min-w-[240px] flex-1 text-[13.5px]">{submitError ? <span className="text-tone-err">{submitError}</span> : action.message}</p>
+          <p className="min-w-[240px] flex-1 text-[13.5px]">{!canWrite ? "Tu rol es de solo consulta: puedes ver el documento, no enviarlo." : submitError ? <span className="text-tone-err">{submitError}</span> : action.message}</p>
           {sandboxTest && tab !== "erp" && (
             <SandboxTestSend docId={docId} compact history={testSends} disabled={submitting} buildBody={() => (vendorId && validLines.length ? reviewBody() : null)} />
           )}
           {action.secondary && (
-            <button type="button" onClick={action.secondary.run} disabled={submitting || !vendorId} className={btn("secondary")}>{action.secondary.label}</button>
+            <button type="button" onClick={action.secondary.run} disabled={submitting || !vendorId || !canWrite} className={btn("secondary")}>{action.secondary.label}</button>
           )}
-          <button type="button" onClick={action.primary.run} disabled={submitting || !vendorId || action.primary.disabled} className={btn("primary")}>
+          <button type="button" onClick={action.primary.run} disabled={submitting || !vendorId || action.primary.disabled || !canWrite} className={btn("primary")}>
             {submitting && <Loader2 className="animate-spin" />}
             {submitting ? "Enviando…" : action.primary.label}
           </button>

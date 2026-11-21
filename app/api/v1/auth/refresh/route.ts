@@ -9,6 +9,8 @@ import { isTenantIpAllowed } from "@/lib/security/ip-allowlist";
 import { getTenantHomePath } from "@/lib/products";
 import { SESSION_TTL_MS, setAuthCookies } from "@/lib/auth/cookies";
 
+const REFRESH_RACE_MS = 10_000;
+
 async function handlePOST(req: NextRequest) {
   const refreshCookie = req.cookies.get("refresh_token")?.value;
   if (!refreshCookie) {
@@ -29,6 +31,15 @@ async function handlePOST(req: NextRequest) {
 
     if (!session || session.expiresAt < new Date()) {
       return NextResponse.json({ error: "Sesión expirada" }, { status: 401 });
+    }
+
+    // Two tabs (or a restored browser) refresh with the same cookie at the same
+    // moment: one rotates the token and the other arrives with the previous one.
+    // Right after a rotation that is a race, not a theft. The browser already
+    // has the new cookies from the request that won, so nothing is issued here.
+    const rotatedAgoMs = Date.now() - (session.expiresAt.getTime() - SESSION_TTL_MS);
+    if (session.refreshToken !== tokenNonce && rotatedAgoMs >= 0 && rotatedAgoMs < REFRESH_RACE_MS) {
+      return NextResponse.json({ ok: true });
     }
 
     // Token reuse detection — if nonces don't match, a refresh token was reused
@@ -63,7 +74,8 @@ async function handlePOST(req: NextRequest) {
       .set({ refreshToken: newNonce, expiresAt: newExpiresAt })
       .where(and(eq(authSessions.id, sessionId), eq(authSessions.refreshToken, tokenNonce), isNull(authSessions.revokedAt), gt(authSessions.expiresAt, new Date())))
       .returning({ id: authSessions.id });
-    if (rotated.length !== 1) return NextResponse.json({ error: "Token ya utilizado" }, { status: 401 });
+    // Lost the race to a concurrent refresh of this same token: that one set the cookies.
+    if (rotated.length !== 1) return NextResponse.json({ ok: true });
 
     const [accessToken, newRefreshToken] = await Promise.all([
       signAccessToken({ sessionId,

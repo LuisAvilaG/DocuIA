@@ -1,9 +1,11 @@
+import { dayIn, safeTimeZone, startOfMonthIn, startOfWeekIn } from "@/lib/time-zone";
 import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { historyDocuments, orgFeatures } from "@/db/schema";
 import { and, eq, gte, lt, count, inArray, sql } from "drizzle-orm";
 import { getFeature } from "@/lib/features";
+import { operatingOrganization } from "@/lib/auth/jwt";
 import { sendEmail } from "@/lib/email/send";
 
 function cronAuth(req: NextRequest): boolean {
@@ -16,13 +18,15 @@ function cronAuth(req: NextRequest): boolean {
  * The period a report covers: the week or month that just ended. `until` is the
  * start of the current one, which also identifies the report already sent.
  */
-function reportWindow(frequency: string, now = new Date()): { from: Date; until: Date } {
+function reportWindow(frequency: string, timeZone: string, now = new Date()): { from: Date; until: Date } {
+  // Midnights of the client's zone. With the server's (UTC) the week ran from
+  // Sunday 6 pm to Sunday 6 pm in Mexico, and the month likewise.
   if (frequency === "monthly") {
-    return { from: new Date(now.getFullYear(), now.getMonth() - 1, 1), until: new Date(now.getFullYear(), now.getMonth(), 1) };
+    const until = startOfMonthIn(timeZone, now);
+    return { from: startOfMonthIn(timeZone, new Date(until.getTime() - 86_400_000)), until };
   }
-  const day = now.getDay() || 7;
-  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day + 1);
-  return { from: new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() - 7), until: monday };
+  const until = startOfWeekIn(timeZone, now);
+  return { from: startOfWeekIn(timeZone, new Date(until.getTime() - 3 * 86_400_000)), until };
 }
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[c]!));
@@ -40,8 +44,8 @@ async function handleGET(req: NextRequest) {
 
   try {
     const orgs = await db.query.organizations.findMany({
-      where: (o, { inArray }) => inArray(o.status, ["active", "trial"]),
-      columns: { id: true, name: true, billingEmail: true },
+      where: operatingOrganization(),
+      columns: { id: true, name: true, billingEmail: true, timezone: true },
     });
 
     const summary: Record<string, unknown> = {};
@@ -55,13 +59,14 @@ async function handleGET(req: NextRequest) {
 
       const config = feat.config as { frequency?: string; recipients?: string; report_scope?: string; last_sent_period?: string };
       const frequency     = config.frequency ?? "weekly";
-      const recipientsRaw = config.recipients ?? org.billingEmail ?? "";
+      // "" is the default of the setting, so ?? never reached the billing email.
+      const recipientsRaw = config.recipients?.trim() || org.billingEmail || "";
       if (!recipientsRaw) { summary[org.id] = { skipped: "no recipients" }; continue; }
 
-      const { from: since, until } = reportWindow(frequency);
-      const periodKey    = frequency === "monthly"
-        ? `${until.getFullYear()}-${String(until.getMonth() + 1).padStart(2, "0")}`
-        : until.toISOString().slice(0, 10);
+      const timeZone = safeTimeZone(org.timezone);
+      const { from: since, until } = reportWindow(frequency, timeZone);
+      // The day the current period starts, in the client's zone (the same keys as before).
+      const periodKey    = frequency === "monthly" ? dayIn(timeZone, until).slice(0, 7) : dayIn(timeZone, until);
       if (config.last_sent_period === periodKey) {
         summary[org.id] = { skipped: "already sent for current period" };
         continue;
@@ -69,8 +74,8 @@ async function handleGET(req: NextRequest) {
       const documentTypes = reportTypes(config.report_scope ?? "all");
       const periodLabel  = frequency === "monthly" ? "mensual" : "semanal";
       const periodRange  = frequency === "monthly"
-        ? since.toLocaleDateString("es-MX", { month: "long", year: "numeric" })
-        : `${since.toLocaleDateString("es-MX", { day: "numeric", month: "long" })} al ${new Date(until.getTime() - 86_400_000).toLocaleDateString("es-MX", { day: "numeric", month: "long", year: "numeric" })}`;
+        ? since.toLocaleDateString("es-MX", { month: "long", year: "numeric", timeZone })
+        : `${since.toLocaleDateString("es-MX", { day: "numeric", month: "long", timeZone })} al ${new Date(until.getTime() - 43_200_000).toLocaleDateString("es-MX", { day: "numeric", month: "long", year: "numeric", timeZone })}`;
 
       const byStatus = await db
         .select({ status: historyDocuments.status, cnt: count() })

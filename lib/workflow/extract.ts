@@ -137,7 +137,7 @@ export function mapInvoice(parsed: Record<string, unknown>, sourceText: string):
     deliveryDate,
     dueDate:       toDDMMYYYY(parsed?.due_date || parsed?.dueDate),
     purchaseOrder: normalize(parsed?.purchase_order || parsed?.purchaseOrder),
-    currency:      normalize(parsed?.currency || "USD").toUpperCase() || "USD",
+    currency:      normalize(parsed?.currency).toUpperCase(),
     subtotal:      toNumber(parsed?.subtotal),
     tax:           toNumber(parsed?.tax),
     total:         toNumber(parsed?.total),
@@ -289,9 +289,12 @@ export function configuredModel(value: unknown, fallback: string): string {
 
 function outputTokenLimit(maxChars: unknown): number {
   const characters = Number(maxChars);
-  if (!Number.isFinite(characters)) return 8000;
+  // A line takes about 100 tokens of JSON: 8,000 cut invoices of some 70 lines.
+  // Unused output is not charged. 20,000 is the most a non-streaming request
+  // may ask for before the SDK requires streaming.
+  if (!Number.isFinite(characters)) return 16000;
   // Four characters per token is the usual conservative conversion for the JSON response.
-  return Math.max(1024, Math.min(16000, Math.round(characters / 4)));
+  return Math.max(1024, Math.min(20000, Math.round(characters / 4)));
 }
 
 async function callModel(model: string, fileName: string, mimeType: string, base64: string, options: ExtractOptions, fallback = false): Promise<{ invoice: ExtractedInvoice; rawJson: string; usage: AiUsage }> {

@@ -55,4 +55,5 @@ EXPOSE 3000
 
 # Apply pending migrations, then start. instrumentation.ts boots the pg-boss
 # pipeline worker inside this same process (no separate worker service needed).
-CMD ["sh", "-c", "node scripts/migrate.mjs && node server.js"]
+# `exec` replaces the shell so SIGTERM from the orchestrator reaches node.
+CMD ["sh", "-c", "node scripts/migrate.mjs && exec node server.js"]

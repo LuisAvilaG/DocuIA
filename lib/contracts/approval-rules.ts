@@ -63,7 +63,10 @@ export function checkApproval(opts: {
   if (done.some((d) => d.byId === actor.id)) return { ok: false, reason: "Ya aprobaste este caso; falta otra persona." };
   const pending = steps.filter((s) => !done.some((d) => d.stepKey === s.key));
   if (pending.length === 0) return { ok: false, reason: "El caso ya tiene todas sus aprobaciones." };
-  const step = pending.find((s) => s.approvers.mode === "any" || s.approvers.userIds.includes(actor.id));
+  // A step that names this person goes first: taking the open one would leave
+  // theirs for nobody (they cannot sign twice, and no one else may sign it).
+  const step = pending.find((s) => s.approvers.mode === "users" && s.approvers.userIds.includes(actor.id))
+    ?? pending.find((s) => s.approvers.mode === "any");
   if (!step) return { ok: false, reason: `Este paso lo decide otra persona: ${pending[0].label}.` };
   return { ok: true, step, last: pending.length === 1 };
 }

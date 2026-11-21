@@ -11,7 +11,7 @@ import {
   contractDocTypes, contractFieldSchemas, contractValidationRules, contractAiAnalysisTemplates, contractOutputTemplates, contractFlows,
   contractVisualTrainingVariants, contractCases, contractDocuments, contractExtractionLearnings, contractValidations, contractAiAnalysisResults,
   contractArchiveDocuments, contractArchivePages, contractArchiveReferences, contractLargeUploads,
-  contractFlowVersions, contractUploadLinks, aiBatches, aiBatchItems, statusEvents,
+  contractFlowVersions, contractUploadLinks, aiBatches, aiBatchItems, statusEvents, adminAuditLog,
 } from "@/db/schema";
 import { eq, inArray, lt, and, isNotNull } from "drizzle-orm";
 import { deleteFile } from "@/lib/storage/minio";
@@ -43,13 +43,15 @@ export async function orgFootprint(orgId: string) {
   return { users, documents: docs, cases, contractFiles: docsContract + archive, connections: conns, subsidiaries: subIds.length, catalogItems: items, webhooks: hooks, apiKeys: keys, featureOverrides: feats, expenseReports: reports };
 }
 
-async function removeFiles(keys: Array<string | null | undefined>): Promise<number> {
-  let n = 0;
+async function removeFiles(keys: Array<string | null | undefined>): Promise<{ removed: number; failed: number }> {
+  let removed = 0, failed = 0;
   for (const key of keys) {
     if (!key) continue;
-    try { await deleteFile(key); n++; } catch { /* best effort */ }
+    try { await deleteFile(key); removed++; }
+    // A file that is already gone is done; anything else is storage not answering.
+    catch (err) { if ((err as { name?: string } | null)?.name === "NoSuchKey") removed++; else failed++; }
   }
-  return n;
+  return { removed, failed };
 }
 
 /** Storage keys of the Word templates a flow graph points at. */
@@ -66,8 +68,14 @@ export async function purgeOrganization(orgId: string): Promise<PurgeSummary> {
   const reportIds = reports.map((r) => r.id);
   const items = reportIds.length ? await db.select({ id: expenseItems.id }).from(expenseItems).where(inArray(expenseItems.reportId, reportIds)) : [];
   const itemIds = items.map((i) => i.id);
-  const cases = await db.select({ id: contractCases.id }).from(contractCases).where(eq(contractCases.organizationId, orgId));
+  const cases = await db.select({ id: contractCases.id, result: contractCases.resultJson }).from(contractCases).where(eq(contractCases.organizationId, orgId));
   const caseIds = cases.map((c) => c.id);
+  // Generated documents are referenced only from inside the case result.
+  const outputKeys = cases.flatMap((c) => {
+    const result = (c.result ?? {}) as { outputKey?: unknown; outputHistory?: unknown };
+    const history = Array.isArray(result.outputHistory) ? result.outputHistory.map((o) => (o as { outputKey?: unknown } | null)?.outputKey) : [];
+    return [result.outputKey, ...history];
+  }).filter((key): key is string => typeof key === "string" && key.startsWith(`contracts/${orgId}/`) && !key.includes(".."));
 
   // Storage first (best effort); the rows go in one transaction afterwards.
   const [docFiles, excFiles, contractFiles, archiveFiles, uploadFiles, expenseFiles] = await Promise.all([
@@ -91,11 +99,16 @@ export async function purgeOrganization(orgId: string): Promise<PurgeSummary> {
     .filter((key): key is string => isOrgWordTemplateKey(key, orgId));
   const deliveredKeys = linkFiles.flatMap((r) => (Array.isArray(r.f) ? r.f : []).map((f) => (f as { key?: unknown } | null)?.key))
     .filter((key): key is string => typeof key === "string" && key.startsWith(`contracts/${orgId}/`) && !key.includes(".."));
-  const files = await removeFiles([...new Set([
+  const { removed: files, failed: filesFailed } = await removeFiles([...new Set([
     ...docFiles.flatMap((r) => [r.k, r.a]), ...excFiles.map((r) => r.k), ...contractFiles.map((r) => r.k),
     ...archiveFiles.map((r) => r.k), ...uploadFiles.map((r) => r.k), ...expenseFiles.map((r) => r.k),
-    ...variantFiles.map((r) => r.k), ...templateKeys, ...deliveredKeys,
+    ...variantFiles.map((r) => r.k), ...templateKeys, ...deliveredKeys, ...outputKeys,
   ])]);
+
+  // The rows are the only record of where the files are. If storage did not
+  // delete them all, the rows stay and the next run tries again; deleting them
+  // now would leave the client's files in the bucket with nothing pointing at them.
+  if (filesFailed > 0) throw new Error(`No se pudieron borrar ${filesFailed} archivos del almacenamiento; la purga se reintentará.`);
 
   let tables = 0;
   await db.transaction(async (tx) => {
@@ -169,12 +182,23 @@ export async function purgeOrganization(orgId: string): Promise<PurgeSummary> {
 /** Orgs whose 30-day recovery window ended. */
 export async function purgeExpiredOrganizations(): Promise<PurgeSummary[]> {
   const cutoff = new Date(Date.now() - PURGE_AFTER_DAYS * 86_400_000);
-  const expired = await db.select({ id: organizations.id }).from(organizations)
+  const expired = await db.select({ id: organizations.id, name: organizations.name }).from(organizations)
     .where(and(isNotNull(organizations.deletedAt), lt(organizations.deletedAt, cutoff)));
   const out: PurgeSummary[] = [];
+  // No administrator runs this: it is recorded as the system's own action, so
+  // the audit shows when a client's data was removed for good (or why not).
+  const record = (org: { id: string; name: string }, action: string, after: Record<string, unknown>) =>
+    db.insert(adminAuditLog).values({ adminId: "system", adminEmail: "sistema", action, targetOrgId: org.id, targetOrgName: org.name, afterJson: after })
+      .catch((err) => console.error("[purge-org] audit", err instanceof Error ? err.message : err));
   for (const org of expired) {
-    try { out.push(await purgeOrganization(org.id)); }
-    catch (err) { console.error("[purge-org] failed", { orgId: org.id, err }); }
+    try {
+      const summary = await purgeOrganization(org.id);
+      out.push(summary);
+      await record(org, "org.purged", { files: summary.files, tables: summary.tables });
+    } catch (err) {
+      console.error("[purge-org] failed", { orgId: org.id, err });
+      await record(org, "org.purge_failed", { error: err instanceof Error ? err.message : String(err) });
+    }
   }
   return out;
 }

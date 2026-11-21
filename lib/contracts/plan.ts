@@ -98,10 +98,26 @@ export async function loadCasePlan(kase: { organizationId: string; flowId: strin
   }
   if (kase.flowId) {
     const active = await getActiveFlow(kase.organizationId, kase.flowId, { fallback: false });
-    if (!active) throw new Error("El flujo con el que se procesó este caso ya no existe o no es válido. Vuelve a procesarlo con un flujo vigente.");
+    if (!active) throw new Error("El flujo con el que se procesó este caso ya no existe o no es válido. Crea el caso de nuevo con un flujo vigente.");
     return planFromFlow(active.id, active.graph, active.version);
   }
   return loadContractPlan(kase.organizationId, null);
+}
+
+/**
+ * The plan to analyse (or re-analyse) a case with: its own flow as it is today.
+ * If that flow was deleted since, the copy the case kept from its last
+ * analysis. Never another flow: the case's documents were asked for by its
+ * own, and the boxes they were uploaded in mean nothing in a different one.
+ */
+export async function loadPlanForProcessing(kase: { organizationId: string; flowId: string | null; resultJson: unknown }): Promise<ContractPlan> {
+  if (!kase.flowId) return loadContractPlan(kase.organizationId, null);
+  const live = await getActiveFlow(kase.organizationId, kase.flowId, { fallback: false });
+  if (live) return planFromFlow(live.id, live.graph, live.version);
+  const snapshot = (kase.resultJson as { flow?: { snapshot?: unknown } } | null)?.flow?.snapshot as Partial<FlowSnapshot> | undefined;
+  const kept = snapshot?.flowId ? flowGraphSchema.safeParse(snapshot.graph) : null;
+  if (snapshot?.flowId && kept?.success) return planFromFlow(snapshot.flowId, kept.data, typeof snapshot.version === "number" ? snapshot.version : undefined);
+  throw new Error("El flujo de este caso fue eliminado o ya no es válido. Crea el caso de nuevo con un flujo vigente.");
 }
 
 export async function loadContractPlan(orgId: string, flowId?: string | null): Promise<ContractPlan> {

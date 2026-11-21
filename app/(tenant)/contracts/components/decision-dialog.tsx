@@ -34,6 +34,8 @@ export function DecisionDialog({ caseId, caseTitle, action, blocked, allowOverri
   const [checked, setChecked] = useState<Set<number>>(new Set());
   const [support, setSupport] = useState<Support | null>(null);
   const done = useRef(false);
+  // The approval was recorded but another one is still missing (its name).
+  const [partial, setPartial] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const isApproval = action === "approve";
   // Pedir documentos corregidos (feature contract_document_requests), solo al rechazar.
@@ -70,10 +72,10 @@ export function DecisionDialog({ caseId, caseTitle, action, blocked, allowOverri
   }, []);
 
   useEffect(() => {
-    function onKey(e: KeyboardEvent) { if (e.key === "Escape" && !busy) onClose(); }
+    function onKey(e: KeyboardEvent) { if (e.key === "Escape" && !busy) (partial ? onComplete : onClose)(); }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [busy, onClose]);
+  }, [busy, onClose, onComplete, partial]);
 
   async function attach(file: File) {
     const prev = support;
@@ -120,6 +122,9 @@ export function DecisionDialog({ caseId, caseTitle, action, blocked, allowOverri
       const data = await response.json().catch(() => ({}));
       if (!response.ok) { setError(data.error ?? "No se pudo guardar la decisión. Intenta de nuevo."); return; }
       done.current = true;
+      // With several approvals the case is still to be decided: say so before
+      // closing, instead of leaving as if it had been approved.
+      if (isApproval && data.status === "partial") { setPartial(typeof data.pending === "string" && data.pending ? data.pending : "otra aprobación"); return; }
       onComplete();
     } catch {
       setError("No se pudo conectar con DocuIA. Revisa tu conexión e inténtalo de nuevo.");
@@ -132,6 +137,21 @@ export function DecisionDialog({ caseId, caseTitle, action, blocked, allowOverri
   const warns = findings?.filter((f) => f.severity !== "block") ?? [];
   const title = isApproval ? (exception ? "Aprobar con excepción" : "Aprobar caso") : requests?.enabled ? "¿Qué hacemos con el caso?" : "Rechazar caso";
   const submitLabel = requesting ? "Enviar y dejar en espera" : isApproval ? title : "Rechazar caso";
+
+  if (partial) return (
+    <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-[rgba(30,32,41,0.38)] px-4 py-16" onMouseDown={(e) => { if (e.target === e.currentTarget) onComplete(); }}>
+      <section role="dialog" aria-modal="true" aria-labelledby={titleId} className="flex w-full max-w-[520px] flex-col rounded-[14px] bg-card shadow-[0_24px_70px_rgba(30,32,41,0.25)]">
+        <header className="border-b border-line-soft px-6 pb-3.5 pt-5.5">
+          <p className="truncate text-[12.5px] text-muted-foreground">{caseTitle}</p>
+          <h2 id={titleId} className="text-[19px] font-semibold tracking-[-0.02em]">Tu aprobación quedó registrada</h2>
+        </header>
+        <p className="px-6 py-5 text-sm">El caso todavía no está aprobado. Falta: <b className="font-semibold">{partial}</b>. Sigue en «Por decidir» hasta que se complete.</p>
+        <footer className="flex justify-end border-t border-line-soft px-6 py-3.5">
+          <button type="button" onClick={onComplete} className={btn("primary")}>Entendido</button>
+        </footer>
+      </section>
+    </div>
+  );
 
   return (
     <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-[rgba(30,32,41,0.38)] px-4 py-16" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>

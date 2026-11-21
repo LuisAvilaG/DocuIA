@@ -14,6 +14,13 @@ import { hashSync } from "bcryptjs";
 import { randomUUID } from "crypto";
 import { eq } from "drizzle-orm";
 import { subDays, format } from "date-fns";
+import { refuseNonLocalDatabase } from "./_guard";
+
+// Six organizations with active administrators: never against a real database.
+refuseNonLocalDatabase("El seed de demostración");
+// Outside a local database the password must be chosen, not the one written in this file.
+const DEMO_PASSWORD = process.env.DEMO_PASSWORD || (process.env.ALLOW_NON_LOCAL_DB === "1" ? "" : "Demo1234!");
+if (!DEMO_PASSWORD) { console.error("Define DEMO_PASSWORD para ejecutar el seed fuera de una base local."); process.exit(1); }
 
 // ── Helpers ───────────────────────────────────────────────────
 const uid = () => randomUUID();
@@ -261,7 +268,7 @@ async function main() {
         id:             uid(),
         organizationId: orgId,
         email:          u.email,
-        passwordHash:   hashSync("Demo1234!", 10),
+        passwordHash:   hashSync(DEMO_PASSWORD, 10),
         fullName:       u.fullName,
         role:           u.role,
         isActive:       true,

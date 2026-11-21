@@ -29,7 +29,9 @@ async function handlePOST(req: NextRequest, { params }: { params: Promise<{ toke
   const result = await deliverDocuments(token, files, note);
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status });
 
-  await enqueueContractCase(result.caseId!);
+  // The delivery is already saved and the link used: if the queue is down the
+  // contractor must not see an error. The stuck-case watchdog enqueues it again.
+  await enqueueContractCase(result.caseId!).catch((err) => console.error("[entregar] enqueue failed", result.caseId, err));
   await logAudit({ orgId: result.orgId!, action: "contract.documents_delivered", resourceType: "contract_case", resourceId: result.caseId!, metadata: { files: result.files, by: "contratista", note: note || undefined } });
 
   // Avisa a quien pidió los documentos.

@@ -14,7 +14,7 @@ export async function sweepQaMode(now = new Date()): Promise<{ checked: number; 
     .where(and(eq(orgFeatures.featureId, "qa_mode"), eq(orgFeatures.adminGranted, true)));
   if (rows.length === 0) return { checked: 0, disabled: 0 };
 
-  const orgs = await db.select({ id: organizations.id, name: organizations.name, env: organizations.activeNsEnvironment })
+  const orgs = await db.select({ id: organizations.id, name: organizations.name, env: organizations.activeNsEnvironment, timezone: organizations.timezone })
     .from(organizations).where(inArray(organizations.id, rows.map((r) => r.organizationId)));
   const orgBy = new Map(orgs.map((o) => [o.id, o]));
 
@@ -22,7 +22,7 @@ export async function sweepQaMode(now = new Date()): Promise<{ checked: number; 
   for (const r of rows) {
     const org = orgBy.get(r.organizationId);
     const config = (r.config ?? {}) as Record<string, unknown>;
-    if (qaModeActive(true, config, org?.env, now)) continue;
+    if (qaModeActive(true, config, org?.env, now, org?.timezone)) continue;
     await setAdminGrant(r.organizationId, "qa_mode", false, config, undefined, r.notes ?? undefined);
     await db.insert(adminAuditLog).values({
       adminId: "system",

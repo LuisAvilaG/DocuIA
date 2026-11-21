@@ -228,7 +228,7 @@ function CalculationForm({ data, patch, docTypes, fieldsByType, analysisNodes }:
       </div>
       <div className="rounded-lg border border-border bg-background/60 p-3 space-y-2.5">
         <div><p className="text-[11px] font-semibold text-foreground">Valores fijos del cálculo</p><p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">Úsalos para tasas, límites, SMMLV, UVT o cualquier dato que no proviene del documento.</p></div>
-        {fixedValues.map((value, index) => <div key={`${value.key}-${index}`} className="grid grid-cols-[88px_1fr_80px_20px] items-center gap-1.5">
+        {fixedValues.map((value, index) => <div key={index} className="grid grid-cols-[88px_1fr_80px_20px] items-center gap-1.5">
           <input className={`${inp} !py-1 font-mono`} value={value.key} placeholder="smmlv" onChange={(event) => setFixed(fixedValues.map((item, i) => i === index ? { ...item, key: event.target.value.replace(/\s+/g, "_") } : item))} />
           <input className={`${inp} !py-1`} value={value.label} placeholder="Salario mínimo" onChange={(event) => setFixed(fixedValues.map((item, i) => i === index ? { ...item, label: event.target.value } : item))} />
           <input className={`${inp} !py-1 tabular-nums`} type="number" step="any" value={Number.isFinite(value.value) ? value.value : ""} onChange={(event) => setFixed(fixedValues.map((item, i) => i === index ? { ...item, value: Number(event.target.value) } : item))} />
@@ -370,6 +370,9 @@ function AiAnalysisForm({ rule, setRule, docTypes }: { rule: Record<string, unkn
   const selectedDocs = (Array.isArray(rule.sourceDocTypes) ? rule.sourceDocTypes : []) as string[];
   const outputMode = String(rule.outputMode ?? "free");
   const patch = (input: Record<string, unknown>) => setRule({ ...rule, ...input });
+  // The rule as it is now, for answers that arrive seconds later.
+  const latestRule = useRef(rule);
+  useEffect(() => { latestRule.current = rule; }, [rule]);
 
   // Only called on mount, where templatesLoading already starts as true.
   const loadTemplates = useCallback(async () => {
@@ -389,7 +392,9 @@ function AiAnalysisForm({ rule, setRule, docTypes }: { rule: Record<string, unkn
       const response = await fetch("/api/v1/contracts/ai-analysis/improve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt }) });
       const payload = await response.json() as { prompt?: string; error?: string };
       if (!response.ok || !payload.prompt) throw new Error(payload.error || "No se pudo mejorar la instrucción.");
-      patch({ improvedPrompt: payload.prompt });
+      // Over the rule of this moment: with the one captured when the request
+      // started, everything edited while the AI answered was undone.
+      setRule({ ...latestRule.current, improvedPrompt: payload.prompt });
       setMessage({ ok: true, text: "Versión mejorada lista. Puedes seguir editándola." });
     } catch (error) { setMessage({ ok: false, text: error instanceof Error ? error.message : "No se pudo mejorar la instrucción." }); }
     finally { setImproving(false); }
@@ -664,6 +669,18 @@ function Select({ value, onChange, options, placeholder, disabled }: { value: st
 }
 
 // ── Builder (edits ONE flow, identified by flowId) ────────────────────
+/** Where the first schema problem is, so "El flujo no es válido" says what to fix. */
+function firstIssue(issues: unknown, graph: { nodes: Array<{ kind?: string; data?: unknown }> }): string {
+  const issue = Array.isArray(issues) ? issues[0] as { path?: Array<string | number>; message?: string } | undefined : undefined;
+  if (!issue) return "";
+  const path = issue.path ?? [];
+  const node = path[0] === "nodes" && typeof path[1] === "number" ? graph.nodes[path[1]] : undefined;
+  const name = (node?.data as { name?: unknown } | undefined)?.name;
+  const where = node ? `etapa «${typeof name === "string" && name ? name : node.kind ?? path[1]}»` : "";
+  const field = path.slice(node ? 3 : 0).join(" › ");
+  return ` ${[where, field].filter(Boolean).join(", ")}${issue.message ? `: ${issue.message}` : ""}`;
+}
+
 function FlowBuilder({ flowId }: { flowId: string }) {
   const rf = useReactFlow();
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
@@ -672,12 +689,16 @@ function FlowBuilder({ flowId }: { flowId: string }) {
   // Version loaded from the server; saving sends it back so a concurrent edit
   // by another admin is reported instead of silently overwritten.
   const versionRef = useRef<number | null>(null);
+  // When the draft was last saved, as the server told it: saving a draft does
+  // not move the version, so this is what detects another person's save.
+  const draftAtRef = useRef<string | null | undefined>(undefined);
   const [version, setVersion] = useState<number | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [docEditorOpen, setDocEditorOpen] = useState(false);
   const [wordTemplateOpen, setWordTemplateOpen] = useState(false);
   const [visualTraining, setVisualTraining] = useState<{ documentType: string; documentName: string; fields: TrainingField[] } | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   // Versiones de flujo: guardar deja un borrador; publicar crea la versión siguiente.
@@ -702,6 +723,7 @@ function FlowBuilder({ flowId }: { flowId: string }) {
     if (!d?.flow) return;
     versionRef.current = d.flow.version ?? null; setVersion(d.flow.version ?? null);
     const v = d.versions ?? { enabled: false };
+    draftAtRef.current = v.enabled ? v.draftUpdatedAt ?? null : undefined;
     setVersioned(Boolean(v.enabled));
     setPublished(d.flow.graph ?? null);
     setHasDraft(Boolean(v.pending));
@@ -710,7 +732,18 @@ function FlowBuilder({ flowId }: { flowId: string }) {
   }, [setGraph]);
 
   useEffect(() => {
-    fetchFlow().then((d) => applyFlow(d, true)).finally(() => setLoading(false));
+    // Without the stored flow there is nothing to edit: showing an empty
+    // canvas here would let "Guardar" overwrite the real flow with it.
+    fetchFlow()
+      .then((d) => {
+        if (!d?.flow) throw new Error(typeof d?.error === "string" ? d.error : "");
+        // A stored flow that no longer passes the schema comes back as an empty
+        // graph: opening it would let "Guardar" replace the real one with nothing.
+        if (d.flow.valid === false) throw new Error("Este flujo se guardó con un formato anterior y no se puede abrir en el editor. Tu flujo sigue intacto; avísale a DocuIA para actualizarlo.");
+        applyFlow(d, true);
+      })
+      .catch((e: unknown) => setLoadError((e instanceof Error && e.message) || "No se pudo cargar el flujo."))
+      .finally(() => setLoading(false));
   }, [fetchFlow, applyFlow]);
 
   const onConnect = useCallback((c: Connection) =>
@@ -777,11 +810,12 @@ function FlowBuilder({ flowId }: { flowId: string }) {
     setSaving(true); setMsg(null);
     const graph = currentGraph();
     try {
-      const res = await fetch(`/api/v1/contracts/flow/${flowId}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, graph, version: versionRef.current }) });
+      const res = await fetch(`/api/v1/contracts/flow/${flowId}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, graph, version: versionRef.current, ...(draftAtRef.current !== undefined ? { draftAt: draftAtRef.current } : {}) }) });
       const d = await res.json();
       if (res.ok && typeof d.version === "number") { versionRef.current = d.version; setVersion(d.version); }
+      if (res.ok && d.draft) draftAtRef.current = typeof d.draftAt === "string" ? d.draftAt : null;
       if (res.ok && d.draft) setHasDraft(Boolean(d.pending));
-      setMsg(res.ok ? { ok: true, text: d.draft ? (d.pending ? "Borrador guardado" : "Guardado · nada nuevo por publicar") : `Guardado (v${d.version ?? 1})` } : { ok: false, text: d.error ?? "Error al guardar" });
+      setMsg(res.ok ? { ok: true, text: d.draft ? (d.pending ? "Borrador guardado" : "Guardado · nada nuevo por publicar") : `Guardado (v${d.version ?? 1})` } : { ok: false, text: `${d.error ?? "Error al guardar"}${firstIssue(d.issues, graph)}` });
       return res.ok;
     } catch { setMsg({ ok: false, text: "Sin conexión" }); return false; }
     finally { setSaving(false); }
@@ -863,6 +897,15 @@ function FlowBuilder({ flowId }: { flowId: string }) {
   });
 
   if (loading) return <div className="flex-1 flex items-center justify-center"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>;
+  if (loadError) return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+      <p role="alert" className="text-sm text-tone-err">{loadError}</p>
+      <span className="flex gap-2">
+        <Link href="/contracts/flow" className={btn("secondary")}>Volver a Flujos</Link>
+        <button type="button" onClick={() => window.location.reload()} className={btn("primary")}>Reintentar</button>
+      </span>
+    </div>
+  );
 
   const stageCount = nodes.filter((n) => n.type !== "note").length;
 
@@ -961,7 +1004,7 @@ function FlowBuilder({ flowId }: { flowId: string }) {
                 {selected.type === "intake"   && <IntakeForm   data={selected.data as AnyData} patch={patchSelected} order={intakeOrder.get(selected.id)} total={intakeOrder.size} onMove={(dir) => moveIntake(selected.id, dir)} />}
                 {selected.type === "extract"  && <ExtractForm  data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} onTrain={setVisualTraining} />}
                 {selected.type === "calculate" && <CalculationForm key={selected.id} data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} fieldsByType={fieldsByType} analysisNodes={analysisNodes} />}
-                {selected.type === "validate" && <ValidateForm data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} fieldsByType={fieldsByType} />}
+                {selected.type === "validate" && <ValidateForm key={selected.id} data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} fieldsByType={fieldsByType} />}
                 {selected.type === "reference_lookup" && <div className="space-y-3"><FieldRow label="Nombre de la etapa"><input className={inp} value={String((selected.data as AnyData).name ?? "")} onChange={(event) => patchSelected({ name: event.target.value })} /></FieldRow><FieldRow label="Si falta el documento citado"><select className={inp} value={String((selected.data as AnyData).severity ?? "warn")} onChange={(event) => patchSelected({ severity: event.target.value })}><option value="info">Informar</option><option value="warn">Advertir</option><option value="block">Bloquear</option></select></FieldRow><p className="text-xs leading-relaxed text-muted-foreground">Detecta códigos en los documentos de entrada, busca su origen en el Archivo y compara si tratan el mismo asunto. Los enlaces dudosos se revisan en Archivo.</p></div>}
                 {selected.type === "generate" && <GenerateForm data={selected.data as AnyData} patch={patchSelected} onOpenEditor={() => setDocEditorOpen(true)} onOpenWordTemplate={() => setWordTemplateOpen(true)} />}
                 {selected.type === "approval" && <ApprovalForm key={selected.id} data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} fieldsByType={fieldsByType} />}

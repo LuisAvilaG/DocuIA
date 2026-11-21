@@ -47,7 +47,9 @@ export function TrendLine({ points, fmt, color = ONE, height = 120, label }: {
   label: string;
 }) {
   const format = toFmt(fmt);
-  const [hover, setHover] = useState<number | null>(null);
+  const [hovered, setHover] = useState<number | null>(null);
+  // The point under the cursor may be gone after new data arrives.
+  const hover = hovered != null && hovered < points.length ? hovered : null;
   const W = 320, H = height, padX = 6, top = 12, bottom = H - 22;
   const vals = points.map((p) => p.value);
   const max = Math.max(...vals, 0), min = Math.min(...vals, 0);
@@ -91,14 +93,15 @@ export function StackedBars({ categories, series, values, fmt, height = 220, lab
   label: string;
 }) {
   const format = toFmt(fmt);
-  const [hover, setHover] = useState<number | null>(null);
+  const [hovered, setHover] = useState<number | null>(null);
+  const hover = hovered != null && hovered < Math.min(categories.length, values.length) ? hovered : null;
   const W = 700, H = height, x0 = 34, base = H - 26, top = 10;
   const totals = values.map((v) => series.reduce((a, s) => a + (v[s.key] ?? 0), 0));
   const max = Math.max(...totals, 1);
   const step = (W - x0 - 6) / Math.max(categories.length, 1);
   const bw = Math.min(30, step * 0.6);
   const scale = (v: number) => (v / max) * (base - top);
-  const ticks = [0, Math.round(max / 2), max];
+  const ticks = [...new Set([0, Math.round(max / 2), max])];
   const every = Math.ceil(categories.length / 6);
   return (
     <div className="relative">
@@ -122,8 +125,13 @@ export function StackedBars({ categories, series, values, fmt, height = 220, lab
                 acc += h;
                 const isTop = j === segs.length - 1;
                 const gap = j > 0 ? 2 : 0;
+                // The rounded cap never takes more than the segment has: a thin
+                // top segment was drawn 4 px tall whatever its value, and a
+                // narrow bar came out deformed.
+                const tall = Math.max(h - gap, 0);
+                const rr = Math.max(0, Math.min(4, tall, bw / 2));
                 return isTop
-                  ? <path key={s.key} d={`M${cx} ${yTop + h - gap}V${yTop + 4}a4 4 0 0 1 4-4h${bw - 8}a4 4 0 0 1 4 4V${yTop + h - gap}z`} fill={s.color} opacity={hover == null || hover === i ? 1 : 0.55} />
+                  ? <path key={s.key} d={`M${cx} ${yTop + tall}V${yTop + rr}a${rr} ${rr} 0 0 1 ${rr}-${rr}h${bw - 2 * rr}a${rr} ${rr} 0 0 1 ${rr} ${rr}V${yTop + tall}z`} fill={s.color} opacity={hover == null || hover === i ? 1 : 0.55} />
                   : <rect key={s.key} x={cx} y={yTop} width={bw} height={Math.max(h - gap, 0)} fill={s.color} opacity={hover == null || hover === i ? 1 : 0.55} />;
               })}
               {(i % every === 0 || i === categories.length - 1) && (
@@ -154,7 +162,8 @@ export function Donut({ parts, center, sub, size = 168, fmt }: {
   fmt?: FmtSpec;
 }) {
   const format = toFmt(fmt);
-  const [hover, setHover] = useState<number | null>(null);
+  const [hovered, setHover] = useState<number | null>(null);
+  const hover = hovered != null && hovered < parts.length ? hovered : null;
   const r = 62, c = 2 * Math.PI * r;
   const total = parts.reduce((a, p) => a + p.value, 0) || 1;
   const arcs = parts.map((p, i) => {

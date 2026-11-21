@@ -15,9 +15,12 @@ export function parseLocaleNumber(value: unknown): number | null {
   if (typeof value !== "string") return null;
   const raw = value.replace(/ /g, " ").trim();
   if (!raw) return null;
-  // Only a leading hyphen denotes a negative amount; inner hyphens belong to
-  // identifiers and ranges.
-  const sign = /^[\s($]*-/.test(raw) ? -1 : 1;
+  // A leading hyphen denotes a negative amount; inner hyphens belong to
+  // identifiers and ranges. Accounting also writes it after the number
+  // ("1.500,00-") or as parentheses ("(1,500.00)"); the parentheses count only
+  // around an amount with decimals or a currency sign, because contracts write
+  // plain numbers that way too ("treinta (30) días").
+  const sign = /^[\s($]*-/.test(raw) || /\d\s*-$/.test(raw) || /^\(\s*(?:[$€]\s*)?[\d.,]*\d[.,]\d{2}\s*\)$|^\(\s*[$€]\s*[\d.,]*\d\s*\)$/.test(raw) ? -1 : 1;
   const numeric = raw.replace(/[^\d.,]/g, "");
   if (!/\d/.test(numeric)) return null;
 

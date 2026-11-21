@@ -142,6 +142,8 @@ export function SiteFooter() {
                 that the Lenis smooth scroll relies on to reach the section. */}
             {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
             <a href="/#como">Cómo funciona</a>
+            {/* The nav is hidden on small screens: without this the pricing page had no link there. */}
+            <Link href="/planes">Planes</Link>
             {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
             <a href="/#seguridad">Seguridad</a>
             <a href="#" data-contact>Contáctanos</a>
@@ -156,10 +158,13 @@ export function SiteFooter() {
           </div>
         </div>
       </div>
-      <div className="fbot"><span>© {new Date().getFullYear()} DocuIA · Todos los derechos reservados</span></div>
+      {/* The page is built once and the year is read in the browser: across a new year they differ, and that is fine. */}
+      <div className="fbot"><span suppressHydrationWarning>© {new Date().getFullYear()} DocuIA · Todos los derechos reservados</span></div>
     </footer>
   );
 }
+
+const CONTACT_HINT = "Déjanos tus datos y te buscamos para agendar una demo con tus propios documentos.";
 
 export function ContactModal({ interest }: { interest?: string }) {
   useEffect(() => {
@@ -170,19 +175,26 @@ export function ContactModal({ interest }: { interest?: string }) {
     const form = $("cform") as HTMLFormElement;
     const ok = $("cok");
 
+    // Whoever opened the dialog gets the focus back when it closes.
+    let opener: HTMLElement | null = null;
     const open = () => {
+      if (!modal.classList.contains("open")) opener = document.activeElement as HTMLElement | null;
+      // A close still fading out would finish after this and hide the dialog again.
+      gsap.killTweensOf([veil, box]);
       modal.classList.add("open");
       (form as HTMLElement).style.display = "";
       ok.style.display = "none";
       const hint = form.querySelector<HTMLElement>(".hint");
-      if (hint) hint.style.color = "";
+      // An error from an earlier attempt replaced this text: it is put back.
+      if (hint) { hint.textContent = CONTACT_HINT; hint.style.color = ""; }
       gsap.to(veil, { opacity: 1, duration: 0.35 });
       gsap.fromTo(box, { opacity: 0, y: 28, scale: 0.97 }, { opacity: 1, y: 0, scale: 1, duration: 0.55, ease: "power3.out" });
       setTimeout(() => $("cf-name").focus(), 80);
     };
     const close = () => {
+      gsap.killTweensOf([veil, box]);
       gsap.to(veil, { opacity: 0, duration: 0.3 });
-      gsap.to(box, { opacity: 0, y: 18, scale: 0.97, duration: 0.3, ease: "power2.in", onComplete: () => { modal.classList.remove("open"); form.reset(); } });
+      gsap.to(box, { opacity: 0, y: 18, scale: 0.97, duration: 0.3, ease: "power2.in", onComplete: () => { modal.classList.remove("open"); form.reset(); opener?.focus?.(); opener = null; } });
     };
 
     const onContact = () => open();
@@ -196,8 +208,24 @@ export function ContactModal({ interest }: { interest?: string }) {
     veil.addEventListener("click", onVeil);
     const xBtn = modal.querySelector(".x")!;
     xBtn.addEventListener("click", onVeil);
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && modal.classList.contains("open")) close(); };
+    const onKey = (e: KeyboardEvent) => {
+      if (!modal.classList.contains("open")) return;
+      if (e.key === "Escape") { close(); return; }
+      if (e.key !== "Tab") return;
+      // The page behind is covered but still there: Tab stays inside the dialog.
+      const items = [...box.querySelectorAll<HTMLElement>("button, input, textarea, select, a[href]")]
+        .filter((el) => el.tabIndex >= 0 && !(el as HTMLButtonElement).disabled && el.offsetParent !== null);
+      if (!items.length) return;
+      const first = items[0], last = items[items.length - 1], at = document.activeElement;
+      if (!box.contains(at)) { e.preventDefault(); first.focus(); }
+      else if (e.shiftKey && at === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && at === last) { e.preventDefault(); first.focus(); }
+    };
     addEventListener("keydown", onKey);
+    // The wheel moves the form when it is taller than the window, never the
+    // page behind it (the smooth scroll leaves this area alone: data-lenis-prevent).
+    const onWheel = (e: WheelEvent) => { if (!(box.contains(e.target as Node) && box.scrollHeight > box.clientHeight)) e.preventDefault(); };
+    modal.addEventListener("wheel", onWheel as EventListener, { passive: false });
 
     const onSubmit = async (e: Event) => {
       e.preventDefault();
@@ -210,7 +238,7 @@ export function ContactModal({ interest }: { interest?: string }) {
         const parts = [phone ? `Teléfono: ${phone}.` : "", interest ? `Interés: ${interest}` : ""].filter(Boolean);
         const res = await fetch("/api/v1/contact", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: val("cf-name"), email: val("cf-email"), company: val("cf-company"), message: parts.join(" ") }),
+          body: JSON.stringify({ name: val("cf-name"), email: val("cf-email"), company: val("cf-company"), message: parts.join(" "), website: val("cf-website") }),
         });
         const d = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(d.error || "No pudimos enviar tu solicitud.");
@@ -229,18 +257,19 @@ export function ContactModal({ interest }: { interest?: string }) {
       veil.removeEventListener("click", onVeil);
       xBtn.removeEventListener("click", onVeil);
       removeEventListener("keydown", onKey);
+      modal.removeEventListener("wheel", onWheel as EventListener);
       form.removeEventListener("submit", onSubmit);
     };
   }, [interest]);
 
   return (
-    <div className="cmodal" id="cmodal" role="dialog" aria-modal="true" aria-labelledby="cm-title">
+    <div className="cmodal" id="cmodal" role="dialog" aria-modal="true" aria-labelledby="cm-title" data-lenis-prevent>
       <div className="veil" />
       <div className="box">
         <button className="x" type="button" aria-label="Cerrar"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg></button>
         <form id="cform">
           <h3 id="cm-title">Hablemos de tu operación</h3>
-          <p className="hint">Déjanos tus datos y te buscamos para agendar una demo con tus propios documentos.</p>
+          <p className="hint">{CONTACT_HINT}</p>
           <label htmlFor="cf-name">Nombre</label>
           <input id="cf-name" name="name" required minLength={2} placeholder="Tu nombre" />
           <label htmlFor="cf-company">Empresa</label>
@@ -249,6 +278,9 @@ export function ContactModal({ interest }: { interest?: string }) {
           <input id="cf-email" name="email" type="email" required placeholder="nombre@empresa.com" />
           <label htmlFor="cf-phone">Teléfono <span style={{ fontWeight: 400, color: "var(--sand)" }}>(opcional)</span></label>
           <input id="cf-phone" name="phone" type="tel" placeholder="+52 ..." />
+          {/* Trap for bots: people never see or reach it; the endpoint drops whatever fills it. */}
+          <input id="cf-website" name="website" type="text" tabIndex={-1} autoComplete="off" aria-hidden="true"
+            style={{ position: "absolute", left: "-9999px", width: 1, height: 1, opacity: 0 }} />
           <button className="btn-main send" type="submit">Enviar<span className="arr"><Arrow /></span></button>
         </form>
         <div className="ok" id="cok">

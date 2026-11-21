@@ -34,7 +34,12 @@ async function main() {
   }
   console.log(`✓ ${mapped} features asociadas a un producto`);
 
-  // 3) Backfill org_products for existing orgs
+  // 3) Backfill org_products for existing orgs. One-off, only when asked for:
+  // run on every seed it gave ap_automation to clients created without it.
+  if (!process.argv.includes("--backfill")) {
+    console.log("\nSeed de productos completo (sin backfill; usa --backfill para asignar productos a organizaciones existentes).");
+    process.exit(0);
+  }
   const orgs = await db.query.organizations.findMany({ columns: { id: true } });
 
   // Which orgs have expense_management granted (explicit grant OR feature default)

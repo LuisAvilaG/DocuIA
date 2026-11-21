@@ -32,7 +32,9 @@ function ago(iso: string): string {
 
 type Filters = { view: CaseView; q: string; flow: string; period: string; owner: string };
 
-export function CasesView({ rows, counts, total, page, pageSize, filters, flows, owners, canCreate, openNew }: {
+export function CasesView({ rows, counts, total, page, pageSize, filters, flows, owners, canCreate, openNew, approvalEnabled = true }: {
+  /** Without the approval workflow nobody decides: an analysed case reads "Analizado". */
+  approvalEnabled?: boolean;
   rows: CaseListRow[]; counts: Record<string, number>; total: number; page: number; pageSize: number;
   filters: Filters; flows: { id: string; name: string }[]; owners: { id: string; name: string }[];
   canCreate: boolean; openNew: boolean;
@@ -86,7 +88,7 @@ export function CasesView({ rows, counts, total, page, pageSize, filters, flows,
 
       <ViewTabs className="mt-6" items={(Object.keys(VIEW_LABEL) as CaseView[])
         .filter((k) => k === "all" || k === filters.view || (counts[k] ?? 0) > 0)
-        .map((k) => ({ key: k, label: VIEW_LABEL[k], count: counts[k] ?? 0, href: href({ view: k }), active: filters.view === k }))} />
+        .map((k) => ({ key: k, label: k === "decide" && !approvalEnabled ? "Analizados" : VIEW_LABEL[k], count: counts[k] ?? 0, href: href({ view: k }), active: filters.view === k }))} />
 
       <div role="search" className="mb-4 mt-4.5 flex flex-wrap items-center gap-2.5">
         <label className="relative w-full max-w-[420px] flex-[1_1_280px]">
@@ -145,7 +147,7 @@ export function CasesView({ rows, counts, total, page, pageSize, filters, flows,
                         </span>
                       </td>
                       <td className="max-w-[280px] px-3.5 py-3">
-                        {deciding ? <StatusPill tone={r.tone ?? "ok"}>Por decidir</StatusPill> : <CaseStatusPill status={r.status} />}
+                        {deciding ? <StatusPill tone={r.tone ?? "ok"}>{approvalEnabled ? "Por decidir" : "Analizado"}</StatusPill> : <CaseStatusPill status={r.status} />}
                         {r.detail && <small className="mt-1 block truncate text-xs text-muted-foreground">{r.detail}</small>}
                       </td>
                       <td className="whitespace-nowrap px-3.5 py-3">{r.owner}</td>

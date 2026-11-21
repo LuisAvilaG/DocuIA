@@ -17,7 +17,6 @@ const ALLOWED_MIME_TYPES = new Set([
   "image/jpeg",
   "image/png",
   "image/webp",
-  "image/tiff",
   "text/xml",
   "application/xml",
 ]);
@@ -190,7 +189,9 @@ async function handlePOST(req: NextRequest) {
     if (result.status === "failed") {
       return NextResponse.json(
         { ok: false, error: result.error, documentId: result.documentId },
-        { status: 500 }
+        // The document could not go on (a duplicate, an unreadable file): that
+        // is an answer about the document, not a failure of the server.
+        { status: 422 }
       );
     }
 

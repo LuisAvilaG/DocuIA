@@ -5,7 +5,8 @@ import { getTenantSession } from "@/lib/auth/jwt";
 import { isFeatureEnabled } from "@/lib/features";
 import { db } from "@/lib/db";
 import { expenseReports, expenseItems } from "@/db/schema";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, ne } from "drizzle-orm";
+import { orgTimeZone } from "@/lib/org-time-zone";
 
 const STATUS_LABELS: Record<string, string> = {
   draft:        "Borrador",
@@ -42,7 +43,8 @@ async function handleGET(req: NextRequest) {
   }
 
   const reports = await db.query.expenseReports.findMany({
-    where: eq(expenseReports.organizationId, session.orgId),
+    // A draft is still the employee's own: accounting does not see it on screen either.
+    where: and(eq(expenseReports.organizationId, session.orgId), ne(expenseReports.status, "draft")),
     with: {
       submitter: { columns: { fullName: true, email: true } },
       items: {
@@ -55,24 +57,35 @@ async function handleGET(req: NextRequest) {
     orderBy: desc(expenseReports.createdAt),
   });
 
-  const headerReport = ["ID Informe", "Propósito", "Empleado", "Email", "Período inicio", "Período fin", "Estado", "Enviado el", "Aprobado el", "ID ERP", "# Líneas", "Total Informe"].join(",");
+  const headerReport = ["ID Informe", "Propósito", "Empleado", "Email", "Período inicio", "Período fin", "Estado", "Enviado el", "Aprobado el", "ID ERP", "# Líneas", "Total Informe", "Moneda"].join(",");
+  const timeZone = await orgTimeZone(session.orgId);
+  // Dates without a time are stored at midnight UTC; moments are shown in the client's zone.
+  const dateOnly = (value: Date | string | null) => (value ? new Date(value).toLocaleDateString("es-CO", { timeZone: "UTC" }) : "");
+  const moment = (value: Date | string | null) => (value ? new Date(value).toLocaleDateString("es-CO", { timeZone }) : "");
   const headerItem = ["ID Informe", "# Línea", "Categoría", "Departamento", "Proveedor", "NIT/RFC", "# Factura", "Fecha factura", "Subtotal", "Impuesto", "Retención", "Total", "Moneda", "Forma pago", "Tipo documento", "ID registro ERP", "Error sync"].join(",");
 
   const reportRows = reports.map(r => {
-    const total = r.items.reduce((sum, i) => sum + Number(i.total ?? 0), 0);
+    // One figure only when the report has one currency: adding pesos and
+    // dollars gave a number that meant nothing.
+    const byCurrency = new Map<string, number>();
+    for (const i of r.items) byCurrency.set((i.currency ?? "").toUpperCase(), (byCurrency.get((i.currency ?? "").toUpperCase()) ?? 0) + Number(i.total ?? 0));
+    const totals = [...byCurrency.entries()];
+    const total = totals.length <= 1 ? (totals[0]?.[1] ?? 0).toFixed(2) : totals.map(([code, sum]) => `${sum.toFixed(2)} ${code || "sin moneda"}`).join(" + ");
+    const currency = totals.length === 0 ? "" : totals.length === 1 ? totals[0][0] : "Varias";
     return [
       csvEscape(r.id),
       csvEscape(r.purpose),
       csvEscape(r.submitter?.fullName),
       csvEscape(r.submitter?.email),
-      csvEscape(r.periodStart ? new Date(r.periodStart).toLocaleDateString("es-CO") : ""),
-      csvEscape(r.periodEnd   ? new Date(r.periodEnd).toLocaleDateString("es-CO")   : ""),
+      csvEscape(dateOnly(r.periodStart)),
+      csvEscape(dateOnly(r.periodEnd)),
       csvEscape(STATUS_LABELS[r.status] ?? r.status),
-      csvEscape(r.submittedAt ? new Date(r.submittedAt).toLocaleDateString("es-CO") : ""),
-      csvEscape(r.approvedAt  ? new Date(r.approvedAt).toLocaleDateString("es-CO")  : ""),
+      csvEscape(moment(r.submittedAt)),
+      csvEscape(moment(r.approvedAt)),
       csvEscape(r.netsuiteExpenseReportId),
       String(r.items.length),
-      total.toFixed(2),
+      csvEscape(total),
+      csvEscape(currency),
     ].join(",");
   });
 
@@ -85,7 +98,7 @@ async function handleGET(req: NextRequest) {
       csvEscape(i.vendorName),
       csvEscape(i.vendorNit),
       csvEscape(i.invoiceNumber),
-      csvEscape(i.invoiceDate ? new Date(i.invoiceDate as Date).toLocaleDateString("es-CO") : ""),
+      csvEscape(dateOnly(i.invoiceDate as Date | null)),
       String(i.subtotal ?? 0),
       String(i.taxAmount ?? 0),
       String(i.retentionAmount ?? 0),
@@ -109,7 +122,8 @@ async function handleGET(req: NextRequest) {
     ...itemRows,
   ].join("\n");
 
-  return new NextResponse(csv, {
+  // With the UTF-8 mark Excel on Windows reads the accents ("Propósito") right.
+  return new NextResponse("\uFEFF" + csv, {
     headers: {
       "Content-Type": "text/csv; charset=utf-8",
       "Content-Disposition": `attachment; filename="gastos-${date}.csv"`,

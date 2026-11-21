@@ -5,6 +5,7 @@ import { getTenantSession } from "@/lib/auth/jwt";
 import { canAccessTenantArea } from "@/lib/auth/permissions";
 import { isProductActive } from "@/lib/products";
 import { isFeatureEnabled } from "@/lib/features";
+import { friendlyError } from "@/lib/ap/friendly-error";
 import { db } from "@/lib/db";
 import { contractCases, contractDocTypes, contractDocuments, contractFlows, contractValidations, orgUsers } from "@/db/schema";
 import { CasesView, type CaseListRow, type CaseView } from "./view";
@@ -97,7 +98,7 @@ export default async function CasesPage({ searchParams }: {
       docs: chips,
       status: r.status,
       tone: blocks.length ? "err" : warns.length ? "warn" : null,
-      detail: r.status === "failed" ? (r.errorMessage?.split("\n")[0] ?? "El análisis no terminó")
+      detail: r.status === "failed" ? (friendlyError(r.errorMessage?.split("\n")[0]) ?? "El análisis no terminó")
         : blocks.length || warns.length
           ? [blocks.length ? `${blocks.length} bloqueo${blocks.length === 1 ? "" : "s"}` : null, warns.length ? `${warns.length} advertencia${warns.length === 1 ? "" : "s"}` : null].filter(Boolean).join(" · ") + (first?.reason || first?.ruleName ? ` · ${first.reason ?? first.ruleName}` : "")
           : r.status === "review" || r.status === "validated" ? "Sin observaciones" : null,
@@ -116,6 +117,7 @@ export default async function CasesPage({ searchParams }: {
       page={page}
       pageSize={PAGE_SIZE}
       filters={{ view, q, flow, period, owner }}
+      approvalEnabled={await isFeatureEnabled(session.orgId, "contract_approval_workflow")}
       flows={flows.map((f) => ({ id: f.id, name: f.name }))}
       owners={users.map((u) => ({ id: u.id, name: u.fullName || u.email }))}
       canCreate={canCreate}

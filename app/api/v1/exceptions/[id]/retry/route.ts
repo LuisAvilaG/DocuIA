@@ -2,7 +2,7 @@ import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
-import { exceptionQueue, historyDocuments } from "@/db/schema";
+import { exceptionQueue, historyDocuments, organizations } from "@/db/schema";
 import { eq, and, inArray, lt, or } from "drizzle-orm";
 import { getFileBuffer } from "@/lib/storage/minio";
 import { runPipeline } from "@/lib/workflow/pipeline";
@@ -84,9 +84,15 @@ async function handlePOST(_req: NextRequest, { params }: Params) {
             eq(historyDocuments.organizationId, session.orgId),
             eq(historyDocuments.status, "failed"),
           ),
-          columns: { id: true },
+          columns: { id: true, attachmentKey: true },
         })
       : undefined;
+    // What the first run had: the client's own auto-process threshold and the
+    // PDF that came with the CFDI.
+    const org = await db.query.organizations.findFirst({
+      where: eq(organizations.id, session.orgId),
+      columns: { autoProcessThreshold: true },
+    });
 
     const result = await runPipeline({
       organizationId: session.orgId,
@@ -98,6 +104,8 @@ async function handlePOST(_req: NextRequest, { params }: Params) {
       requestedBy:    session.sub,
       documentId:     linked?.id,
       storageKey:     linked ? exception.storageKey : undefined,
+      autoProcessThreshold: org?.autoProcessThreshold ?? undefined,
+      attachmentKey:  linked?.attachmentKey ?? undefined,
       exceptionId,
     });
 

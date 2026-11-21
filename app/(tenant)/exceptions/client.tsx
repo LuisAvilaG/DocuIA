@@ -1,5 +1,6 @@
 "use client";
 
+import { useInBrowser } from "@/lib/use-in-browser";
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { Loader2, Search } from "lucide-react";
@@ -45,6 +46,7 @@ const title = (e: ExRow) => [e.numDoc ?? e.originalFilename ?? `Excepción ${e.i
 const reason = (e: ExRow) => friendlyError(e.failureReason?.split("\n")[0]) ?? "Sin descripción del error";
 
 export function ExceptionsClient({ exceptions: initial, canAct }: { exceptions: ExRow[]; canAct: boolean }) {
+  const inBrowser = useInBrowser();
   const [rows, setRows] = useState(initial);
   const [filter, setFilter] = useState<string>("pending");
   const [search, setSearch] = useState("");
@@ -121,7 +123,7 @@ export function ExceptionsClient({ exceptions: initial, canAct }: { exceptions: 
                   <button type="button" onClick={() => { setSelectedId(e.id); setError(""); }} aria-current={on || undefined}
                     className={cn("grid w-full grid-cols-[minmax(0,1fr)_auto] gap-x-2.5 gap-y-1 border-b border-line-soft px-4.5 py-3.5 text-left transition-colors", on ? "bg-[#FBF4F3]" : "hover:bg-secondary/40")}>
                     <b className="truncate text-sm font-semibold">{title(e)}</b>
-                    <small className="text-xs text-muted-foreground">{when(e.createdAt)}</small>
+                    <small className="text-xs text-muted-foreground">{inBrowser ? when(e.createdAt) : ""}</small>
                     <span className="col-span-2 truncate text-[13px] text-foreground/80">{reason(e)}</span>
                     <small className="col-span-2 text-xs text-muted-foreground">
                       {STAGE[e.failureStage]?.label ?? e.failureStage}{e.retryCount > 0 ? ` · ${e.retryCount} reintento${e.retryCount === 1 ? "" : "s"}` : ""}
@@ -151,9 +153,9 @@ export function ExceptionsClient({ exceptions: initial, canAct }: { exceptions: 
                 {selected.originalFilename && selected.documentId && <><dt className="text-muted-foreground">Archivo</dt><dd className="break-all">{selected.originalFilename}</dd></>}
                 {selected.errorCode && <><dt className="text-muted-foreground">Código</dt><dd className="font-mono text-[13px]">{selected.errorCode}</dd></>}
                 <dt className="text-muted-foreground">Reintentos</dt>
-                <dd>{selected.retryCount === 0 ? "Ninguno" : `${selected.retryCount}${selected.lastRetryAt ? ` · ${new Date(selected.lastRetryAt).toLocaleString("es-MX", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}` : ""}`}</dd>
+                <dd>{selected.retryCount === 0 ? "Ninguno" : `${selected.retryCount}${selected.lastRetryAt && inBrowser ? ` · ${new Date(selected.lastRetryAt).toLocaleString("es-MX", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}` : ""}`}</dd>
                 <dt className="text-muted-foreground">Llegó</dt>
-                <dd>{new Date(selected.createdAt).toLocaleString("es-MX", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</dd>
+                <dd>{inBrowser ? new Date(selected.createdAt).toLocaleString("es-MX", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : ""}</dd>
               </dl>
 
               {error && <p role="alert" className="text-sm text-tone-err">{error}</p>}

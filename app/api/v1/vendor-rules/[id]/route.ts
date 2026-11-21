@@ -28,6 +28,11 @@ async function handlePATCH(req: NextRequest, { params }: Params) {
   const { id } = await params;
 
   const body = await req.json().catch(() => null) as Record<string, unknown> | null;
+  // Without a config the parser returns the neutral defaults, which would
+  // silently switch the rule off.
+  if (!body?.config || typeof body.config !== "object") {
+    return NextResponse.json({ error: "Falta la configuración de la regla" }, { status: 400 });
+  }
   const [updated] = await db.update(vendorRules)
     .set({ config: parseVendorRuleConfig(body?.config), updatedAt: new Date() })
     .where(and(eq(vendorRules.id, id), eq(vendorRules.organizationId, session.orgId)))

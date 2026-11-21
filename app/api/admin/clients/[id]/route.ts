@@ -24,6 +24,8 @@ const patchSchema = z.object({
   // Lifecycle: activate (ends the trial), suspend with a reason, or restore.
   status:        z.enum(["active", "trial", "suspended"]).optional(),
   suspensionReason: z.string().trim().max(500).nullable().optional(),
+  // Takes back a deletion within its 30 days.
+  restoreDeleted: z.literal(true).optional(),
 }).strict();
 
 async function handleGET(_req: NextRequest, { params }: Params) {
@@ -49,6 +51,16 @@ async function handlePATCH(req: NextRequest, { params }: Params) {
 
   const org = await db.query.organizations.findFirst({ where: eq(organizations.id, id) });
   if (!org) return NextResponse.json({ error: "Organización no encontrada" }, { status: 404 });
+  if (body.restoreDeleted) {
+    if (!org.deletedAt) return NextResponse.json({ error: "La organización no está marcada para eliminación" }, { status: 409 });
+    // Back as suspended, not as it was: its sessions were closed and somebody
+    // has to decide to give access again.
+    await db.update(organizations)
+      .set({ deletedAt: null, status: "suspended", suspensionReason: "Recuperada tras marcarse para eliminación", updatedAt: new Date() })
+      .where(eq(organizations.id, id));
+    await logAdminAction(req, session!, { action: "org.undeleted", targetOrgId: id, targetOrgName: org.name });
+    return NextResponse.json({ ok: true, status: "suspended" });
+  }
   if (org.deletedAt) return NextResponse.json({ error: "La organización está marcada para eliminación" }, { status: 409 });
 
   if (body.slug && body.slug !== org.slug) {
@@ -75,12 +87,16 @@ async function handlePATCH(req: NextRequest, { params }: Params) {
       updates.suspensionReason = body.suspensionReason ?? null;
       lifecycle = "org.suspended";
     } else {
-      updates.status = body.status;
+      // "Restablecer acceso" asks for "active". An organization suspended in
+      // the middle of its trial goes back to the trial with its end date:
+      // ending a trial is a decision of its own.
+      const backToTrial = org.status === "suspended" && body.status === "active" && org.trialEndsAt !== null && body.trialEndsAt === undefined;
+      updates.status = backToTrial ? "trial" : body.status;
       updates.suspensionReason = null;
-      if (body.status === "active") updates.trialEndsAt = null;
+      if (body.status === "active" && !backToTrial) updates.trialEndsAt = null;
       lifecycle = org.status === "suspended" ? "org.restored" : "org.updated";
     }
-    changed.status = body.status;
+    changed.status = updates.status;
     before.status = org.status;
   } else if (body.suspensionReason !== undefined && org.status === "suspended") {
     updates.suspensionReason = body.suspensionReason;

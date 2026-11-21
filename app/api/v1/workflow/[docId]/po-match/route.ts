@@ -3,12 +3,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
-import { catalogVendors, historyDocuments, subsidiaries, vendorRules } from "@/db/schema";
+import { historyDocuments, subsidiaries } from "@/db/schema";
 import { getActiveNsConnection, nsCredentials } from "@/lib/netsuite/connection";
 import { fetchOpenPurchaseOrders } from "@/lib/netsuite/client";
-import { comparePurchaseOrder, effectivePoConfig, loadFeatureFlags, requiresReceipt, type ApFeatureFlags } from "@/lib/workflow/ap-checks";
+import { comparePurchaseOrder, effectivePoConfig, loadFeatureFlags, requiresReceipt, vendorRuleFor } from "@/lib/workflow/ap-checks";
 import { parsePoMatchConfig, poOutcome, suggestPurchaseOrders } from "@/lib/workflow/po-match";
-import { parseVendorRuleConfig, resolveVendorRule } from "@/lib/workflow/vendor-rules";
 import type { UiPayload } from "@/lib/workflow/types";
 
 // Review screen helper: open POs + suggestions for the chosen vendor (GET) and
@@ -32,17 +31,7 @@ async function context(req: NextRequest, docId: string) {
   return { session, doc, flags };
 }
 
-async function ruleFor(orgId: string, subsidiaryId: string, vendorId: string, flags: ApFeatureFlags) {
-  if (!flags.isEnabled("vendor_rules")) return null;
-  const [rules, vendor] = await Promise.all([
-    db.query.vendorRules.findMany({ where: eq(vendorRules.organizationId, orgId) }),
-    db.query.catalogVendors.findFirst({
-      where: and(eq(catalogVendors.subsidiaryId, subsidiaryId), eq(catalogVendors.internalId, vendorId)),
-      columns: { categoryId: true },
-    }),
-  ]);
-  return resolveVendorRule(rules, { internalId: vendorId, categoryId: vendor?.categoryId ?? null }, parseVendorRuleConfig({}));
-}
+const ruleFor = vendorRuleFor;
 
 async function handleGET(req: NextRequest, { params }: Params) {
   const ctx = await context(req, (await params).docId);

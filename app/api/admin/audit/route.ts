@@ -24,7 +24,28 @@ async function handleGET(req: NextRequest) {
   const limit = Math.min(200, Math.max(1, Number(q.get("limit") ?? 50)));
   const before = q.get("before");
 
+  // Same classification as auditKind, in SQL: filtered after the limit, older
+  // events of a kind never showed and there was no way to page to them.
+  const RISK = "suspend|delete|purge|restore|environment|production";
+  const ACCESS = "login|user|password|credential|connection|admin|api_key|ai_key";
+  const kindFilter = kind === "risk" ? sql`${adminAuditLog.action} ~ ${RISK}`
+    : kind === "access" ? sql`${adminAuditLog.action} !~ ${RISK} and ${adminAuditLog.action} ~ ${ACCESS}`
+    : kind === "config" ? sql`${adminAuditLog.action} !~ ${RISK} and ${adminAuditLog.action} !~ ${ACCESS}`
+    : undefined;
+  const scope = and(
+    gte(adminAuditLog.createdAt, since),
+    adminId ? eq(adminAuditLog.adminId, adminId) : undefined,
+    orgId ? eq(adminAuditLog.targetOrgId, orgId) : undefined,
+    kindFilter,
+    search ? or(
+      ilike(adminAuditLog.action, `%${search}%`),
+      ilike(adminAuditLog.adminEmail, `%${search}%`),
+      ilike(adminAuditLog.targetOrgName, `%${search}%`),
+      ilike(adminAuditLog.targetFeature, `%${search}%`),
+    ) : undefined,
+  );
   const where = and(
+    kindFilter,
     gte(adminAuditLog.createdAt, since),
     adminId ? eq(adminAuditLog.adminId, adminId) : undefined,
     orgId ? eq(adminAuditLog.targetOrgId, orgId) : undefined,
@@ -38,9 +59,10 @@ async function handleGET(req: NextRequest) {
   );
 
   const [rows, admins, countRow] = await Promise.all([
-    db.select().from(adminAuditLog).where(where).orderBy(desc(adminAuditLog.createdAt), desc(adminAuditLog.id)).limit(limit * 3),
+    db.select().from(adminAuditLog).where(where).orderBy(desc(adminAuditLog.createdAt), desc(adminAuditLog.id)).limit(limit),
     db.select({ id: platformAdmins.id, name: platformAdmins.fullName, email: platformAdmins.email }).from(platformAdmins),
-    db.select({ n: sql<number>`count(*)::int` }).from(adminAuditLog).where(where),
+    // The total of the period and filters, not of the page being read.
+    db.select({ n: sql<number>`count(*)::int` }).from(adminAuditLog).where(scope),
   ]);
   const adminName = new Map(admins.map((a) => [a.id, a.name || a.email]));
 

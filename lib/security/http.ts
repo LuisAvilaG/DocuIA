@@ -116,13 +116,28 @@ export function withApiSecurity<T extends unknown[]>(handler: (req: NextRequest,
         const rl = await rateLimit(`api:${uploadPart ? "chunk" : expensive ? "cost" : mutation ? "write" : "read"}:${principal}`, { max: uploadPart ? 240 : expensive ? 40 : mutation ? 120 : 600, windowSec: 60 });
         if (!rl.ok) return NextResponse.json({ error: "Demasiadas solicitudes" }, { status: 429, headers: { "Retry-After": String(rl.retryAfterSec ?? 60) } });
       }
+      // The link is checked before the body is read: without a session, anyone
+      // could otherwise make the server buffer 60 MB per request with made-up tokens.
+      if (mutation && path.startsWith("/api/public/entregar/")) {
+        const { readUploadLink } = await import("@/lib/contracts/upload-links");
+        const link = await readUploadLink(path.slice("/api/public/entregar/".length));
+        if (!link.ok) {
+          return NextResponse.json(
+            { error: link.reason === "expired" ? "El enlace venció. Pide uno nuevo a quien te lo envió." : "Este enlace ya no está disponible." },
+            { status: 410, headers: { "Cache-Control": "no-store" } },
+          );
+        }
+      }
       let bounded = req;
       if (mutation && req.body) {
         const multipart = req.headers.get("content-type")?.startsWith("multipart/form-data");
         const uploadPart = /^\/api\/v1\/contracts\/uploads\/[^/]+\/parts\/\d+$/.test(path) && req.method === "PUT";
         const flowImport = path === "/api/v1/contracts/flow/import";
         const limit = publicAuth || path === "/api/v1/contact" ? 16_384 : uploadPart ? 9 * 1024 * 1024 : multipart ? (flowImport ? 71 : path === "/api/v1/contracts/cases" ? 60 : path === "/api/v1/workflow/upload" ? 42 : path.startsWith("/api/public/entregar/") ? 61 : 21) * 1024 * 1024 : 2 * 1024 * 1024;
-        const body = await readBoundedBody(req, limit, uploadPart || flowImport ? 120_000 : 30_000);
+        // Large uploads get the time a slow connection needs; a contractor sending
+        // 60 MB in one request cannot finish in the 30 s meant for small bodies.
+        const delivery = path.startsWith("/api/public/entregar/");
+        const body = await readBoundedBody(req, limit, delivery ? 300_000 : uploadPart || flowImport || multipart ? 120_000 : 30_000);
         // Next can supply a Request from a different realm; copying explicitly
         // avoids losing its method when instanceof Request is false.
         bounded = new NextRequest(req.url, { method: req.method, headers: req.headers, signal: req.signal, body: body as BodyInit });

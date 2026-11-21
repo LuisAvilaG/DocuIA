@@ -64,7 +64,7 @@ async function handlePOST(req: NextRequest) {
     }
 
     const events = Array.isArray(body.events) ? body.events : ["completed", "review", "failed"];
-    if (!events.every((e: unknown) => typeof e === "string" && VALID_EVENTS.has(e))) {
+    if (!events.length || !events.every((e: unknown) => typeof e === "string" && VALID_EVENTS.has(e))) {
       return NextResponse.json({ error: "Eventos inválidos. Usa: completed, review, failed" }, { status: 400 });
     }
 

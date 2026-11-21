@@ -100,7 +100,9 @@ export function FeaturesView({ orgId, products, features, subsidiaries, playbook
     try {
       const res = await fetch(`/api/admin/clients/${orgId}/features/${f.id}`, {
         method: "PATCH", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ adminGranted: next.adminGranted, config: next.config, notes: next.notes ?? "" }),
+        // The config goes only when it is what was edited: sent with every switch
+        // or note, it overwrote whatever the client had changed since the page loaded.
+        body: JSON.stringify({ adminGranted: next.adminGranted, ...(patch.config ? { config: next.config } : {}), notes: next.notes ?? "" }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(typeof data.error === "string" ? data.error : "");

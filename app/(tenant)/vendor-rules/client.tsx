@@ -53,6 +53,20 @@ function pctInput(value: string): number | null {
   return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : null;
 }
 
+// Keeps what is typed ("0." on the way to "0.5"); turning every keystroke
+// into a number dropped the decimal point and saved 5 instead of 0.5.
+function PctInput({ value, onChange, placeholder }: { value: number | null; onChange: (value: number | null) => void; placeholder: string }) {
+  const shown = value === null ? "" : String(value);
+  const [text, setText] = useState(shown);
+  // Another rule was opened, or the value was changed elsewhere (adjusted during render).
+  if (pctInput(text) !== value) setText(shown);
+  return (
+    <input inputMode="decimal" className={inputCls} placeholder={placeholder} value={text}
+      onChange={(e) => { setText(e.target.value); onChange(pctInput(e.target.value)); }}
+      onBlur={() => setText(shown)} />
+  );
+}
+
 function ruleTitle(rule: Pick<VendorRuleView, "scope" | "targetLabel" | "targetKey">): string {
   if (rule.scope === "default") return "Predeterminada";
   return `${rule.scope === "category" ? "Categoría" : "Proveedor"}: ${rule.targetLabel ?? rule.targetKey}`;
@@ -369,10 +383,10 @@ export function VendorRulesClient({ initialRules, categories, canManage, maxRule
                 <PathStep n={3} title="Tolerancia">
                   <div className="flex gap-3">
                     <label className="flex flex-1 flex-col gap-1.5 text-[13px]">Del total %
-                      <input inputMode="decimal" className={inputCls} placeholder="General" value={c.totalTolerancePct ?? ""} onChange={(e) => setConfig({ totalTolerancePct: pctInput(e.target.value) })} />
+                      <PctInput placeholder="General" value={c.totalTolerancePct} onChange={(v) => setConfig({ totalTolerancePct: v })} />
                     </label>
                     <label className="flex flex-1 flex-col gap-1.5 text-[13px]">Del precio %
-                      <input inputMode="decimal" className={inputCls} placeholder="General" value={c.priceTolerancePct ?? ""} onChange={(e) => setConfig({ priceTolerancePct: pctInput(e.target.value) })} />
+                      <PctInput placeholder="General" value={c.priceTolerancePct} onChange={(v) => setConfig({ priceTolerancePct: v })} />
                     </label>
                   </div>
                 </PathStep>
@@ -391,7 +405,7 @@ export function VendorRulesClient({ initialRules, categories, canManage, maxRule
               </label>
               {!c.neverAutoProcess && (
                 <label className="flex flex-col gap-1.5 text-[13px]">Con confianza de lectura de al menos %
-                  <input inputMode="decimal" className={inputCls} placeholder={`${orgThresholdPct} (general)`} value={c.autoProcessPct ?? ""} onChange={(e) => setConfig({ autoProcessPct: pctInput(e.target.value) })} />
+                  <PctInput placeholder={`${orgThresholdPct} (general)`} value={c.autoProcessPct} onChange={(v) => setConfig({ autoProcessPct: v })} />
                 </label>
               )}
               <label className="flex items-center justify-between gap-3 text-[13.5px]">

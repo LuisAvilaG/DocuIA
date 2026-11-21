@@ -12,7 +12,7 @@ import { isFeatureEnabled } from "@/lib/features";
 import { logAudit } from "@/lib/audit/log";
 import { createCaseFromUploads } from "@/lib/contracts/uploads";
 
-const ALLOWED = new Set(["application/pdf", "image/jpeg", "image/png", "image/webp", "image/tiff", "text/plain", "text/xml", "application/xml"]);
+const ALLOWED = new Set(["application/pdf", "image/jpeg", "image/png", "image/webp", "text/plain", "text/xml", "application/xml"]);
 const MAX_FILE = 20 * 1024 * 1024;
 
 async function guard(orgId: string) {
@@ -78,7 +78,7 @@ async function handlePOST(req: NextRequest) {
       return NextResponse.json({ ok: true, status: "queued", caseId }, { status: 201 });
     }
     const form = await req.formData();
-    const title = String(form.get("title") ?? "") || undefined;
+    const title = String(form.get("title") ?? "").slice(0, 255) || undefined;
     const flowId = String(form.get("flowId") ?? "") || undefined;
     const rawFiles = form.getAll("files").filter((f): f is File => f instanceof File);
     if (rawFiles.length === 0) return NextResponse.json({ error: "Se requiere al menos un archivo" }, { status: 400 });
@@ -95,6 +95,7 @@ async function handlePOST(req: NextRequest) {
 
     const files: CaseFileInput[] = [];
     for (const f of rawFiles) {
+      if (!f.name || f.name.length > 240 || /[\\/\x00-\x1f]/.test(f.name)) return NextResponse.json({ error: "Nombre de archivo inválido" }, { status: 400 });
       if (!ALLOWED.has(f.type)) return NextResponse.json({ error: `Tipo no permitido: ${f.type}` }, { status: 415 });
       if (f.size > MAX_FILE) return NextResponse.json({ error: `${f.name} excede 20 MB` }, { status: 413 });
       const buffer = Buffer.from(await f.arrayBuffer());
@@ -102,7 +103,14 @@ async function handlePOST(req: NextRequest) {
       files.push({ buffer, fileName: f.name, mimeType: f.type });
     }
 
-    const caseId = await createContractCase({ organizationId: session.orgId, createdBy: session.sub, title, flowId, files });
+    let caseId: string;
+    try {
+      caseId = await createContractCase({ organizationId: session.orgId, createdBy: session.sub, title, flowId, files });
+    } catch (error) {
+      // Storage or database trouble: its text is not for the person uploading.
+      console.error("[contracts/cases POST] create", error);
+      return NextResponse.json({ error: "No se pudo crear el caso. Inténtalo de nuevo." }, { status: 500 });
+    }
     await logAudit({
       orgId: session.orgId,
       userId: session.sub,

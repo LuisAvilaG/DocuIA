@@ -5,7 +5,7 @@ import { getTenantSession } from "@/lib/auth/jwt";
 import { isProductActive } from "@/lib/products";
 import { db } from "@/lib/db";
 import { contractFlows } from "@/db/schema";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { flowGraphSchema, hasCycle, validateFlowReferences } from "@/lib/contracts/flow";
 import { isFeatureEnabled } from "@/lib/features";
 import { flowVersionsConfig, listFlowVersions } from "@/lib/contracts/flow-versions";
@@ -49,7 +49,7 @@ async function handleGET(_req: NextRequest, { params }: { params: Promise<{ id: 
   });
 }
 
-interface PutBody { name?: string; graph?: unknown; version?: unknown }
+interface PutBody { name?: string; graph?: unknown; version?: unknown; draftAt?: unknown }
 
 async function handlePUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getTenantSession({ area: "contracts", permission: "write" });
@@ -60,7 +60,7 @@ async function handlePUT(req: NextRequest, { params }: { params: Promise<{ id: s
 
   const existing = await db.query.contractFlows.findFirst({
     where: and(eq(contractFlows.id, id), eq(contractFlows.organizationId, session.orgId)),
-    columns: { id: true, version: true, graphJson: true },
+    columns: { id: true, version: true, graphJson: true, draftUpdatedAt: true },
   });
   if (!existing) return NextResponse.json({ error: "Flujo no encontrado" }, { status: 404 });
 
@@ -80,11 +80,20 @@ async function handlePUT(req: NextRequest, { params }: { params: Promise<{ id: s
   const name = body?.name?.trim() || "Flujo de contratos";
   // Con Versiones de flujo, guardar no cambia lo que usan los casos: queda como borrador hasta publicar.
   if ((await flowVersionsConfig(session.orgId)).enabled) {
-    await db.update(contractFlows).set({ name, draftJson: parsed.data, draftUpdatedAt: new Date() })
-      .where(and(eq(contractFlows.id, id), eq(contractFlows.organizationId, session.orgId)));
+    // Saving a draft does not move the version, so the version alone cannot
+    // tell that someone else saved the draft meanwhile: the editor sends when
+    // the draft it opened was last saved, and it must still be that one.
+    const draftAt = existing.draftUpdatedAt?.toISOString() ?? null;
+    if (body?.draftAt !== undefined && body.draftAt !== draftAt) return stale;
+    const savedAt = new Date();
+    const saved = await db.update(contractFlows).set({ name, draftJson: parsed.data, draftUpdatedAt: savedAt })
+      .where(and(eq(contractFlows.id, id), eq(contractFlows.organizationId, session.orgId), eq(contractFlows.version, existing.version),
+        existing.draftUpdatedAt ? eq(contractFlows.draftUpdatedAt, existing.draftUpdatedAt) : isNull(contractFlows.draftUpdatedAt)))
+      .returning({ id: contractFlows.id });
+    if (!saved.length) return stale;
     const published = flowGraphSchema.safeParse(existing.graphJson);
     const pending = diffFlows(published.success ? published.data : null, parsed.data).length > 0;
-    return NextResponse.json({ ok: true, id, version: existing.version, draft: true, pending });
+    return NextResponse.json({ ok: true, id, version: existing.version, draft: true, pending, draftAt: savedAt.toISOString() });
   }
   try {
     const saved = await db.update(contractFlows)
@@ -127,6 +136,10 @@ async function handlePATCH(req: NextRequest, { params }: { params: Promise<{ id:
     const current = await db.query.contractFlows.findFirst({ where: and(eq(contractFlows.id, id), eq(contractFlows.organizationId, session.orgId)), columns: { graphJson: true } });
     const graph = flowGraphSchema.safeParse(current?.graphJson);
     if (!graph.success) return NextResponse.json({ error: "El flujo no es válido" }, { status: 400 });
+    // An empty published version analyses nothing and every case comes out "all correct".
+    if (!graph.data.nodes.some((node) => node.kind === "intake" || node.kind === "extract")) {
+      return NextResponse.json({ error: "La versión publicada de este flujo no tiene etapas. Publica el borrador antes de activarlo." }, { status: 400 });
+    }
     if (graph.data.nodes.some((node) => node.kind === "reference_lookup") && !await isFeatureEnabled(session.orgId, "contract_reference_archive")) return NextResponse.json({ error: "Habilita Archivo y rastreo de referencias antes de activar este flujo" }, { status: 403 });
   }
 

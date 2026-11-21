@@ -303,6 +303,22 @@ export function validateFlowReferences(graph: FlowGraph): string | null {
         if (err) return err;
       }
     }
+    if (n.kind === "approval") {
+      const where = `aprobación "${n.data.name}"`;
+      // "Specific people" with nobody ticked is a step no one can sign: the
+      // cases of the flow could only be rejected.
+      const nobody = (a: { mode: string; userIds: string[] }) => a.mode === "users" && a.userIds.length === 0;
+      if (nobody(n.data.base)) return `La ${where} pide personas específicas en «Siempre» pero no hay ninguna marcada.`;
+      for (const condition of n.data.conditions) {
+        const label = condition.label || `${condition.field} ${condition.op === "gte" ? "≥" : ">"} ${condition.value}`;
+        if (nobody(condition.approvers)) return `La ${where} pide personas específicas en la condición «${label}» pero no hay ninguna marcada.`;
+        // A condition on a field that no longer exists never applies, and the
+        // extra approval stops being asked for without anyone noticing.
+        const err = checkRef({ docType: condition.docType, field: condition.field }, `${where}, condición «${label}»`);
+        if (err) return err;
+      }
+      continue;
+    }
     if (n.kind !== "validate") continue;
     const rule = n.data.rule as ValidationRule;
     for (const ref of ruleRefs(rule)) {

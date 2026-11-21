@@ -1,22 +1,14 @@
 import { db } from "@/lib/db";
 import { exceptionQueue, historyDocuments, itemMappings, orgUsers, subsidiaries } from "@/db/schema";
 import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
-
-function startOfDay(d = new Date()) {
-  const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
-  return x;
-}
-
-function startOfWeek() {
-  const x = startOfDay();
-  x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); // Monday
-  return x;
-}
+import { orgTimeZone } from "@/lib/org-time-zone";
+import { startOfDayIn, startOfWeekIn, weekdayIn } from "@/lib/time-zone";
 
 export async function getDashboardData(orgId: string, userId: string) {
-  const today = startOfDay();
-  const week = startOfWeek();
+  // "Today" and "this week" are the client's, not the server's (UTC).
+  const timeZone = await orgTimeZone(orgId);
+  const today = startOfDayIn(timeZone);
+  const week = startOfWeekIn(timeZone);
   const org = eq(historyDocuments.organizationId, orgId);
 
   const [user, todayRow, waiting, exceptions, exceptionReasons, weekDays, weekRow, learned, recent, reviewReasons] = await Promise.all([
@@ -42,7 +34,8 @@ export async function getDashboardData(orgId: string, userId: string) {
       .orderBy(desc(sql`count(*)`))
       .limit(20),
     db.select({
-      day:   sql<number>`((extract(isodow from ${historyDocuments.createdAt}))::int - 1)`,
+      // Days counted from the client's Monday, not from the database's calendar.
+      day:   sql<number>`floor(extract(epoch from (${historyDocuments.createdAt} - ${week})) / 86400)::int`,
       count: sql<number>`count(*)::int`,
     }).from(historyDocuments)
       .where(and(org, gte(historyDocuments.createdAt, week)))
@@ -75,6 +68,8 @@ export async function getDashboardData(orgId: string, userId: string) {
   const w = weekRow[0];
 
   return {
+    timeZone,
+    todayIdx: weekdayIn(timeZone),
     firstName: user?.fullName?.trim().split(/\s+/)[0] ?? null,
     today: { total: todayRow[0]?.total ?? 0, auto: todayRow[0]?.auto ?? 0 },
     review: byStatus.get("review"),

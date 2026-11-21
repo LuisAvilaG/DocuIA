@@ -38,13 +38,26 @@ export function SelectMenu({
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  // Closing by keyboard leaves the focus on the button that opened the list.
+  const closeToTrigger = () => { setOpen(false); triggerRef.current?.focus(); };
 
   useEffect(() => {
     if (!open) return;
+    // The list opens on the chosen option (or the first), ready for the arrows.
+    const list = listRef.current;
+    (list?.querySelector<HTMLElement>('[aria-selected="true"]') ?? list?.querySelector<HTMLElement>('[role="option"]'))?.focus();
     function onDocMouseDown(e: MouseEvent) {
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
     }
-    function onKey(e: KeyboardEvent) { if (e.key === "Escape") setOpen(false); }
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "Escape") return;
+      const inside = rootRef.current?.contains(document.activeElement);
+      setOpen(false);
+      if (inside) triggerRef.current?.focus();
+    }
     document.addEventListener("mousedown", onDocMouseDown);
     document.addEventListener("keydown", onKey);
     return () => {
@@ -53,16 +66,30 @@ export function SelectMenu({
     };
   }, [open]);
 
+  function onListKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+    const items = [...(listRef.current?.querySelectorAll<HTMLElement>('[role="option"]') ?? [])];
+    const at = items.indexOf(document.activeElement as HTMLElement);
+    const go = (index: number) => { e.preventDefault(); items[Math.max(0, Math.min(items.length - 1, index))]?.focus(); };
+    if (e.key === "ArrowDown") go(at + 1);
+    else if (e.key === "ArrowUp") go(at - 1);
+    else if (e.key === "Home") go(0);
+    else if (e.key === "End") go(items.length - 1);
+    // Tab leaves the list: it closes, and the focus goes on from the button.
+    else if (e.key === "Tab") closeToTrigger();
+  }
+
   const selected = options.find(o => o.value === value) ?? null;
 
   return (
     <div ref={rootRef} className={cn("relative", className)}>
       <button
+        ref={triggerRef}
         type="button"
         aria-label={ariaLabel}
         aria-haspopup="listbox"
         aria-expanded={open}
         onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}
+        onKeyDown={(e) => { if (!open && (e.key === "ArrowDown" || e.key === "ArrowUp")) { e.preventDefault(); setOpen(true); } }}
         className={cn(
           "w-full flex items-center gap-1.5 bg-background border border-border rounded-lg px-2.5 py-1.5 text-xs text-foreground",
           "hover:border-border/80 focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 transition-[border-color,box-shadow]",
@@ -82,7 +109,9 @@ export function SelectMenu({
 
       {open && (
         <div
+          ref={listRef}
           role="listbox"
+          onKeyDown={onListKeyDown}
           className={cn(
             "absolute top-full mt-1 z-40 min-w-full max-h-64 overflow-y-auto bg-card border border-border rounded-xl py-1",
             align === "right" ? "right-0" : "left-0",
@@ -98,9 +127,9 @@ export function SelectMenu({
                 type="button"
                 role="option"
                 aria-selected={isSel}
-                onClick={(e) => { e.stopPropagation(); onChange(opt.value); setOpen(false); }}
+                onClick={(e) => { e.stopPropagation(); onChange(opt.value); closeToTrigger(); }}
                 className={cn(
-                  "w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors",
+                  "w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors focus:outline-none focus-visible:bg-secondary",
                   isSel ? "bg-primary/8" : "hover:bg-secondary/60",
                 )}
               >

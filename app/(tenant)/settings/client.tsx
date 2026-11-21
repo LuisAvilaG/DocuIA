@@ -167,6 +167,8 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
 
   const [tab,     setTab]     = useState<Tab>(() => (ALL_TABS.some((t) => t.id === initialTab) ? initialTab as Tab : "org"));
   const [users,   setUsers]   = useState(initialUsers);
+  const [usersFrom, setUsersFrom] = useState(initialUsers);
+  if (initialUsers !== usersFrom) { setUsersFrom(initialUsers); setUsers(initialUsers); }
   const isAdmin = currentUserRole === "admin";
 
   // ── Org edit state ──────────────────────────────────────────────
@@ -191,6 +193,8 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
       if (!res.ok) { setOrgError(data.error ?? "Error al guardar"); return; }
       setOrgSaved(true);
       setEditing(false);
+      // The read-only view shows the page's data: without this it kept the old values.
+      router.refresh();
     } catch {
       setOrgError("No se pudo conectar al servidor");
     } finally {
@@ -375,6 +379,13 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
 
   // ── Expense catalog state ───────────────────────────────────────
   const [cats, setCats]           = useState<ExpenseCategoryRow[]>(initialExpenseData?.categories ?? []);
+  // Fresh data from the server (after a sync from the ERP) replaces the lists
+  // that were copied into state when the page loaded (adjusted during render).
+  const [catsFrom, setCatsFrom]   = useState(initialExpenseData?.categories);
+  if (initialExpenseData?.categories !== catsFrom) {
+    setCatsFrom(initialExpenseData?.categories);
+    setCats(initialExpenseData?.categories ?? []);
+  }
   const [catSearch, setCatSearch] = useState("");
   const [capModal, setCapModal]   = useState<ExpenseCategoryRow | null>(null);
   const [capDaily,   setCapDaily]   = useState("");
@@ -394,8 +405,9 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
 
   function openCapModal(cat: ExpenseCategoryRow) {
     setCapModal(cat);
-    setCapDaily(cat.dailyCap ? String(Math.round(Number(cat.dailyCap))) : "");
-    setCapMonthly(cat.monthlyCap ? String(Math.round(Number(cat.monthlyCap))) : "");
+    // As stored: rounded here, saving anything turned 150.50 into 151.
+    setCapDaily(cat.dailyCap ? String(Number(cat.dailyCap)) : "");
+    setCapMonthly(cat.monthlyCap ? String(Number(cat.monthlyCap)) : "");
     setCapError("");
     setCapSaved(false);
   }
@@ -569,7 +581,9 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
                       value={timezone}
                       onChange={e => setTimezone(e.target.value)}
                     >
-                      {TIMEZONES.map(tz => (
+                      {/* The organization's own zone first when it is not in the short list:
+                          otherwise the select showed another one as if it were the current. */}
+                      {(TIMEZONES.includes(timezone) ? TIMEZONES : [timezone, ...TIMEZONES]).map(tz => (
                         <option key={tz} value={tz}>{tz}</option>
                       ))}
                     </NativeSelect>
@@ -717,7 +731,7 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
                       <Plus className="w-3.5 h-3.5" /> Nuevo webhook
                     </button>
                   ) : (
-                    <button onClick={() => { setShowHookForm(false); setHookError(""); setNewSecret(null); }}
+                    <button onClick={() => { setShowHookForm(false); setHookError(""); }}
                       className="text-xs text-muted-foreground hover:text-foreground transition-colors">
                       <X className="w-3.5 h-3.5" />
                     </button>
@@ -1334,7 +1348,7 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
               </div>
 
               <p className="text-[0.6875rem] text-muted-foreground/60 leading-relaxed">
-                Deja en blanco para sin límite. Los valores en moneda local (COP).
+                Deja en blanco para sin límite. Los valores van en la moneda de tu organización.
               </p>
             </div>
           </div>

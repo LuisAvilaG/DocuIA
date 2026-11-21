@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import { organizations, orgFeatures } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
 import { setAdminGrant } from "@/lib/features";
+import { resyncCatalogsForEnvironment } from "@/lib/netsuite/sync-catalog";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -62,7 +63,13 @@ async function handlePATCH(req: NextRequest, { params }: Params) {
         });
       }
     }
-    return NextResponse.json({ ok: true, activeNsEnvironment: environment });
+    // The stored catalogs belong to the environment just left: read them again
+    // from the new one. In the background, it takes minutes for a large catalog.
+    const changed = environment !== org.activeNsEnvironment;
+    if (changed) {
+      void resyncCatalogsForEnvironment(organizationId).catch((err) => console.error("[clients/environment] catalog resync", err));
+    }
+    return NextResponse.json({ ok: true, activeNsEnvironment: environment, catalogSync: changed ? "started" : "unchanged" });
   } catch (err) {
     console.error("[clients/environment PATCH]", err);
     return NextResponse.json({ error: "Internal error" }, { status: 500 });

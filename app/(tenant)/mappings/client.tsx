@@ -38,6 +38,8 @@ interface Props {
   subsidiaries: { id: string; name: string }[];
   mappings: Mapping[];
   canManage: boolean;
+  /** There are more mappings than the ones loaded. */
+  truncated?: boolean;
 }
 
 function relativeDate(iso: string): string {
@@ -48,7 +50,7 @@ function relativeDate(iso: string): string {
   return new Date(iso).toLocaleDateString("es-MX", { day: "numeric", month: "short" });
 }
 
-export function MappingsClient({ subsidiaries, mappings, canManage }: Props) {
+export function MappingsClient({ subsidiaries, mappings, canManage, truncated = false }: Props) {
   const [mappingRows, setMappingRows] = useState(mappings);
   const [subFilter, setSubFilter] = useState("all");
   const [vendorFilter, setVendorFilter] = useState("all");
@@ -60,6 +62,8 @@ export function MappingsClient({ subsidiaries, mappings, canManage }: Props) {
   const [searchingItems, setSearchingItems] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editorError, setEditorError] = useState<string | null>(null);
+  // Shown above the list: the editor panel is closed when a row is deleted.
+  const [listError, setListError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
 
   const vendors = useMemo(
@@ -178,16 +182,17 @@ export function MappingsClient({ subsidiaries, mappings, canManage }: Props) {
 
   async function deleteMapping(id: number) {
     setDeletingId(id);
+    setListError(null);
     try {
       const res = await fetch(`/api/v1/mappings/${id}`, { method: "DELETE" });
-      const data = await res.json() as { error?: string };
+      const data = await res.json().catch(() => ({})) as { error?: string };
       if (!res.ok) {
-        setEditorError(data.error ?? "No se pudo eliminar el mapeo");
+        setListError(data.error ?? "No se pudo eliminar el mapeo");
         return;
       }
       setMappingRows(current => current.filter(mapping => mapping.id !== id));
     } catch {
-      setEditorError("No se pudo conectar con el servidor");
+      setListError("No se pudo eliminar el mapeo: no hay conexión con el servidor");
     } finally {
       setDeletingId(null);
     }
@@ -204,6 +209,11 @@ export function MappingsClient({ subsidiaries, mappings, canManage }: Props) {
         </div>
         {canManage && <button type="button" onClick={openCreate} disabled={subsidiaries.length === 0} className={btn("primary")}><Plus />Nuevo mapeo</button>}
       </div>
+
+      {listError && <p role="alert" className="mt-3 text-[13px] text-tone-err">{listError}</p>}
+      {truncated && (
+        <p className="mt-3 text-[13px] text-tone-warn">Se muestran los {mappings.length.toLocaleString("es-MX")} mapeos más recientes. La búsqueda y los filtros solo ven estos; hay más que no aparecen aquí.</p>
+      )}
 
       <div className="mt-4.5 flex flex-wrap items-center gap-2">
         <label className="relative w-full sm:w-[280px]">

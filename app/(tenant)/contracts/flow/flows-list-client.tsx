@@ -7,6 +7,8 @@ import { Loader2, Plus, Trash2, Copy, Pencil, Workflow, X, Power, Download, Uplo
 import { btn, PageFrame } from "@/components/kit";
 import { referenceDemoGraph } from "@/lib/contracts/reference-demo";
 
+const OFFLINE = "No se pudo conectar con DocuIA. Revisa tu conexión e inténtalo de nuevo.";
+
 interface FlowRow { id: string; name: string; version: number; isActive: boolean; updatedAt: string }
 
 export function ContractFlowsListClient() {
@@ -37,10 +39,13 @@ export function ContractFlowsListClient() {
 
   async function create() {
     setBusy(true); setErr(null);
-    const res = await fetch("/api/v1/contracts/flow", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "Nuevo flujo", graph: { nodes: [], edges: [] } }) });
-    const d = await res.json(); setBusy(false);
-    if (!res.ok) { setErr(d.error ?? "No se pudo crear"); return; }
-    router.push(`/contracts/flow/${d.id}`);
+    try {
+      const res = await fetch("/api/v1/contracts/flow", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "Nuevo flujo", graph: { nodes: [], edges: [] } }) });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { setErr(d.error ?? "No se pudo crear"); return; }
+      router.push(`/contracts/flow/${d.id}`);
+    } catch { setErr(OFFLINE); }
+    finally { setBusy(false); }
   }
 
   async function createReferenceDemo() {
@@ -56,11 +61,17 @@ export function ContractFlowsListClient() {
 
   async function duplicate(f: FlowRow) {
     setBusy(true); setErr(null);
-    const src = await fetch(`/api/v1/contracts/flow/${f.id}`).then((r) => r.json());
-    const res = await fetch("/api/v1/contracts/flow", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: `${f.name} (copia)`, graph: src.flow?.graph ?? { nodes: [], edges: [] } }) });
-    const d = await res.json(); setBusy(false);
-    if (!res.ok) { setErr(d.error ?? "No se pudo duplicar"); return; }
-    await load();
+    try {
+      const read = await fetch(`/api/v1/contracts/flow/${f.id}`);
+      const src = await read.json().catch(() => ({}));
+      // Without the original there is nothing to copy: an empty "copy" would look like one.
+      if (!read.ok || !src.flow?.graph || src.flow.valid === false) { setErr(src.error ?? "No se pudo leer el flujo para duplicarlo."); return; }
+      const res = await fetch("/api/v1/contracts/flow", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: `${f.name} (copia)`, graph: src.flow.graph }) });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { setErr(d.error ?? "No se pudo duplicar"); return; }
+      await load();
+    } catch { setErr(OFFLINE); }
+    finally { setBusy(false); }
   }
 
   async function exportFlow(f: FlowRow) {
@@ -99,24 +110,28 @@ export function ContractFlowsListClient() {
 
   async function remove(f: FlowRow) {
     setBusy(true); setErr(null);
-    const res = await fetch(`/api/v1/contracts/flow/${f.id}`, { method: "DELETE" });
-    setBusy(false);
-    if (!res.ok) { const d = await res.json().catch(() => ({})); setErr(d.error ?? "No se pudo eliminar"); return; }
-    setPendingDelete(null);
-    await load();
+    try {
+      const res = await fetch(`/api/v1/contracts/flow/${f.id}`, { method: "DELETE" });
+      if (!res.ok) { const d = await res.json().catch(() => ({})); setErr(d.error ?? "No se pudo eliminar"); return; }
+      setPendingDelete(null);
+      await load();
+    } catch { setErr(OFFLINE); }
+    finally { setBusy(false); }
   }
 
   async function toggleActivation(f: FlowRow) {
     setBusy(true); setErr(null);
-    const res = await fetch(`/api/v1/contracts/flow/${f.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ isActive: !f.isActive }),
-    });
-    const data = await res.json().catch(() => ({}));
-    setBusy(false);
-    if (!res.ok) { setErr(data.error ?? "No se pudo actualizar el estado del flujo"); return; }
-    await load();
+    try {
+      const res = await fetch(`/api/v1/contracts/flow/${f.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isActive: !f.isActive }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setErr(data.error ?? "No se pudo actualizar el estado del flujo"); return; }
+      await load();
+    } catch { setErr(OFFLINE); }
+    finally { setBusy(false); }
   }
 
   if (loading) return <div className="flex-1 flex items-center justify-center"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>;

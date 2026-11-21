@@ -35,10 +35,11 @@ export async function loadContractMetrics(orgId: string, flowId: string | null =
   const from = new Date(Date.now() - 12 * 7 * 86_400_000);
   const caseScope = sql`c.organization_id = ${orgId} ${flowId ? sql`and c.flow_id = ${flowId}` : sql``}`;
 
-  // Del primer evento del caso a su primera aprobación o rechazo.
+  // Del alta del caso a su primera aprobación o rechazo. (El primer evento no
+  // sirve de inicio: los casos anteriores al registro de eventos empiezan tarde.)
   const decisions = sql`
     select c.id, c.flow_id, c.result_json,
-      min(e.changed_at) as created_at,
+      c.created_at as created_at,
       min(e.changed_at) filter (where e.to_status in ('approved', 'rejected')) as decided_at
     from contract_cases c join status_events e on e.entity = 'contract_case' and e.entity_id = c.id
     where ${caseScope} group by c.id`;

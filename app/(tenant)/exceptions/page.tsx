@@ -5,7 +5,7 @@ import { requireApAutomation } from "@/lib/products";
 import { isFeatureEnabled } from "@/lib/features";
 import { db } from "@/lib/db";
 import { exceptionQueue, historyDocuments } from "@/db/schema";
-import { and, eq, desc, inArray } from "drizzle-orm";
+import { and, eq, desc, inArray, sql } from "drizzle-orm";
 import { ExceptionsClient, type ExRow } from "./client";
 
 export default async function ExceptionsPage() {
@@ -18,7 +18,9 @@ export default async function ExceptionsPage() {
   try {
     const rows = await db.query.exceptionQueue.findMany({
       where: eq(exceptionQueue.organizationId, session.orgId),
-      orderBy: [desc(exceptionQueue.createdAt)],
+      // Open ones first: with only the newest 200 of any status, old pending
+      // exceptions dropped off the list while the dashboard still counted them.
+      orderBy: [sql`(${exceptionQueue.status} in ('pending', 'in_progress')) desc`, desc(exceptionQueue.createdAt)],
       limit: 200,
     });
     const docIds = [...new Set(rows.map((r) => r.documentId).filter((x): x is number => x != null))];

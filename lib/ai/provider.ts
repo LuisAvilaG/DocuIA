@@ -8,6 +8,7 @@
 // only (that is what the admin "clave de IA propia" stores); Claude always uses
 // the platform key.
 
+import { fitImages } from "./image-fit";
 import Anthropic from "@anthropic-ai/sdk";
 import { recordAiUsage } from "./usage";
 
@@ -237,7 +238,8 @@ function claudeResult(res: Anthropic.Message, req: AiJsonRequest): AiJsonResult 
   };
 }
 
-async function claudeJson(req: AiJsonRequest): Promise<AiJsonResult> {
+async function claudeJson(original: AiJsonRequest): Promise<AiJsonResult> {
+  const req = await fitImages(original);
   const res = await anthropic().messages.create(claudeParams(req), { timeout: req.timeoutMs ?? Math.max(DEFAULT_TIMEOUT_MS, 120_000) });
   return claudeResult(res, req);
 }
@@ -258,10 +260,16 @@ export type BatchItemResult = { customId: string; ok: true; result: AiJsonResult
 
 export async function createBatch(requests: BatchRequest[]): Promise<string> {
   if (requests.some((r) => providerOf(r.request.model) !== "anthropic")) throw new Error("Los lotes solo están disponibles con modelos Claude");
+  const fitted = await Promise.all(requests.map(async (r) => ({ customId: r.customId, request: await fitImages(r.request) })));
   const batch = await anthropic().messages.batches.create({
-    requests: requests.map((r) => ({ custom_id: r.customId, params: claudeParams(r.request) })),
+    requests: fitted.map((r) => ({ custom_id: r.customId, params: claudeParams(r.request) })),
   });
   return batch.id;
+}
+
+/** Asks the provider to stop a batch (the requests it has not processed are not charged). */
+export async function cancelBatch(id: string): Promise<void> {
+  await anthropic().messages.batches.cancel(id);
 }
 
 export async function getBatch(id: string): Promise<BatchStatus> {

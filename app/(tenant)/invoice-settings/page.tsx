@@ -97,17 +97,22 @@ export default async function InvoiceSettingsPage({ searchParams }: { searchPara
         <nav aria-label="Temas" className="flex flex-col gap-0.5 rounded-xl border border-border bg-card p-1.5 text-[13.5px]">
           {TOPICS.map((t) => (
             <Link key={t.key} href={`?tema=${t.key}`} scroll={false} aria-current={t.key === topic.key ? "page" : undefined}
-              className={cn("flex justify-between gap-2 rounded-[7px] px-2.5 py-[7px]", t.key === topic.key ? "bg-tone-info-bg font-semibold text-tone-info" : "text-foreground/75 hover:bg-secondary/60 hover:text-foreground")}>
+              className={cn("flex items-baseline justify-between gap-2 rounded-[7px] px-2.5 py-[7px]", t.key === topic.key ? "bg-tone-info-bg font-semibold text-tone-info" : "text-foreground/75 hover:bg-secondary/60 hover:text-foreground")}>
               {t.label}<em className="text-xs not-italic text-muted-foreground tabular-nums">{counts[t.key as TopicKey]}</em>
             </Link>
           ))}
         </nav>
 
-        <section aria-labelledby="topic-title">
-          <h2 id="topic-title" className="text-[17px] font-semibold tracking-[-0.01em]">{topic.title}</h2>
-          <p className="mb-3 mt-1 text-[13px] text-muted-foreground">{topic.sub}</p>
+        {/* One card per column, both starting on the same line: the topic's title
+            is the card's header. Outside the card, the list of settings began
+            lower than the menu and the two boxes looked out of step. */}
+        <section aria-labelledby="topic-title" className="overflow-hidden rounded-xl border border-border bg-card">
+          <header className="border-b border-line-soft px-4.5 py-3.5">
+            <h2 id="topic-title" className="text-[17px] font-semibold leading-tight tracking-[-0.01em]">{topic.title}</h2>
+            <p className="mt-1 text-[13px] text-muted-foreground">{topic.sub}</p>
+          </header>
           {topic.key === "subs" ? (
-            <div className="overflow-hidden rounded-xl border border-border bg-card">
+            <div>
               {subs.length === 0 && <p className="px-4.5 py-4 text-sm text-muted-foreground">Sin subsidiarias. DocuIA las configura al conectar tu ERP.</p>}
               {subs.map((s) => (
                 <div key={s.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4 border-b border-line-soft px-4.5 py-3.5 last:border-0">
@@ -120,7 +125,7 @@ export default async function InvoiceSettingsPage({ searchParams }: { searchPara
               ))}
             </div>
           ) : (
-            <div className="overflow-hidden rounded-xl border border-border bg-card">
+            <div>
               {topic.key === "lectura" && <ThresholdRow initialPct={Math.round((org?.autoProcessThreshold ?? 0.85) * 100)} />}
               <SettingRows rows={rows} />
             </div>

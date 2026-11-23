@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { Loader2, X } from "lucide-react";
@@ -77,7 +78,10 @@ export function ClientLifecycleDialog({ open, onClose, org, afterDelete = "/admi
 
   const canRun = mode === "delete" ? confirm.trim() === org.slug : true;
 
-  return (
+  // Drawn at the page's root. Inside the side panel (which is sticky, and so
+  // its own layer) the dialog stayed under anything positioned in the content
+  // next to it: the client's history showed through, on top of the form.
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-start justify-center p-4 pt-14 overflow-y-auto" style={{ backgroundColor: "oklch(0.18 0.015 258 / 0.45)", backdropFilter: "blur(1.5px)" }}
       onClick={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
       <div role="dialog" aria-modal="true" aria-labelledby="lifecycle-title" className="w-full max-w-[600px] bg-card rounded-2xl p-8 flex flex-col gap-5" style={{ boxShadow: "0 20px 60px oklch(0.18 0.015 258 / 0.18), 0 4px 16px oklch(0.18 0.015 258 / 0.08)" }}>
@@ -141,7 +145,8 @@ export function ClientLifecycleDialog({ open, onClose, org, afterDelete = "/admi
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

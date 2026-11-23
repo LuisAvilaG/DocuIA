@@ -1,10 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { ArrowRight, Loader2, Search, SlidersHorizontal } from "lucide-react";
+import { ArrowRight, ChevronDown, Loader2, Search, SlidersHorizontal } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Pill, Chip, Notice, fmtDate } from "@/components/admin/ui";
@@ -37,6 +37,27 @@ const PRODUCT_SUB: Record<string, string> = {
 };
 const PLAN_LABEL: Record<string, string> = { starter: "Starter", growth: "Growth", enterprise: "Enterprise" };
 
+// Which products are folded, remembered in this browser across clients and
+// visits: with three products and Plataforma open, reaching the last one meant
+// scrolling past every feature of the others. Kept in memory too, so folding
+// still works where the browser does not allow storage.
+const COLLAPSED_KEY = "docuia-admin-products-collapsed";
+const collapsedListeners = new Set<() => void>();
+let collapsedMemory: string | null = null;
+function readCollapsed(): string {
+  if (collapsedMemory !== null) return collapsedMemory;
+  try { return localStorage.getItem(COLLAPSED_KEY) ?? "{}"; } catch { return "{}"; }
+}
+function writeCollapsed(next: Record<string, boolean>) {
+  collapsedMemory = JSON.stringify(next);
+  try { localStorage.setItem(COLLAPSED_KEY, collapsedMemory); } catch { /* private mode */ }
+  collapsedListeners.forEach((listener) => listener());
+}
+function subscribeCollapsed(listener: () => void) {
+  collapsedListeners.add(listener);
+  return () => { collapsedListeners.delete(listener); };
+}
+
 function hasConfig(f: FeatureRow) { return f.id === "custom_netsuite_forms" || (f.featureType !== "boolean" && (f.configSchema?.length ?? 0) > 0); }
 
 /**
@@ -54,7 +75,10 @@ export function FeaturesView({ orgId, products, features, subsidiaries, playbook
   const [saving, setSaving] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const storedCollapsed = useSyncExternalStore(subscribeCollapsed, readCollapsed, () => "{}");
+  const collapsed = useMemo<Record<string, boolean>>(() => {
+    try { const parsed: unknown = JSON.parse(storedCollapsed); return parsed && typeof parsed === "object" ? parsed as Record<string, boolean> : {}; } catch { return {}; }
+  }, [storedCollapsed]);
   const [configuring, setConfiguring] = useState<FeatureRow | null>(null);
 
   async function saveProducts(next: ProductState[], changedKey: string) {
@@ -129,6 +153,9 @@ export function FeaturesView({ orgId, products, features, subsidiaries, playbook
   const totalOn = rows.filter((f) => f.adminGranted && (!f.product || state.find((p) => p.key === f.product)?.contracted)).length;
   const erpProducts = state.filter((p) => p.contracted && p.requiresIntegration);
   const erpHref = `/admin/clients/${orgId}/erp`;
+  // The groups that can be folded: contracted products with features, and Plataforma.
+  const foldable = groups.filter((g) => (g.key ? state.find((p) => p.key === g.key)?.contracted : true) && rows.some((f) => f.product === g.key)).map((g) => g.key ?? "platform");
+  const anyOpen = foldable.some((key) => !collapsed[key]);
 
   return (
     <>
@@ -145,10 +172,18 @@ export function FeaturesView({ orgId, products, features, subsidiaries, playbook
         <p className="text-[15px] text-muted-foreground max-w-[58ch]">
           Cada cambio se aplica al instante y queda en Auditoría. <span className="text-foreground font-medium">{totalOn} features activas</span> en los productos contratados.
         </p>
-        <label className="relative block w-[260px] shrink-0">
-          <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-          <TextInput type="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar feature" aria-label="Buscar feature" className="pl-9 py-2" />
-        </label>
+        <div className="flex items-center gap-4 shrink-0">
+          {!q && foldable.length > 1 && (
+            <button type="button" onClick={() => writeCollapsed(anyOpen ? Object.fromEntries(foldable.map((key) => [key, true])) : {})}
+              className="text-xs font-medium text-primary whitespace-nowrap hover:underline underline-offset-4">
+              {anyOpen ? "Contraer todo" : "Expandir todo"}
+            </button>
+          )}
+          <label className="relative block w-[260px]">
+            <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <TextInput type="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar feature" aria-label="Buscar feature" className="pl-9 py-2" />
+          </label>
+        </div>
       </div>
       {error && <p className="text-sm text-destructive -mb-6">{error}</p>}
 
@@ -158,7 +193,11 @@ export function FeaturesView({ orgId, products, features, subsidiaries, playbook
         const shown = list.filter(matches);
         const activeCount = list.filter((f) => f.adminGranted).length;
         const contracted = product ? product.contracted : true;
-        const open = contracted && !(collapsed[g.key ?? "platform"] ?? false);
+        const groupKey = g.key ?? "platform";
+        // A search opens every group that has a match, whatever was folded.
+        const open = contracted && (Boolean(q) || !(collapsed[groupKey] ?? false));
+        const canFold = contracted && list.length > 0 && !q;
+        const toggle = () => writeCollapsed({ ...collapsed, [groupKey]: open });
         if (q && shown.length === 0) return null;
         return (
           <section key={g.key ?? "platform"} className={cn("rounded-2xl border bg-card overflow-hidden", contracted ? "border-border" : "border-dashed border-border")}>
@@ -167,13 +206,15 @@ export function FeaturesView({ orgId, products, features, subsidiaries, playbook
                 <Switch checked={product.contracted} onCheckedChange={(v) => toggleProduct(product.key, Boolean(v))} disabled={saving !== null} aria-label={`${product.name} contratado`} />
               ) : <span className="w-8" />}
               {g.key ? <span className={cn("w-12 shrink-0 transition-opacity", !contracted && "opacity-50")}><ProductArt product={g.key} /></span> : <span className="w-12 h-9 shrink-0 rounded-lg bg-secondary" />}
-              <div className="flex-1 min-w-0">
+              {/* The name folds and unfolds the product; the switch and the ERP link keep their own clicks. */}
+              <button type="button" onClick={canFold ? toggle : undefined} disabled={!canFold} aria-expanded={canFold ? open : undefined}
+                className={cn("flex-1 min-w-0 text-left rounded-md outline-none focus-visible:ring-2 focus-visible:ring-primary/30", canFold ? "cursor-pointer" : "cursor-default")}>
                 <div className={cn("font-semibold", !contracted && "text-muted-foreground")}>{g.title}</div>
                 <div className="text-xs text-muted-foreground truncate">
                   {g.sub}{product?.contracted && product.enabledAt ? ` · activo desde ${fmtDate(product.enabledAt)}` : ""}
                   {product && !product.contracted ? ` · No contratado. Al activarlo se habilitan ${list.length} features.` : ""}
                 </div>
-              </div>
+              </button>
               {saving === g.key && <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />}
               {product?.contracted && product.requiresIntegration && (
                 <Link href={erpHref} className="inline-flex items-center gap-1.5 text-xs font-medium text-primary whitespace-nowrap hover:underline underline-offset-4">
@@ -182,8 +223,11 @@ export function FeaturesView({ orgId, products, features, subsidiaries, playbook
                 </Link>
               )}
               {contracted && <span className="text-xs text-muted-foreground tabular-nums whitespace-nowrap">{activeCount} de {list.length} activas</span>}
-              {contracted && list.length > 0 && !q && (
-                <button type="button" onClick={() => setCollapsed((c) => ({ ...c, [g.key ?? "platform"]: open }))} className="text-xs text-primary whitespace-nowrap">{open ? "Ocultar" : "Mostrar"}</button>
+              {canFold && (
+                <button type="button" onClick={toggle} aria-label={open ? `Contraer ${g.title}` : `Expandir ${g.title}`} title={open ? "Contraer" : "Expandir"}
+                  className="flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground">
+                  <ChevronDown className={cn("w-4 h-4 transition-transform", !open && "-rotate-90")} />
+                </button>
               )}
             </header>
 

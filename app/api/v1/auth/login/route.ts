@@ -3,8 +3,9 @@ import { loginSchema, accountRateKey } from "@/lib/auth/input";
 import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { orgUsers, authSessions } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { orgUsers, authSessions, organizations } from "@/db/schema";
+import { eq, sql } from "drizzle-orm";
+import { orgBlockMessage } from "@/lib/auth/org-block";
 import { compare } from "bcryptjs";
 import { v4 as uuid } from "uuid";
 import { randomBytes } from "crypto";
@@ -39,11 +40,13 @@ async function handlePOST(req: NextRequest) {
     const accountLimit = await rateLimit(accountKey, { max: 5, windowSec: 900 });
     if (!accountLimit.ok) return NextResponse.json({ error: "Demasiados intentos" }, { status: 429, headers: { "Retry-After": String(accountLimit.retryAfterSec ?? 900) } });
 
+    // The address is compared without case: the form lowercases what is typed,
+    // and an account stored as "Ana@Empresa.com" could never sign in.
     const user = await db.query.orgUsers.findFirst({
-      where: eq(orgUsers.email, email),
+      where: eq(sql`lower(${orgUsers.email})`, email),
     });
 
-    if (!user || !user.passwordHash || !user.isActive || !await isOrganizationActive(user.organizationId)) {
+    if (!user || !user.passwordHash) {
       // The same hash work as a wrong password, so the response time does not
       // tell which emails have an account.
       await compare(password, NO_ACCOUNT_HASH);
@@ -56,6 +59,20 @@ async function handlePOST(req: NextRequest) {
     }
 
     await clearRateLimit(accountKey);
+
+    // The password is right, so the real reason can be said: answering
+    // "credenciales inválidas" to a deactivated user, or to one whose company is
+    // suspended or past its trial, sent people to reset a password that was fine.
+    if (!user.isActive) {
+      return NextResponse.json({ error: "Tu usuario está desactivado. Pide a un administrador de tu empresa que lo reactive." }, { status: 403 });
+    }
+    if (!await isOrganizationActive(user.organizationId)) {
+      const org = await db.query.organizations.findFirst({
+        where: eq(organizations.id, user.organizationId),
+        columns: { status: true, trialEndsAt: true, deletedAt: true },
+      });
+      return NextResponse.json({ error: orgBlockMessage(org) ?? "La cuenta de tu empresa no está activa. Contacta a DocuIA." }, { status: 403 });
+    }
 
     // Checked after the password so the response does not reveal which
     // accounts exist, but before a session is issued: a session from a blocked

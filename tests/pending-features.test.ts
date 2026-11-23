@@ -529,3 +529,15 @@ test("totales por moneda: nunca se suman monedas distintas", async () => {
     [{ currency: "MXN", amount: 150.5 }, { currency: "USD", amount: 45 }]);
   assert.deepEqual(amountsByCurrency([]), []);
 });
+
+test("acceso: el motivo real cuando la empresa no puede entrar", async () => {
+  const { orgBlockMessage } = await import("../lib/auth/org-block");
+  const now = new Date("2026-11-23T12:00:00Z");
+  assert.equal(orgBlockMessage({ status: "active", trialEndsAt: null }, now), null);
+  assert.equal(orgBlockMessage({ status: "trial", trialEndsAt: null }, now), null);
+  assert.equal(orgBlockMessage({ status: "trial", trialEndsAt: new Date("2026-12-01T00:00:00Z") }, now), null);
+  assert.match(orgBlockMessage({ status: "trial", trialEndsAt: new Date("2026-11-01T00:00:00Z") }, now) ?? "", /periodo de prueba/);
+  assert.match(orgBlockMessage({ status: "suspended", trialEndsAt: null }, now) ?? "", /suspendida/);
+  assert.match(orgBlockMessage({ status: "active", trialEndsAt: null, deletedAt: now }, now) ?? "", /ya no está disponible/);
+  assert.match(orgBlockMessage(null, now) ?? "", /ya no está disponible/);
+});

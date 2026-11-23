@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { ApprovalForm } from "./approval-form";
 import { RuleFromText } from "./rule-from-text";
+import { FieldNamesContext, useFieldName, type FieldNames } from "./field-names";
 import { btn, StatusPill } from "@/components/kit";
 import { DocEditor } from "./doc-editor";
 import { VisualTrainingWorkspace, type TrainingField } from "./visual-training-workspace";
@@ -120,67 +121,127 @@ function NodeCard({ type, data, selected }: NodeProps) {
 }
 
 // ── Side-panel forms ──────────────────────────────────────────────────
-const inp = "w-full bg-background border border-border rounded-md px-2.5 py-1.5 text-xs text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/15";
-const lbl = "text-[11px] font-medium text-muted-foreground";
+// One vocabulary for every stage form, the same as the approval form's: a label
+// that names the field, a line under it saying what it is for, and a heading
+// over each column of a repeated row. An input that only carries a placeholder
+// stops saying what it is the moment it has a value.
+const inp = "w-full min-h-9 rounded-lg border border-border bg-card px-2.5 py-1.5 text-[13px] text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15";
+const lbl = "block text-[13px] font-semibold text-foreground";
+const hlp = "block text-xs leading-relaxed text-muted-foreground";
+const colHead = "text-[11.5px] font-medium leading-tight text-muted-foreground";
+const box = "rounded-[10px] border border-border bg-background p-3";
+const check = "mt-0.5 size-4 shrink-0 accent-primary";
+const addBtn = "inline-flex items-center gap-1.5 self-start text-[13px] font-semibold text-link hover:underline";
+const removeBtn = "flex size-6 shrink-0 items-center justify-center self-center rounded text-muted-foreground hover:text-tone-err";
 
-function FieldRow({ label, children }: { label: string; children: React.ReactNode }) {
-  return <label className="block space-y-1"><span className={lbl}>{label}</span>{children}</label>;
+function FieldRow({ label, help, children }: { label: string; help?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <label className="flex flex-col gap-1.5">
+      <span><span className={lbl}>{label}</span>{help && <span className={`${hlp} mt-0.5`}>{help}</span>}</span>
+      {children}
+    </label>
+  );
+}
+
+/** A group of controls under one title, for fields that are not a single input. */
+function FieldGroup({ label, help, children }: { label: string; help?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div><span className={lbl}>{label}</span>{help && <span className={`${hlp} mt-0.5`}>{help}</span>}</div>
+      {children}
+    </div>
+  );
+}
+
+/** "Número del contrato" → "numero_del_contrato": the key a name gets when none was typed. */
+function keyFrom(name: string): string {
+  return name.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60);
 }
 
 interface DocTypeOpt { key: string; name: string }
 
 function IntakeForm({ data, patch, order, total, onMove }: { data: AnyData; patch: (p: AnyData) => void; order?: number; total?: number; onMove?: (dir: -1 | 1) => void }) {
   return (
-    <div className="space-y-3">
+    <div className="flex flex-col gap-4">
       {order != null && total != null && total > 1 && (
-        <div className="flex items-center justify-between rounded-md border border-border bg-background/60 px-2.5 py-1.5">
-          <span className="text-[11px] text-muted-foreground">Orden de entrada: <span className="text-foreground font-medium tabular-nums">#{order}</span> de {total}</span>
+        <div className={`${box} flex items-center justify-between !py-2`}>
+          <span className="text-[13px] text-muted-foreground">Se pide en el lugar <span className="font-semibold text-foreground tabular-nums">{order}</span> de {total}</span>
           <span className="flex items-center gap-1">
-            <button onClick={() => onMove?.(-1)} disabled={order <= 1} className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary disabled:opacity-30" title="Subir"><ChevronUp className="w-3.5 h-3.5" /></button>
-            <button onClick={() => onMove?.(1)} disabled={order >= total} className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary disabled:opacity-30" title="Bajar"><ChevronDown className="w-3.5 h-3.5" /></button>
+            <button type="button" onClick={() => onMove?.(-1)} disabled={order <= 1} className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground disabled:opacity-30" aria-label="Pedirlo antes" title="Pedirlo antes"><ChevronUp className="size-4" /></button>
+            <button type="button" onClick={() => onMove?.(1)} disabled={order >= total} className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground disabled:opacity-30" aria-label="Pedirlo después" title="Pedirlo después"><ChevronDown className="size-4" /></button>
           </span>
         </div>
       )}
-      <FieldRow label="Nombre del documento"><input className={inp} value={String(data.name ?? "")} onChange={(e) => patch({ name: e.target.value })} placeholder="Contrato" /></FieldRow>
-      <FieldRow label="Clave (key)"><input className={`${inp} font-mono`} value={String(data.docTypeKey ?? "")} onChange={(e) => patch({ docTypeKey: e.target.value })} placeholder="contrato" /></FieldRow>
-      <FieldRow label="Pista para la IA (opcional)"><textarea rows={2} className={inp} value={String(data.hint ?? "")} onChange={(e) => patch({ hint: e.target.value })} placeholder="acuerdo comercial entre la sociedad y un tercero" /></FieldRow>
+      <FieldRow label="Nombre del documento" help="Así lo ve quien crea el caso, en la casilla donde lo sube.">
+        <input className={inp} value={String(data.name ?? "")} onChange={(e) => patch({ name: e.target.value })} placeholder="Ej. Contrato" />
+      </FieldRow>
+      <FieldRow label="Clave interna" help="Identificador corto, sin espacios. Con él las demás etapas saben de qué documento hablas; si lo cambias, vuelve a elegir el documento en ellas.">
+        <input className={`${inp} font-mono !text-xs`} value={String(data.docTypeKey ?? "")} onChange={(e) => patch({ docTypeKey: e.target.value })} placeholder="contrato" />
+      </FieldRow>
+      <FieldRow label="Descripción para la IA (opcional)" help="Una frase que diga qué es. Ayuda a reconocerlo cuando se suben varios archivos juntos.">
+        <textarea rows={2} className={inp} value={String(data.hint ?? "")} onChange={(e) => patch({ hint: e.target.value })} placeholder="Ej. Acuerdo comercial entre la sociedad y un tercero" />
+      </FieldRow>
       <label className="flex items-start gap-2 text-[13px]">
-        <input type="checkbox" className="mt-0.5 size-4 accent-primary" checked={data.required !== false} onChange={(e) => patch({ required: e.target.checked })} />
-        <span>Obligatorio al crear el caso<span className="block text-xs text-muted-foreground">Si no lo es, su casilla aparece como «Opcional» y el caso se puede crear sin él.</span></span>
+        <input type="checkbox" className={check} checked={data.required !== false} onChange={(e) => patch({ required: e.target.checked })} />
+        <span><span className="font-semibold">Obligatorio al crear el caso</span><span className={hlp}>Si no lo es, su casilla aparece como «Opcional» y el caso se puede crear sin él.</span></span>
       </label>
     </div>
   );
 }
 
 interface FieldT { fieldKey: string; label: string; isList: boolean }
+const fieldCols = "grid grid-cols-[minmax(0,1fr)_124px_40px_24px] gap-1.5";
+
 function ExtractForm({ data, patch, docTypes, onTrain }: { data: AnyData; patch: (p: AnyData) => void; docTypes: DocTypeOpt[]; onTrain: (input: { documentType: string; documentName: string; fields: TrainingField[] }) => void }) {
   const fields = (Array.isArray(data.fields) ? data.fields : []) as FieldT[];
-  const set = (f: FieldT[]) => patch({ fields: f });
+  const update = (index: number, change: Partial<FieldT>) => patch({ fields: fields.map((field, i) => (i === index ? { ...field, ...change } : field)) });
   const documentType = String(data.docTypeKey ?? "");
   const documentName = docTypes.find((item) => item.key === documentType)?.name || documentType;
+  const trainBlocked = !documentType ? "Elige primero el documento." : fields.some((field) => !field.fieldKey) ? "Completa la clave de cada dato." : null;
   return (
-    <div className="space-y-3">
-      <FieldRow label="Documento del que extrae">
-        <Select value={String(data.docTypeKey ?? "")} onChange={(v) => patch({ docTypeKey: v })}
-          options={docTypes.map((d) => ({ value: d.key, label: `${d.name} (${d.key})` }))} placeholder="Elige un documento de entrada" />
+    <div className="flex flex-col gap-4">
+      <FieldRow label="Documento que se lee" help={docTypes.length ? "Uno de los «Documentos esperados» de este flujo." : "Agrega primero una etapa «Documento esperado»."}>
+        <Select value={documentType} onChange={(v) => patch({ docTypeKey: v })}
+          options={docTypes.map((d) => ({ value: d.key, label: d.name }))} placeholder="Elige el documento" />
       </FieldRow>
-      <div>
-        <span className={lbl}>Campos a extraer</span>
-        <div className="space-y-1.5 mt-1">
-          {fields.map((f, i) => (
-            <div key={i} className="flex items-center gap-1.5">
-              <input className={`${inp} font-mono !py-1 w-24`} placeholder="key" value={f.fieldKey} onChange={(e) => set(fields.map((x, j) => j === i ? { ...x, fieldKey: e.target.value } : x))} />
-              <input className={`${inp} !py-1`} placeholder="Etiqueta" value={f.label} onChange={(e) => set(fields.map((x, j) => j === i ? { ...x, label: e.target.value } : x))} />
-              <label className="flex items-center gap-1 text-[10px] text-muted-foreground shrink-0" title="Varios valores (lista)"><input type="checkbox" checked={!!f.isList} onChange={(e) => set(fields.map((x, j) => j === i ? { ...x, isList: e.target.checked } : x))} />lista</label>
-              <button onClick={() => set(fields.filter((_, j) => j !== i))} className="text-muted-foreground hover:text-destructive shrink-0"><Trash2 className="w-3.5 h-3.5" /></button>
-            </div>
-          ))}
-          <button onClick={() => set([...fields, { fieldKey: "", label: "", isList: false }])} className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline"><Plus className="w-3 h-3" /> Agregar campo</button>
-        </div>
-      </div>
-      <div className="rounded-lg border border-primary/20 bg-primary/[0.035] p-3">
-        <div className="flex items-start gap-2"><span className="mt-0.5 rounded-md bg-primary/10 p-1 text-primary"><PencilRuler className="h-3.5 w-3.5" /></span><div><p className="text-[11px] font-semibold text-foreground">Entrenar con documento</p><p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">Sube una muestra y marca visualmente dónde aparece cada campo. Crea otra variante solo cuando cambie el formato.</p></div></div>
-        <button type="button" disabled={!documentType || fields.some((field) => !field.fieldKey)} onClick={() => onTrain({ documentType, documentName, fields: fields.filter((field) => field.fieldKey).map((field) => ({ fieldKey: field.fieldKey, label: field.label || field.fieldKey })) })} className="mt-2.5 inline-flex items-center gap-1.5 rounded-md border border-primary/30 bg-card px-2.5 py-1.5 text-[11px] font-medium text-primary hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-50"><PencilRuler className="h-3.5 w-3.5" /> Abrir entrenamiento visual</button>
+
+      <FieldGroup label="Datos que se extraen" help="Cada renglón es un dato que la IA busca en el documento.">
+        {fields.length > 0 && (
+          <div className={`${fieldCols} mt-1`} aria-hidden>
+            <span className={colHead}>Nombre del dato</span>
+            <span className={colHead}>Clave interna</span>
+            <span className={`${colHead} text-center`}>Varios</span>
+            <span />
+          </div>
+        )}
+        {fields.map((f, i) => (
+          <div key={i} className={fieldCols}>
+            <input className={inp} aria-label="Nombre del dato" placeholder="Ej. Número del contrato" value={f.label}
+              onChange={(e) => update(i, { label: e.target.value })}
+              // A new row gets its key from the name. Only while the key is
+              // empty: a key in use is what controls and templates point at.
+              onBlur={() => { if (!f.fieldKey.trim() && f.label.trim()) update(i, { fieldKey: keyFrom(f.label) }); }} />
+            <input className={`${inp} font-mono !text-xs`} aria-label="Clave interna" placeholder="se llena sola" value={f.fieldKey}
+              onChange={(e) => update(i, { fieldKey: e.target.value.replace(/\s+/g, "_") })} />
+            <label className="flex items-center justify-center" title="Puede traer varios valores">
+              <input type="checkbox" className="size-4 accent-primary" aria-label="Puede traer varios valores" checked={!!f.isList} onChange={(e) => update(i, { isList: e.target.checked })} />
+            </label>
+            <button type="button" onClick={() => patch({ fields: fields.filter((_, j) => j !== i) })} className={removeBtn} aria-label={`Quitar ${f.label || "este dato"}`} title="Quitar este dato"><Trash2 className="size-4" /></button>
+          </div>
+        ))}
+        <button type="button" onClick={() => patch({ fields: [...fields, { fieldKey: "", label: "", isList: false }] })} className={`${addBtn} mt-0.5`}><Plus className="size-4" />Agregar dato</button>
+        <dl className="mt-2 flex flex-col gap-1.5 border-t border-line-soft pt-3 text-xs leading-relaxed text-muted-foreground">
+          <div><dt className="inline font-semibold text-foreground/80">Nombre del dato: </dt><dd className="inline">como lo verá tu equipo en el caso.</dd></div>
+          <div><dt className="inline font-semibold text-foreground/80">Clave interna: </dt><dd className="inline">identificador sin espacios con el que controles, cálculos y plantillas se refieren al dato. Se llena sola con el nombre; evita cambiarla cuando ya esté en uso.</dd></div>
+          <div><dt className="inline font-semibold text-foreground/80">Varios: </dt><dd className="inline">márcalo si el documento puede traer más de uno, como los representantes o las cláusulas.</dd></div>
+        </dl>
+      </FieldGroup>
+
+      <div className="rounded-[10px] border border-primary/20 bg-primary/[0.035] p-3">
+        <p className="flex items-center gap-1.5 text-[13px] font-semibold"><PencilRuler className="size-4 text-primary" />Entrenar con un documento de muestra</p>
+        <p className={`${hlp} mt-1`}>Sube una muestra y marca en ella dónde aparece cada dato. Crea otra variante solo cuando cambie el formato del documento.</p>
+        <button type="button" disabled={!!trainBlocked} onClick={() => onTrain({ documentType, documentName, fields: fields.filter((field) => field.fieldKey).map((field) => ({ fieldKey: field.fieldKey, label: field.label || field.fieldKey })) })} className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg border border-primary/30 bg-card px-2.5 py-1.5 text-[13px] font-medium text-primary hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-50">Abrir entrenamiento visual</button>
+        {trainBlocked && <p className={`${hlp} mt-1.5`}>{trainBlocked}</p>}
       </div>
     </div>
   );
@@ -196,19 +257,23 @@ const CALC_OPERATIONS = [
 
 type FixedValue = { key: string; label: string; value: number };
 type AnalysisNodeOption = { id: string; name: string };
+const fixedCols = "grid grid-cols-[minmax(0,1fr)_96px_76px_24px] gap-1.5";
 
 function CalculationForm({ data, patch, docTypes, fieldsByType, analysisNodes }: { data: AnyData; patch: (p: AnyData) => void; docTypes: DocTypeOpt[]; fieldsByType: Record<string, string[]>; analysisNodes: AnalysisNodeOption[] }) {
+  const fieldName = useFieldName();
   const base = (data.base && typeof data.base === "object" ? data.base : {}) as { type?: "field" | "fixed"; docType?: string; field?: string; key?: string };
   const operation = String(data.operation ?? "percentage");
   const fixedValues = (Array.isArray(data.fixedValues) ? data.fixedValues : []) as FixedValue[];
   const mode = data.mode === "each_analysis_item" ? "each_analysis_item" : "single";
   const rawOperand = data.operand;
   const operand = typeof rawOperand === "number" ? { type: "number", value: rawOperand } : (rawOperand && typeof rawOperand === "object" ? rawOperand : { type: "number", value: 0 }) as { type?: string; value?: number; key?: string };
-  const baseField = base.type === "fixed" ? base.key || "valor fijo" : base.field || "campo base";
-  const operandName = operand.type === "fixed" || operand.type === "item" ? operand.key || "valor" : String(operand.value ?? 0);
+  const fixedName = (key?: string) => fixedValues.find((item) => item.key === key)?.label || key;
+  const baseField = base.type === "fixed" ? fixedName(base.key) || "valor fijo" : base.field ? fieldName(base.docType ?? "", base.field) : "valor base";
+  const operandName = operand.type === "fixed" ? fixedName(operand.key) || "valor" : operand.type === "item" ? operand.key || "valor" : String(operand.value ?? 0);
   const operatorText = operation === "percentage" ? `× ${operandName}%` : operation === "multiply" ? `× ${operandName}` : operation === "add" ? `+ ${operandName}` : operation === "subtract" ? `− ${operandName}` : `÷ ${operandName}`;
   const setBase = (next: Record<string, unknown>) => patch({ base: { type: base.type ?? "field", docType: base.docType ?? "", field: base.field ?? "", ...next } });
   const setFixed = (values: FixedValue[]) => patch({ fixedValues: values });
+  const updateFixed = (index: number, change: Partial<FixedValue>) => setFixed(fixedValues.map((item, i) => (i === index ? { ...item, ...change } : item)));
   const setOperand = (next: Record<string, unknown>) => patch({ operand: next });
   const currentFilter = (data.itemFilter && typeof data.itemFilter === "object" ? data.itemFilter : {}) as { key?: string; value?: string };
   const [filterDraft, setFilterDraft] = useState({ key: currentFilter.key ?? "", value: currentFilter.value ?? "" });
@@ -219,48 +284,86 @@ function CalculationForm({ data, patch, docTypes, fieldsByType, analysisNodes }:
     // rejects it and users should still be able to save a work-in-progress node.
     patch({ itemFilter: next.key?.trim() && next.value?.trim() ? next : undefined });
   };
+  const fixedOptions = fixedValues.filter((item) => item.key).map((item) => ({ value: item.key, label: item.label || item.key }));
   return (
-    <div className="space-y-3">
-      <FieldRow label="Nombre del cálculo"><input className={inp} value={String(data.name ?? "")} onChange={(event) => patch({ name: event.target.value })} placeholder="Valor asegurado de seriedad" /></FieldRow>
-      <div className="grid grid-cols-2 gap-2">
-        <FieldRow label="Clave de resultado"><input className={`${inp} font-mono`} value={String(data.key ?? "")} onChange={(event) => patch({ key: event.target.value.replace(/\s+/g, "_") })} placeholder="valor_asegurado" /></FieldRow>
-        <FieldRow label="Etiqueta visible"><input className={inp} value={String(data.label ?? "")} onChange={(event) => patch({ label: event.target.value })} placeholder="Valor asegurado" /></FieldRow>
-      </div>
-      <div className="rounded-lg border border-border bg-background/60 p-3 space-y-2.5">
-        <div><p className="text-[11px] font-semibold text-foreground">Valores fijos del cálculo</p><p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">Úsalos para tasas, límites, SMMLV, UVT o cualquier dato que no proviene del documento.</p></div>
-        {fixedValues.map((value, index) => <div key={index} className="grid grid-cols-[88px_1fr_80px_20px] items-center gap-1.5">
-          <input className={`${inp} !py-1 font-mono`} value={value.key} placeholder="smmlv" onChange={(event) => setFixed(fixedValues.map((item, i) => i === index ? { ...item, key: event.target.value.replace(/\s+/g, "_") } : item))} />
-          <input className={`${inp} !py-1`} value={value.label} placeholder="Salario mínimo" onChange={(event) => setFixed(fixedValues.map((item, i) => i === index ? { ...item, label: event.target.value } : item))} />
-          <input className={`${inp} !py-1 tabular-nums`} type="number" step="any" value={Number.isFinite(value.value) ? value.value : ""} onChange={(event) => setFixed(fixedValues.map((item, i) => i === index ? { ...item, value: Number(event.target.value) } : item))} />
-          <button type="button" onClick={() => setFixed(fixedValues.filter((_, i) => i !== index))} className="text-muted-foreground hover:text-destructive"><Trash2 className="h-3.5 w-3.5" /></button>
-        </div>)}
-        <button type="button" onClick={() => setFixed([...fixedValues, { key: "", label: "", value: 0 }])} className="inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"><Plus className="h-3 w-3" /> Agregar valor fijo</button>
-      </div>
-      <div>
-        <span className={lbl}>Valor base</span>
-        <div className="mt-1 grid grid-cols-2 gap-1.5">
-          <Select value={base.type === "fixed" ? "fixed" : "field"} onChange={(value) => setBase(value === "fixed" ? { type: "fixed", key: "", docType: undefined, field: undefined } : { type: "field", key: undefined, docType: "", field: "" })} options={[{ value: "field", label: "Campo extraído" }, { value: "fixed", label: "Valor fijo" }]} />
-          {base.type === "fixed" ? <Select value={base.key ?? ""} onChange={(value) => setBase({ key: value })} options={fixedValues.filter((item) => item.key).map((item) => ({ value: item.key, label: item.label || item.key }))} placeholder="Elige valor" /> : <Select value={base.docType ?? ""} onChange={(value) => setBase({ docType: value, field: "" })} options={docTypes.map((doc) => ({ value: doc.key, label: doc.name }))} placeholder="Documento" />}
+    <div className="flex flex-col gap-4">
+      <FieldRow label="Nombre del cálculo" help="Para reconocerlo en el flujo.">
+        <input className={inp} value={String(data.name ?? "")} onChange={(event) => patch({ name: event.target.value })} placeholder="Ej. Valor asegurado de seriedad" />
+      </FieldRow>
+      <div className="flex flex-col gap-1.5">
+        <div className="grid grid-cols-2 gap-2">
+          <FieldRow label="Nombre del resultado"><input className={inp} value={String(data.label ?? "")} onChange={(event) => patch({ label: event.target.value })} placeholder="Ej. Valor asegurado" /></FieldRow>
+          <FieldRow label="Clave interna"><input className={`${inp} font-mono !text-xs`} value={String(data.key ?? "")} onChange={(event) => patch({ key: event.target.value.replace(/\s+/g, "_") })} placeholder="valor_asegurado" /></FieldRow>
         </div>
-        {base.type !== "fixed" && <div className="mt-1.5"><Select value={base.field ?? ""} onChange={(value) => setBase({ field: value })} options={(fieldsByType[base.docType ?? ""] ?? []).map((field) => ({ value: field, label: field }))} placeholder={base.docType ? "Campo" : "Elige primero el documento"} disabled={!base.docType} /></div>}
+        <p className={hlp}>El resultado aparece en el caso con ese nombre. La clave, sin espacios, es la que usan las plantillas y otros cálculos.</p>
       </div>
-      <div className="grid grid-cols-2 gap-2">
-        <FieldRow label="Operación"><Select value={operation} onChange={(value) => patch({ operation: value })} options={CALC_OPERATIONS} /></FieldRow>
-        <FieldRow label="Segundo valor"><Select value={operand.type === "fixed" ? "fixed" : operand.type === "item" ? "item" : "number"} onChange={(value) => setOperand(value === "fixed" ? { type: "fixed", key: "" } : value === "item" ? { type: "item", key: "" } : { type: "number", value: 0 })} options={[{ value: "number", label: operation === "percentage" ? "Número / porcentaje" : "Número" }, { value: "fixed", label: "Valor fijo" }, ...(mode === "each_analysis_item" ? [{ value: "item", label: "Campo del elemento" }] : [])]} /></FieldRow>
+
+      <div className={`${box} flex flex-col gap-1.5`}>
+        <div><span className={lbl}>Valores fijos</span><span className={`${hlp} mt-0.5`}>Números que no vienen del documento: tasas, topes, salario mínimo, UVT. Úsalos abajo como valor base o en la operación.</span></div>
+        {fixedValues.length > 0 && (
+          <div className={`${fixedCols} mt-1`} aria-hidden><span className={colHead}>Nombre</span><span className={colHead}>Clave interna</span><span className={colHead}>Valor</span><span /></div>
+        )}
+        {fixedValues.map((value, index) => (
+          <div key={index} className={fixedCols}>
+            <input className={inp} aria-label="Nombre del valor fijo" value={value.label} placeholder="Ej. Salario mínimo" onChange={(event) => updateFixed(index, { label: event.target.value })}
+              onBlur={() => { if (!value.key.trim() && value.label.trim()) updateFixed(index, { key: keyFrom(value.label) }); }} />
+            <input className={`${inp} font-mono !text-xs`} aria-label="Clave interna" value={value.key} placeholder="se llena sola" onChange={(event) => updateFixed(index, { key: event.target.value.replace(/\s+/g, "_") })} />
+            <input className={`${inp} tabular-nums`} aria-label="Valor" type="number" step="any" value={Number.isFinite(value.value) ? value.value : ""} onChange={(event) => updateFixed(index, { value: Number(event.target.value) })} />
+            <button type="button" onClick={() => setFixed(fixedValues.filter((_, i) => i !== index))} className={removeBtn} aria-label={`Quitar ${value.label || "este valor"}`} title="Quitar este valor"><Trash2 className="size-4" /></button>
+          </div>
+        ))}
+        <button type="button" onClick={() => setFixed([...fixedValues, { key: "", label: "", value: 0 }])} className={`${addBtn} mt-0.5`}><Plus className="size-4" />Agregar valor fijo</button>
       </div>
-      {operand.type === "fixed" ? <Select value={operand.key ?? ""} onChange={(value) => setOperand({ type: "fixed", key: value })} options={fixedValues.filter((item) => item.key).map((item) => ({ value: item.key, label: item.label || item.key }))} placeholder="Elige valor fijo" /> : operand.type === "item" ? <input className={`${inp} font-mono`} value={operand.key ?? ""} onChange={(event) => setOperand({ type: "item", key: event.target.value.replace(/\s+/g, "_") })} placeholder="Campo de cada elemento, ej. cantidad" /> : <input className={`${inp} tabular-nums`} type="number" step="any" value={Number.isFinite(Number(operand.value)) ? Number(operand.value) : ""} onChange={(event) => setOperand({ type: "number", value: Number(event.target.value) })} />}
-      <div className="rounded-lg border border-border bg-background/60 p-3 space-y-2">
-        <div className="flex items-start justify-between gap-3"><div><p className="text-[11px] font-semibold text-foreground">Aplicación</p><p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">Calcula una vez o una vez por cada hallazgo estructurado de un análisis IA.</p></div><Select value={mode} onChange={(value) => patch({ mode: value })} options={[{ value: "single", label: "Una vez" }, { value: "each_analysis_item", label: "Por elemento" }]} /></div>
-        {mode === "each_analysis_item" && <>
-          <Select value={String(data.analysisNodeId ?? "")} onChange={(value) => patch({ analysisNodeId: value })} options={analysisNodes.map((item) => ({ value: item.id, label: item.name }))} placeholder="Análisis IA estructurado" />
-          <div className="grid grid-cols-2 gap-1.5"><input className={`${inp} !py-1 font-mono`} value={filterDraft.key} onChange={(event) => setFilter("key", event.target.value)} placeholder="Filtro opcional, ej. tipo" /><input className={`${inp} !py-1`} value={filterDraft.value} onChange={(event) => setFilter("value", event.target.value)} placeholder="Valor, ej. SMMLV" /></div>
-        </>}
-      </div>
-      <FieldRow label="Decimales"><input className={`${inp} tabular-nums`} type="number" min="0" max="6" value={Number(data.decimals ?? 0)} onChange={(event) => patch({ decimals: Math.max(0, Math.min(6, Math.round(Number(event.target.value)))) })} /></FieldRow>
-      <div className="rounded-lg border border-primary/20 bg-primary/[0.035] px-3 py-2.5">
-        <p className="text-[10px] font-medium uppercase tracking-[0.06em] text-primary">Fórmula</p>
-        <p className="mt-1 text-xs font-medium text-foreground"><span className="font-mono">{String(data.key || "resultado")}</span> = {baseField} {operatorText}</p>
-        <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">DocuIA solo aporta los datos extraídos. Esta fórmula se ejecuta de forma determinística y queda disponible para el Word.</p>
+
+      <FieldGroup label="Valor base" help="El número sobre el que se hace la operación.">
+        <div className="grid grid-cols-2 gap-1.5">
+          <Select value={base.type === "fixed" ? "fixed" : "field"} onChange={(value) => setBase(value === "fixed" ? { type: "fixed", key: "", docType: undefined, field: undefined } : { type: "field", key: undefined, docType: "", field: "" })} options={[{ value: "field", label: "Un dato del documento" }, { value: "fixed", label: "Un valor fijo" }]} />
+          {base.type === "fixed"
+            ? <Select value={base.key ?? ""} onChange={(value) => setBase({ key: value })} options={fixedOptions} placeholder="Elige el valor fijo" />
+            : <Select value={base.docType ?? ""} onChange={(value) => setBase({ docType: value, field: "" })} options={docTypes.map((doc) => ({ value: doc.key, label: doc.name }))} placeholder="Elige el documento" />}
+        </div>
+        {base.type !== "fixed" && <Select value={base.field ?? ""} onChange={(value) => setBase({ field: value })} options={(fieldsByType[base.docType ?? ""] ?? []).map((field) => ({ value: field, label: fieldName(base.docType ?? "", field) }))} placeholder={base.docType ? "Elige el dato" : "Elige primero el documento"} disabled={!base.docType} />}
+      </FieldGroup>
+
+      <FieldRow label="Operación"><Select value={operation} onChange={(value) => patch({ operation: value })} options={CALC_OPERATIONS} /></FieldRow>
+
+      <FieldGroup label={operation === "percentage" ? "Porcentaje que se aplica" : "Valor con el que se opera"} help={mode === "each_analysis_item" ? "Un número que escribes, un valor fijo o un dato de cada hallazgo." : "Un número que escribes aquí o uno de los valores fijos."}>
+        <div className="grid grid-cols-2 gap-1.5">
+          <Select value={operand.type === "fixed" ? "fixed" : operand.type === "item" ? "item" : "number"} onChange={(value) => setOperand(value === "fixed" ? { type: "fixed", key: "" } : value === "item" ? { type: "item", key: "" } : { type: "number", value: 0 })} options={[{ value: "number", label: "Un número" }, { value: "fixed", label: "Un valor fijo" }, ...(mode === "each_analysis_item" ? [{ value: "item", label: "Un dato del hallazgo" }] : [])]} />
+          {operand.type === "fixed"
+            ? <Select value={operand.key ?? ""} onChange={(value) => setOperand({ type: "fixed", key: value })} options={fixedOptions} placeholder="Elige el valor fijo" />
+            : operand.type === "item"
+              ? <input className={`${inp} font-mono !text-xs`} aria-label="Columna del hallazgo" value={operand.key ?? ""} onChange={(event) => setOperand({ type: "item", key: event.target.value.replace(/\s+/g, "_") })} placeholder="clave de la columna, ej. cantidad" />
+              : <input className={`${inp} tabular-nums`} aria-label={operation === "percentage" ? "Porcentaje" : "Número"} type="number" step="any" value={Number.isFinite(Number(operand.value)) ? Number(operand.value) : ""} onChange={(event) => setOperand({ type: "number", value: Number(event.target.value) })} />}
+        </div>
+      </FieldGroup>
+
+      <FieldRow label="Cuántas veces se calcula" help="Una sola vez por caso, o una vez por cada hallazgo de un control «Análisis con IA» que responde en tabla.">
+        <Select value={mode} onChange={(value) => patch({ mode: value })} options={[{ value: "single", label: "Una vez por caso" }, { value: "each_analysis_item", label: "Una vez por cada hallazgo" }]} />
+      </FieldRow>
+      {mode === "each_analysis_item" && (
+        <div className={`${box} flex flex-col gap-3`}>
+          <FieldRow label="Análisis del que salen los hallazgos" help={analysisNodes.length ? undefined : "Este flujo aún no tiene un control «Análisis con IA»."}>
+            <Select value={String(data.analysisNodeId ?? "")} onChange={(value) => patch({ analysisNodeId: value })} options={analysisNodes.map((item) => ({ value: item.id, label: item.name }))} placeholder="Elige el análisis" />
+          </FieldRow>
+          <FieldGroup label="Solo ciertos hallazgos (opcional)" help="Calcula únicamente los hallazgos cuya columna tenga ese valor. Vacío: todos.">
+            <div className="grid grid-cols-2 gap-1.5" aria-hidden><span className={colHead}>Clave de la columna</span><span className={colHead}>Es igual a</span></div>
+            <div className="grid grid-cols-2 gap-1.5">
+              <input className={`${inp} font-mono !text-xs`} aria-label="Clave de la columna" value={filterDraft.key} onChange={(event) => setFilter("key", event.target.value)} placeholder="ej. tipo" />
+              <input className={inp} aria-label="Es igual a" value={filterDraft.value} onChange={(event) => setFilter("value", event.target.value)} placeholder="ej. SMMLV" />
+            </div>
+          </FieldGroup>
+        </div>
+      )}
+
+      <FieldRow label="Decimales del resultado" help="De 0 a 6. El resultado se redondea a esa cantidad.">
+        <input className={`${inp} tabular-nums`} type="number" min="0" max="6" value={Number(data.decimals ?? 0)} onChange={(event) => patch({ decimals: Math.max(0, Math.min(6, Math.round(Number(event.target.value)))) })} />
+      </FieldRow>
+
+      <div className="rounded-[10px] border border-primary/20 bg-primary/[0.035] px-3 py-2.5">
+        <p className="text-xs font-semibold text-primary">Así queda la fórmula</p>
+        <p className="mt-1 text-[13px] font-medium text-foreground">{String(data.label || data.key || "Resultado")} = {baseField} {operatorText}</p>
+        <p className={`${hlp} mt-1`}>La IA solo aporta los datos leídos; la cuenta la hace DocuIA, siempre igual, y el resultado queda disponible para el documento que se genera.</p>
       </div>
     </div>
   );
@@ -268,58 +371,66 @@ function CalculationForm({ data, patch, docTypes, fieldsByType, analysisNodes }:
 
 interface RuleRef { docType: string; field: string; label?: string }
 
-function RefEditor({ title, help, value, onChange, withLabel, docTypes, fieldsByType }: {
-  title: string; help: string; value?: { docType?: string; field?: string; label?: string }; onChange: (r: RuleRef) => void; withLabel?: boolean;
+/** Document + field of a rule, in a box with its own title; optionally the words the result uses for it. */
+function RefEditor({ title, help, value, onChange, labelTitle, labelPlaceholder, docTypes, fieldsByType }: {
+  title: string; help: string; value?: { docType?: string; field?: string; label?: string }; onChange: (r: RuleRef) => void;
+  /** With it, the box also asks for the words the result shows for this check. */
+  labelTitle?: string; labelPlaceholder?: string;
   docTypes: DocTypeOpt[]; fieldsByType: Record<string, string[]>;
 }) {
+  const fieldName = useFieldName();
   const v = { docType: value?.docType ?? "", field: value?.field ?? "", label: value?.label ?? "" };
-  const fieldOpts = (fieldsByType[v.docType] ?? []).map((f) => ({ value: f, label: f }));
   return (
-    <div className="rounded-md border border-border bg-background/60 p-2.5 space-y-1.5">
-      <div><p className="text-[11px] font-semibold text-foreground">{title}</p><p className="text-[10px] text-muted-foreground">{help}</p></div>
+    <div className={`${box} flex flex-col gap-1.5`}>
+      <div><span className={lbl}>{title}</span><span className={`${hlp} mt-0.5`}>{help}</span></div>
       <div className="grid grid-cols-2 gap-1.5">
-        <Select value={v.docType} onChange={(val) => onChange({ ...v, docType: val, field: "" })} options={docTypes.map((d) => ({ value: d.key, label: d.name }))} placeholder="Documento" />
-        <Select value={v.field} onChange={(val) => onChange({ ...v, field: val })} options={fieldOpts} placeholder={v.docType ? "Campo" : "elige doc"} disabled={!v.docType} />
+        <Select value={v.docType} onChange={(val) => onChange({ ...v, docType: val, field: "" })} options={docTypes.map((d) => ({ value: d.key, label: d.name }))} placeholder="Elige el documento" />
+        <Select value={v.field} onChange={(val) => onChange({ ...v, field: val })} options={(fieldsByType[v.docType] ?? []).map((f) => ({ value: f, label: fieldName(v.docType, f) }))} placeholder={v.docType ? "Elige el dato" : "Primero el documento"} disabled={!v.docType} />
       </div>
-      {withLabel && <input className={`${inp} !py-1`} placeholder="Texto legible (ej. En escritura de poderes)" value={v.label ?? ""} onChange={(e) => onChange({ ...v, label: e.target.value })} />}
+      {labelTitle && (
+        <label className="mt-1 flex flex-col gap-1">
+          <span className={colHead}>{labelTitle}</span>
+          <input className={inp} placeholder={labelPlaceholder} value={v.label ?? ""} onChange={(e) => onChange({ ...v, label: e.target.value })} />
+        </label>
+      )}
     </div>
   );
 }
 
-// Plain doc+field picker (no label) for rule refs.
-function DocFieldPicker({ label, docType, field, onChange, docTypes, fieldsByType }: { label: string; docType: string; field: string; onChange: (v: { docType: string; field: string }) => void; docTypes: DocTypeOpt[]; fieldsByType: Record<string, string[]> }) {
+/** Document + field of a rule, under a plain label. */
+function DocFieldPicker({ label, help, docType, field, onChange, docTypes, fieldsByType }: { label: string; help?: string; docType: string; field: string; onChange: (v: { docType: string; field: string }) => void; docTypes: DocTypeOpt[]; fieldsByType: Record<string, string[]> }) {
+  const fieldName = useFieldName();
   return (
-    <div>
-      <span className={lbl}>{label}</span>
-      <div className="grid grid-cols-2 gap-1.5 mt-1">
-        <Select value={docType} onChange={(v) => onChange({ docType: v, field: "" })} options={docTypes.map((d) => ({ value: d.key, label: d.name }))} placeholder="Documento" />
-        <Select value={field} onChange={(v) => onChange({ docType, field: v })} options={(fieldsByType[docType] ?? []).map((f) => ({ value: f, label: f }))} placeholder={docType ? "Campo" : "elige doc"} disabled={!docType} />
+    <FieldGroup label={label} help={help}>
+      <div className="grid grid-cols-2 gap-1.5">
+        <Select value={docType} onChange={(v) => onChange({ docType: v, field: "" })} options={docTypes.map((d) => ({ value: d.key, label: d.name }))} placeholder="Elige el documento" />
+        <Select value={field} onChange={(v) => onChange({ docType, field: v })} options={(fieldsByType[docType] ?? []).map((f) => ({ value: f, label: fieldName(docType, f) }))} placeholder={docType ? "Elige el dato" : "Primero el documento"} disabled={!docType} />
       </div>
-    </div>
+    </FieldGroup>
   );
 }
 
 const RULE_KINDS = [
-  { value: "cross_reference", label: "Presencia cruzada — aparece en otro doc" },
-  { value: "field_match", label: "Coincidencia de campos" },
-  { value: "clause_presence", label: "Revisión de cláusula" },
-  { value: "numeric_threshold", label: "Umbral numérico" },
-  { value: "date_rule", label: "Regla de fecha / vigencia" },
-  { value: "field_format", label: "Formato / ID fiscal" },
-  { value: "document_required", label: "Documento requerido" },
+  { value: "cross_reference", label: "Aparece en otro documento" },
+  { value: "field_match", label: "Dos datos coinciden" },
+  { value: "clause_presence", label: "Trae (o no) una cláusula" },
+  { value: "numeric_threshold", label: "Número dentro de un rango" },
+  { value: "date_rule", label: "Fecha vigente o anterior a otra" },
+  { value: "field_format", label: "Formato del dato / ID fiscal" },
+  { value: "document_required", label: "Documentos obligatorios" },
   { value: "signatures_complete", label: "Firmas completas" },
   { value: "ai_analysis", label: "Análisis con IA" },
 ];
 const RULE_INFO: Record<string, string> = {
-  cross_reference: "Comprueba que cada elemento de una lista (ej. los representantes del contrato) APAREZCA en otro documento (ej. la escritura de poderes). Opcional: confirmarlo con un tercer documento (ej. certificado de vigencia).",
-  field_match: "Compara dos campos entre documentos y exige que coincidan (o que difieran). Ej: el monto del contrato = el del certificado; el mismo ID fiscal en ambos.",
-  clause_presence: "Verifica que un documento incluya (o NO incluya) una cláusula. La cláusula se captura como un campo en la etapa de Extracción; aquí decides si debe estar o no.",
-  numeric_threshold: "Verifica que un valor numérico esté dentro de un mínimo/máximo. Ej: monto ≤ tope; porcentaje de garantía ≥ mínimo.",
-  date_rule: "Valida fechas: que no esté vencida y/o que sea anterior a otra fecha. Ej: la vigencia sigue vigente; el inicio es anterior al término.",
-  field_format: "Verifica el formato de un campo: identificación fiscal por país (RUT, RFC, CUIT, NIT, CNPJ…), correo, fecha, número, o simplemente que no esté vacío.",
-  document_required: "Exige que el caso incluya ciertos tipos de documento. Ej: contrato + escritura + certificado. Marca los que falten.",
-  signatures_complete: "Verifica que todas las partes esperadas hayan firmado el documento.",
-  ai_analysis: "Interpreta el expediente con una instrucción configurable. Puede devolver un análisis libre, una tabla estructurada o ambos, siempre con evidencia del documento.",
+  cross_reference: "Comprueba que cada elemento de una lista aparezca en otro documento. Ej.: que cada representante del contrato figure entre los apoderados de la escritura. Se puede confirmar además con un tercer documento, como un certificado de vigencia.",
+  field_match: "Compara dos datos y exige que coincidan (o que sean distintos). Ej.: el monto del contrato es el mismo que el del certificado; el mismo ID fiscal en ambos.",
+  clause_presence: "Exige que un documento incluya una cláusula, o que no la incluya. La cláusula es uno de los datos de la etapa de Extracción; aquí decides si debe estar o no.",
+  numeric_threshold: "Exige que un número esté entre un mínimo y un máximo. Ej.: el monto no supera el tope; la garantía es al menos del 10 %.",
+  date_rule: "Revisa una fecha: que no esté vencida, que sea anterior a otra, o ambas. Ej.: la póliza sigue vigente; el inicio es anterior al término.",
+  field_format: "Revisa cómo está escrito un dato: ID fiscal por país (RUT, RFC, CUIT, NIT, CNPJ…), correo, fecha, número, o simplemente que no esté vacío.",
+  document_required: "Exige que el caso traiga ciertos documentos y avisa cuáles faltan.",
+  signatures_complete: "Comprueba que hayan firmado todas las partes que debían firmar.",
+  ai_analysis: "La IA interpreta el expediente con una instrucción que tú escribes. Responde con un texto, con una tabla de hallazgos o con ambos, siempre citando el documento.",
 };
 const COUNTRIES = ["CL", "MX", "AR", "CO", "PE", "EC", "BR", "PY"].map((c) => ({ value: c, label: c }));
 const FORMATS = [
@@ -337,10 +448,10 @@ const COMPARISON_NORMALIZERS = [
   { value: "name", label: "Nombre o empresa" },
   { value: "text", label: "Texto flexible" },
 ];
-const SEVERITIES: { value: "info" | "warn" | "block"; label: string; cls: string }[] = [
-  { value: "info",  label: "OK / Info",   cls: "border-success/50 bg-success/10 text-success" },
-  { value: "warn",  label: "Advertencia", cls: "border-warning/50 bg-warning/10 text-warning" },
-  { value: "block", label: "Bloqueante",  cls: "border-destructive/50 bg-destructive/10 text-destructive" },
+const SEVERITIES: { value: "info" | "warn" | "block"; label: string; cls: string; effect: string }[] = [
+  { value: "info",  label: "Solo informar", cls: "border-success/50 bg-success/10 text-success",                 effect: "Queda anotado en el caso; nunca lo detiene." },
+  { value: "warn",  label: "Advertir",      cls: "border-warning/50 bg-warning/10 text-warning",                 effect: "El caso queda en ámbar: se puede aprobar, pero avisa." },
+  { value: "block", label: "Bloquear",      cls: "border-destructive/50 bg-destructive/10 text-destructive",     effect: "El caso queda en rojo y no se puede aprobar." },
 ];
 function defaultRule(kind: string): Record<string, unknown> {
   switch (kind) {
@@ -358,6 +469,7 @@ function defaultRule(kind: string): Record<string, unknown> {
 
 type AiTemplate = { id: string; name: string; description: string | null; config: Record<string, unknown> | null };
 type OutputField = { key: string; label: string; description?: string };
+const outputCols = "grid grid-cols-[minmax(0,1fr)_112px_24px] gap-1.5";
 
 function AiAnalysisForm({ rule, setRule, docTypes }: { rule: Record<string, unknown>; setRule: (rule: Record<string, unknown>) => void; docTypes: DocTypeOpt[] }) {
   const [templates, setTemplates] = useState<AiTemplate[]>([]);
@@ -370,6 +482,7 @@ function AiAnalysisForm({ rule, setRule, docTypes }: { rule: Record<string, unkn
   const selectedDocs = (Array.isArray(rule.sourceDocTypes) ? rule.sourceDocTypes : []) as string[];
   const outputMode = String(rule.outputMode ?? "free");
   const patch = (input: Record<string, unknown>) => setRule({ ...rule, ...input });
+  const updateField = (index: number, change: Partial<OutputField>) => patch({ outputFields: fields.map((item, i) => (i === index ? { ...item, ...change } : item)) });
   // The rule as it is now, for answers that arrive seconds later.
   const latestRule = useRef(rule);
   useEffect(() => { latestRule.current = rule; }, [rule]);
@@ -420,65 +533,66 @@ function AiAnalysisForm({ rule, setRule, docTypes }: { rule: Record<string, unkn
   };
 
   return (
-    <div className="space-y-3">
-      <div className="rounded-lg border border-primary/20 bg-primary/[0.035] p-3">
-        <div className="flex gap-2"><span className="mt-0.5 rounded-md bg-primary/10 p-1 text-primary"><FileSearch className="h-3.5 w-3.5" /></span><div><p className="text-[11px] font-semibold text-foreground">Análisis con evidencia</p><p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">La IA analiza los datos extraídos y sus citas. Si falta evidencia, debe indicarlo, no inventar una recomendación.</p></div></div>
-      </div>
-
-      <FieldRow label="Usar una plantilla guardada">
-        <Select value="" onChange={(id) => { const template = templates.find((item) => item.id === id); if (template?.config) { setRule({ ...template.config, kind: "ai_analysis" }); setMessage({ ok: true, text: `Plantilla “${template.name}” aplicada al flujo.` }); } }} options={templates.filter((item) => item.config).map((item) => ({ value: item.id, label: item.name }))} placeholder={templatesLoading ? "Cargando plantillas…" : "Selecciona una plantilla"} disabled={templatesLoading} />
+    <div className="flex flex-col gap-4">
+      <FieldRow label="Partir de una plantilla guardada (opcional)" help="Llena este control con un análisis que ya guardaste en otro flujo.">
+        <Select value="" onChange={(id) => { const template = templates.find((item) => item.id === id); if (template?.config) { setRule({ ...template.config, kind: "ai_analysis" }); setMessage({ ok: true, text: `Plantilla “${template.name}” aplicada al flujo.` }); } }} options={templates.filter((item) => item.config).map((item) => ({ value: item.id, label: item.name }))} placeholder={templatesLoading ? "Cargando plantillas…" : "Elige una plantilla"} disabled={templatesLoading} />
       </FieldRow>
 
-      <div>
-        <div className="flex items-center justify-between gap-2"><span className={lbl}>Instrucción para la IA</span><button type="button" onClick={() => void improve()} disabled={improving} className="inline-flex items-center gap-1 rounded-md border border-primary/25 bg-card px-2 py-1 text-[10px] font-medium text-primary hover:bg-primary/5 disabled:opacity-50">{improving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />} Mejorar con IA</button></div>
-        <textarea rows={5} className={`${inp} mt-1 resize-y leading-relaxed`} value={String(rule.prompt ?? "")} onChange={(event) => patch({ prompt: event.target.value })} placeholder="Ej. Identifica las pólizas exigidas por el contrato y recomienda coberturas basadas solo en sus obligaciones." />
+      <div className="flex flex-col gap-1.5">
+        <div className="flex items-end justify-between gap-2">
+          <label htmlFor="ai-prompt"><span className={lbl}>Instrucción para la IA</span><span className={`${hlp} mt-0.5`}>Qué debe revisar y qué debe responder. Si falta evidencia en los documentos, lo dice en vez de inventar.</span></label>
+          <button type="button" onClick={() => void improve()} disabled={improving} className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-primary/25 bg-card px-2 py-1 text-xs font-medium text-primary hover:bg-primary/5 disabled:opacity-50">{improving ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />} Mejorar con IA</button>
+        </div>
+        <textarea id="ai-prompt" rows={5} className={`${inp} resize-y leading-relaxed`} value={String(rule.prompt ?? "")} onChange={(event) => patch({ prompt: event.target.value })} placeholder="Ej. Identifica las pólizas exigidas por el contrato y recomienda coberturas basadas solo en sus obligaciones." />
       </div>
 
       {typeof rule.improvedPrompt === "string" && rule.improvedPrompt.trim() && (
-        <div className="rounded-md border border-success/25 bg-success/5 p-2.5 space-y-1.5">
-          <div className="flex items-center justify-between gap-2"><span className="text-[10px] font-semibold text-success">Versión mejorada</span><button type="button" onClick={() => patch({ prompt: rule.improvedPrompt, improvedPrompt: undefined })} className="text-[10px] font-medium text-primary hover:underline">Usar esta versión</button></div>
-          <p className="text-[10px] leading-relaxed text-foreground/80 whitespace-pre-wrap">{rule.improvedPrompt}</p>
+        <div className="flex flex-col gap-1.5 rounded-[10px] border border-success/25 bg-success/5 p-3">
+          <div className="flex items-center justify-between gap-2"><span className="text-xs font-semibold text-success">Versión mejorada</span><button type="button" onClick={() => patch({ prompt: rule.improvedPrompt, improvedPrompt: undefined })} className="text-xs font-semibold text-link hover:underline">Usar esta versión</button></div>
+          <p className="whitespace-pre-wrap text-xs leading-relaxed text-foreground/80">{rule.improvedPrompt}</p>
         </div>
       )}
 
-      <FieldRow label="Reglas internas o criterios de la compañía">
+      <FieldRow label="Criterios de tu empresa (opcional)" help="Reglas propias que la IA debe respetar al analizar.">
         <textarea rows={4} className={`${inp} resize-y leading-relaxed`} value={String(rule.internalRules ?? "")} onChange={(event) => patch({ internalRules: event.target.value })} placeholder="Ej. Para obra civil, revisar cumplimiento y responsabilidad civil. Nunca proponer una cobertura sin respaldo contractual o regla interna." />
       </FieldRow>
 
-      <div>
-        <span className={lbl}>Documentos que debe considerar</span>
-        <p className="mt-0.5 text-[10px] text-muted-foreground">Si no marcas ninguno, considera todo el expediente.</p>
-        <div className="mt-1.5 space-y-1.5">
-          {docTypes.map((doc) => {
-            const selected = selectedDocs.includes(doc.key);
-            return <label key={doc.key} className="flex items-center gap-2 text-[11px] text-foreground"><input type="checkbox" checked={selected} onChange={(event) => patch({ sourceDocTypes: event.target.checked ? [...selectedDocs, doc.key] : selectedDocs.filter((key) => key !== doc.key) })} /> {doc.name}</label>;
-          })}
-        </div>
-      </div>
+      <FieldGroup label="Documentos que debe leer" help="Sin marcar ninguno, lee todo el expediente.">
+        {docTypes.map((doc) => {
+          const selected = selectedDocs.includes(doc.key);
+          return <label key={doc.key} className="flex items-start gap-2 text-[13px]"><input type="checkbox" className={check} checked={selected} onChange={(event) => patch({ sourceDocTypes: event.target.checked ? [...selectedDocs, doc.key] : selectedDocs.filter((key) => key !== doc.key) })} />{doc.name}</label>;
+        })}
+      </FieldGroup>
 
-      <FieldRow label="Formato de respuesta">
+      <FieldRow label="Cómo responde" help="Con un texto, con una tabla de hallazgos cuyas columnas defines tú, o con ambos.">
         <Select value={outputMode} onChange={(value) => patch({ outputMode: value })} options={[
-          { value: "free", label: "Respuesta libre" },
-          { value: "structured", label: "Tabla estructurada" },
-          { value: "both", label: "Respuesta libre y tabla" },
+          { value: "free", label: "Un texto" },
+          { value: "structured", label: "Una tabla de hallazgos" },
+          { value: "both", label: "Texto y tabla" },
         ]} />
       </FieldRow>
 
       {outputMode !== "free" && (
-        <div className="rounded-lg border border-border bg-background/60 p-2.5">
-          <div className="mb-2"><p className="text-[11px] font-semibold text-foreground">Columnas de los hallazgos</p><p className="text-[10px] text-muted-foreground">Cada hallazgo se mostrará y podrá incorporarse en el documento final.</p></div>
-          <div className="space-y-1.5">
-            {fields.map((field, index) => <div key={index} className="grid grid-cols-[92px_1fr_auto] gap-1.5"><input className={`${inp} !py-1 font-mono`} placeholder="clave" value={field.key} onChange={(event) => patch({ outputFields: fields.map((item, i) => i === index ? { ...item, key: event.target.value } : item) })} /><input className={`${inp} !py-1`} placeholder="Etiqueta" value={field.label} onChange={(event) => patch({ outputFields: fields.map((item, i) => i === index ? { ...item, label: event.target.value } : item) })} /><button type="button" onClick={() => patch({ outputFields: fields.filter((_, i) => i !== index) })} className="text-muted-foreground hover:text-destructive"><Trash2 className="h-3.5 w-3.5" /></button></div>)}
-            <button type="button" onClick={() => patch({ outputFields: [...fields, { key: "", label: "" }] })} className="inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"><Plus className="h-3 w-3" /> Agregar columna</button>
-          </div>
+        <div className={`${box} flex flex-col gap-1.5`}>
+          <div><span className={lbl}>Columnas de la tabla</span><span className={`${hlp} mt-0.5`}>Lo que la IA anota de cada hallazgo. Se ve en el caso y se puede llevar al documento que se genera.</span></div>
+          {fields.length > 0 && <div className={`${outputCols} mt-1`} aria-hidden><span className={colHead}>Nombre de la columna</span><span className={colHead}>Clave interna</span><span /></div>}
+          {fields.map((field, index) => (
+            <div key={index} className={outputCols}>
+              <input className={inp} aria-label="Nombre de la columna" placeholder="Ej. Cobertura" value={field.label} onChange={(event) => updateField(index, { label: event.target.value })}
+                onBlur={() => { if (!field.key.trim() && field.label.trim()) updateField(index, { key: keyFrom(field.label) }); }} />
+              <input className={`${inp} font-mono !text-xs`} aria-label="Clave interna" placeholder="se llena sola" value={field.key} onChange={(event) => updateField(index, { key: event.target.value })} />
+              <button type="button" onClick={() => patch({ outputFields: fields.filter((_, i) => i !== index) })} className={removeBtn} aria-label={`Quitar ${field.label || "esta columna"}`} title="Quitar esta columna"><Trash2 className="size-4" /></button>
+            </div>
+          ))}
+          <button type="button" onClick={() => patch({ outputFields: [...fields, { key: "", label: "" }] })} className={`${addBtn} mt-0.5`}><Plus className="size-4" />Agregar columna</button>
         </div>
       )}
 
-      <div className="border-t border-border pt-3">
-        <div className="flex items-center gap-1.5"><BookMarked className="h-3.5 w-3.5 text-primary" /><span className="text-[11px] font-semibold text-foreground">Guardar como plantilla</span></div>
-        <div className="mt-2 flex gap-1.5"><input className={`${inp} !py-1`} value={templateName} onChange={(event) => setTemplateName(event.target.value)} placeholder="Ej. Requisitos de aseguramiento" /><button type="button" onClick={() => void saveTemplate()} disabled={savingTemplate} className="shrink-0 rounded-md bg-primary px-2.5 py-1.5 text-[11px] font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50">{savingTemplate ? "Guardando…" : "Guardar"}</button></div>
+      <div className="flex flex-col gap-1.5 border-t border-line-soft pt-4">
+        <label htmlFor="ai-template-name"><span className={`${lbl} flex items-center gap-1.5`}><BookMarked className="size-4 text-primary" />Guardar como plantilla</span><span className={`${hlp} mt-0.5`}>Para reusar este análisis en otros flujos.</span></label>
+        <div className="flex gap-1.5"><input id="ai-template-name" className={inp} value={templateName} onChange={(event) => setTemplateName(event.target.value)} placeholder="Nombre, ej. Requisitos de aseguramiento" /><button type="button" onClick={() => void saveTemplate()} disabled={savingTemplate} className="shrink-0 rounded-lg bg-primary px-3 text-[13px] font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50">{savingTemplate ? "Guardando…" : "Guardar"}</button></div>
       </div>
-      {message && <p className={`text-[11px] leading-relaxed ${message.ok ? "text-success" : "text-destructive"}`}>{message.text}</p>}
+      {message && <p role="status" className={`text-[13px] leading-relaxed ${message.ok ? "text-tone-ok" : "text-tone-err"}`}>{message.text}</p>}
     </div>
   );
 }
@@ -490,10 +604,13 @@ function ValidateForm({ data, patch, docTypes, fieldsByType }: { data: AnyData; 
   const setRule = (r: Record<string, unknown>) => patch({ rule: { ...rule, ...r } });
   const ref = (k: string) => (rule[k] as { docType?: string; field?: string; label?: string } | undefined) ?? {};
   const numStr = (v: unknown) => (v === undefined || v === null ? "" : String(v));
+  const pickers = { docTypes, fieldsByType };
 
   return (
-    <div className="space-y-3">
-      <FieldRow label="Nombre / etiqueta"><input className={inp} value={String(data.name ?? "")} onChange={(e) => patch({ name: e.target.value })} placeholder="Ej. Validación de firmantes" /></FieldRow>
+    <div className="flex flex-col gap-4">
+      <FieldRow label="Nombre del control" help="Así aparece en el resultado del caso.">
+        <input className={inp} value={String(data.name ?? "")} onChange={(e) => patch({ name: e.target.value })} placeholder="Ej. Firmantes con poder vigente" />
+      </FieldRow>
 
       {kind !== "ai_analysis" && (
         <RuleFromText docTypes={docTypes} fieldsByType={fieldsByType}
@@ -501,24 +618,19 @@ function ValidateForm({ data, patch, docTypes, fieldsByType }: { data: AnyData; 
           onApply={(next) => patch({ name: next.name, severity: next.severity, rule: next.rule })} />
       )}
 
-      <FieldRow label="Tipo de validación"><Select value={kind} onChange={(k) => patch({ rule: defaultRule(k) })} options={RULE_KINDS} /></FieldRow>
-      <p className="rounded-md bg-secondary/50 border border-border px-2.5 py-2 text-[11px] text-muted-foreground leading-relaxed">{RULE_INFO[kind]}</p>
+      <FieldRow label="Qué revisa" help={RULE_INFO[kind]}>
+        <Select value={kind} onChange={(k) => patch({ rule: defaultRule(k) })} options={RULE_KINDS} />
+      </FieldRow>
 
-      <div>
-        <span className={lbl}>Severidad del semáforo</span>
-        <p className="text-[10px] text-muted-foreground mt-0.5 mb-1">Se enciende <strong className="text-foreground font-medium">cuando la validación NO se cumple</strong>. Si se cumple, queda en verde. Elige qué tan grave es la falla:</p>
+      <FieldGroup label="Si no se cumple" help="Cuando el control se cumple, queda en verde. Elige qué pasa cuando no:">
         <div className="grid grid-cols-3 gap-1.5">
           {SEVERITIES.map((s) => (
-            <button key={s.value} type="button" onClick={() => patch({ severity: s.value })}
-              className={`rounded-md border px-2 py-1 text-[10px] font-medium transition-colors ${severity === s.value ? s.cls : "border-border text-muted-foreground hover:bg-secondary"}`}>{s.label}</button>
+            <button key={s.value} type="button" aria-pressed={severity === s.value} onClick={() => patch({ severity: s.value })}
+              className={`min-h-9 rounded-lg border px-2 text-[12.5px] font-medium transition-colors ${severity === s.value ? s.cls : "border-border text-muted-foreground hover:bg-secondary"}`}>{s.label}</button>
           ))}
         </div>
-        <ul className="mt-1.5 space-y-0.5 text-[10px] text-muted-foreground">
-          <li><span className="text-destructive font-medium">Bloqueante</span>: si falla, el caso queda en rojo y no se puede aprobar.</li>
-          <li><span className="text-warning font-medium">Advertencia</span>: si falla, el caso queda en ámbar (se puede aprobar, pero avisa).</li>
-          <li><span className="text-success font-medium">OK / Info</span>: informativo; nunca bloquea.</li>
-        </ul>
-      </div>
+        <p className={hlp}>{SEVERITIES.find((s) => s.value === severity)?.effect}</p>
+      </FieldGroup>
 
       {kind === "ai_analysis" && <AiAnalysisForm rule={rule} setRule={(updated) => patch({ rule: updated })} docTypes={docTypes} />}
 
@@ -527,88 +639,90 @@ function ValidateForm({ data, patch, docTypes, fieldsByType }: { data: AnyData; 
         const hasConf = !!rule.confirmation;
         return (
           <>
-            <RefEditor title="Sujetos" help="A quién se valida (cada elemento de la lista)" value={ref("subjects")} onChange={(r) => setRule({ subjects: r })} docTypes={docTypes} fieldsByType={fieldsByType} />
-            <RefEditor title="Pertenencia" help="Dónde deben aparecer para ser válidos" value={ref("membership")} onChange={(r) => setRule({ membership: r })} withLabel docTypes={docTypes} fieldsByType={fieldsByType} />
-            <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-              <input type="checkbox" checked={hasConf} onChange={(e) => setRule({ confirmation: e.target.checked ? { docType: "", field: "", label: "Confirmación" } : undefined })} />
-              Requiere documento de confirmación
+            <RefEditor title="A quién se revisa" help="La lista que se comprueba, uno por uno. Ej.: los representantes del contrato." value={ref("subjects")} onChange={(r) => setRule({ subjects: r })} {...pickers} />
+            <RefEditor title="Dónde deben aparecer" help="El dato de otro documento donde tiene que estar cada uno. Ej.: los apoderados de la escritura." value={ref("membership")} onChange={(r) => setRule({ membership: r })} labelTitle="Cómo se llama esta comprobación en el resultado" labelPlaceholder="Ej. En escritura de poderes" {...pickers} />
+            <label className="flex items-start gap-2 text-[13px]">
+              <input type="checkbox" className={check} checked={hasConf} onChange={(e) => setRule({ confirmation: e.target.checked ? { docType: "", field: "", label: "Confirmación" } : undefined })} />
+              <span><span className="font-semibold">Confirmar además con otro documento</span><span className={hlp}>Para comprobar que lo anterior sigue vigente y no fue revocado.</span></span>
             </label>
-            {hasConf && <RefEditor title="Confirmación" help="Campo que indica revocación / invalidez" value={ref("confirmation")} onChange={(r) => setRule({ confirmation: r })} withLabel docTypes={docTypes} fieldsByType={fieldsByType} />}
-            <div><span className={lbl}>Etiquetas de estado</span>
-              <div className="grid grid-cols-3 gap-1.5 mt-1">
-                <input className={`${inp} !py-1`} title="cumple" value={sl.pass} onChange={(e) => setRule({ statusLabels: { ...sl, pass: e.target.value } })} />
-                <input className={`${inp} !py-1`} title="falla" value={sl.fail} onChange={(e) => setRule({ statusLabels: { ...sl, fail: e.target.value } })} />
-                <input className={`${inp} !py-1`} title="dudoso" value={sl.unknown} onChange={(e) => setRule({ statusLabels: { ...sl, unknown: e.target.value } })} />
+            {hasConf && <RefEditor title="Documento que lo confirma" help="El dato que dice si sigue vigente o fue revocado. Ej.: el estado en el certificado de vigencia." value={ref("confirmation")} onChange={(r) => setRule({ confirmation: r })} labelTitle="Cómo se llama esta comprobación en el resultado" labelPlaceholder="Ej. Certificado de vigencia" {...pickers} />}
+            <FieldGroup label="Palabra que se muestra en el resultado" help="Una por cada desenlace, junto al nombre de quien se revisó.">
+              <div className="grid grid-cols-3 gap-1.5" aria-hidden><span className={colHead}>Si aparece</span><span className={colHead}>Si no aparece</span><span className={colHead}>Si no se sabe</span></div>
+              <div className="grid grid-cols-3 gap-1.5">
+                <input className={inp} aria-label="Palabra si aparece" value={sl.pass} onChange={(e) => setRule({ statusLabels: { ...sl, pass: e.target.value } })} />
+                <input className={inp} aria-label="Palabra si no aparece" value={sl.fail} onChange={(e) => setRule({ statusLabels: { ...sl, fail: e.target.value } })} />
+                <input className={inp} aria-label="Palabra si no se sabe" value={sl.unknown} onChange={(e) => setRule({ statusLabels: { ...sl, unknown: e.target.value } })} />
               </div>
-            </div>
+            </FieldGroup>
           </>
         );
       })()}
 
       {kind === "field_match" && (
         <>
-          <DocFieldPicker label="Campo A" docType={ref("left").docType ?? ""} field={ref("left").field ?? ""} onChange={(v) => setRule({ left: v })} docTypes={docTypes} fieldsByType={fieldsByType} />
-          <DocFieldPicker label="Campo B" docType={ref("right").docType ?? ""} field={ref("right").field ?? ""} onChange={(v) => setRule({ right: v })} docTypes={docTypes} fieldsByType={fieldsByType} />
-          <FieldRow label="Condición"><Select value={String(rule.mode ?? "equal")} onChange={(v) => setRule({ mode: v })} options={[{ value: "equal", label: "Deben coincidir" }, { value: "different", label: "Deben diferir" }]} /></FieldRow>
-          <FieldRow label="Cómo comparar"><Select value={String(rule.normalizer ?? "auto")} onChange={(v) => setRule({ normalizer: v === "auto" ? undefined : v })} options={COMPARISON_NORMALIZERS} /></FieldRow>
-          <p className="text-[10px] text-muted-foreground -mt-1">Fechas, importes y nombres se normalizan antes de validar. Elige una opción si quieres fijar el criterio de esta regla.</p>
-          <FieldRow label="Tolerancia numérica (opcional)"><input type="number" className={inp} value={numStr(rule.numericTolerance)} onChange={(e) => setRule({ numericTolerance: e.target.value === "" ? undefined : Number(e.target.value) })} placeholder="0" /></FieldRow>
+          <DocFieldPicker label="Primer dato" docType={ref("left").docType ?? ""} field={ref("left").field ?? ""} onChange={(v) => setRule({ left: v })} {...pickers} />
+          <DocFieldPicker label="Segundo dato" docType={ref("right").docType ?? ""} field={ref("right").field ?? ""} onChange={(v) => setRule({ right: v })} {...pickers} />
+          <FieldRow label="Qué se exige"><Select value={String(rule.mode ?? "equal")} onChange={(v) => setRule({ mode: v })} options={[{ value: "equal", label: "Que coincidan" }, { value: "different", label: "Que sean distintos" }]} /></FieldRow>
+          <FieldRow label="Cómo se comparan" help="Fechas, importes y nombres se igualan antes de comparar (por ejemplo, 01/02/2026 y 1 de febrero de 2026). Cambia «Automático» solo si quieres fijar el criterio.">
+            <Select value={String(rule.normalizer ?? "auto")} onChange={(v) => setRule({ normalizer: v === "auto" ? undefined : v })} options={COMPARISON_NORMALIZERS} />
+          </FieldRow>
+          <FieldRow label="Diferencia aceptada (opcional)" help="Solo para números: cuánto pueden diferir y seguir contando como iguales. Vacío: deben ser iguales.">
+            <input type="number" className={`${inp} tabular-nums`} value={numStr(rule.numericTolerance)} onChange={(e) => setRule({ numericTolerance: e.target.value === "" ? undefined : Number(e.target.value) })} placeholder="0" />
+          </FieldRow>
         </>
       )}
 
       {kind === "clause_presence" && (
         <>
-          <DocFieldPicker label="Documento y campo de la cláusula" docType={String(rule.docType ?? "")} field={String(rule.field ?? "")} onChange={(v) => setRule(v)} docTypes={docTypes} fieldsByType={fieldsByType} />
-          <FieldRow label="Regla"><Select value={rule.mustExist === false ? "no" : "si"} onChange={(v) => setRule({ mustExist: v === "si" })} options={[{ value: "si", label: "Debe incluir la cláusula" }, { value: "no", label: "NO debe incluir la cláusula" }]} /></FieldRow>
-          <p className="text-[10px] text-muted-foreground">La cláusula se captura como un campo en la etapa de Extracción (la IA la detecta por significado).</p>
+          <DocFieldPicker label="Dónde está la cláusula" help="El dato de Extracción que la captura; la IA la detecta por su significado." docType={String(rule.docType ?? "")} field={String(rule.field ?? "")} onChange={(v) => setRule(v)} {...pickers} />
+          <FieldRow label="Qué se exige"><Select value={rule.mustExist === false ? "no" : "si"} onChange={(v) => setRule({ mustExist: v === "si" })} options={[{ value: "si", label: "Que el documento la incluya" }, { value: "no", label: "Que el documento no la incluya" }]} /></FieldRow>
         </>
       )}
 
       {kind === "numeric_threshold" && (
         <>
-          <DocFieldPicker label="Documento y campo numérico" docType={String(rule.docType ?? "")} field={String(rule.field ?? "")} onChange={(v) => setRule(v)} docTypes={docTypes} fieldsByType={fieldsByType} />
-          <div className="grid grid-cols-2 gap-1.5">
-            <FieldRow label="Mínimo"><input type="number" className={inp} value={numStr(rule.min)} onChange={(e) => setRule({ min: e.target.value === "" ? undefined : Number(e.target.value) })} /></FieldRow>
-            <FieldRow label="Máximo"><input type="number" className={inp} value={numStr(rule.max)} onChange={(e) => setRule({ max: e.target.value === "" ? undefined : Number(e.target.value) })} /></FieldRow>
+          <DocFieldPicker label="Número que se revisa" docType={String(rule.docType ?? "")} field={String(rule.field ?? "")} onChange={(v) => setRule(v)} {...pickers} />
+          <div className="flex flex-col gap-1.5">
+            <div className="grid grid-cols-2 gap-1.5">
+              <FieldRow label="Mínimo"><input type="number" className={`${inp} tabular-nums`} value={numStr(rule.min)} onChange={(e) => setRule({ min: e.target.value === "" ? undefined : Number(e.target.value) })} /></FieldRow>
+              <FieldRow label="Máximo"><input type="number" className={`${inp} tabular-nums`} value={numStr(rule.max)} onChange={(e) => setRule({ max: e.target.value === "" ? undefined : Number(e.target.value) })} /></FieldRow>
+            </div>
+            <p className={hlp}>Deja vacío el que no aplique.</p>
           </div>
         </>
       )}
 
       {kind === "date_rule" && (
         <>
-          <DocFieldPicker label="Documento y campo de fecha" docType={String(rule.docType ?? "")} field={String(rule.field ?? "")} onChange={(v) => setRule(v)} docTypes={docTypes} fieldsByType={fieldsByType} />
-          <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground"><input type="checkbox" checked={rule.notExpired !== false} onChange={(e) => setRule({ notExpired: e.target.checked })} /> No debe estar vencida</label>
-          <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground"><input type="checkbox" checked={!!rule.before} onChange={(e) => setRule({ before: e.target.checked ? { docType: "", field: "" } : undefined })} /> Debe ser anterior a otra fecha</label>
-          {rule.before != null && <DocFieldPicker label="Fecha posterior (referencia)" docType={ref("before").docType ?? ""} field={ref("before").field ?? ""} onChange={(v) => setRule({ before: v })} docTypes={docTypes} fieldsByType={fieldsByType} />}
+          <DocFieldPicker label="Fecha que se revisa" docType={String(rule.docType ?? "")} field={String(rule.field ?? "")} onChange={(v) => setRule(v)} {...pickers} />
+          <label className="flex items-start gap-2 text-[13px]"><input type="checkbox" className={check} checked={rule.notExpired !== false} onChange={(e) => setRule({ notExpired: e.target.checked })} /><span><span className="font-semibold">No debe estar vencida</span><span className={hlp}>Falla si la fecha ya pasó el día en que se analiza el caso.</span></span></label>
+          <label className="flex items-start gap-2 text-[13px]"><input type="checkbox" className={check} checked={!!rule.before} onChange={(e) => setRule({ before: e.target.checked ? { docType: "", field: "" } : undefined })} /><span className="font-semibold">Debe ser anterior a otra fecha</span></label>
+          {rule.before != null && <DocFieldPicker label="La otra fecha" help="La que debe ser posterior. Ej.: la fecha de término." docType={ref("before").docType ?? ""} field={ref("before").field ?? ""} onChange={(v) => setRule({ before: v })} {...pickers} />}
         </>
       )}
 
       {kind === "field_format" && (
         <>
-          <DocFieldPicker label="Documento y campo" docType={String(rule.docType ?? "")} field={String(rule.field ?? "")} onChange={(v) => setRule(v)} docTypes={docTypes} fieldsByType={fieldsByType} />
-          <FieldRow label="Formato"><Select value={String(rule.format ?? "nonempty")} onChange={(v) => setRule({ format: v })} options={FORMATS} /></FieldRow>
-          {rule.format === "tax_id" && <FieldRow label="País del ID fiscal"><Select value={String(rule.country ?? "")} onChange={(v) => setRule({ country: v || undefined })} options={COUNTRIES} placeholder="Genérico" /></FieldRow>}
+          <DocFieldPicker label="Dato que se revisa" docType={String(rule.docType ?? "")} field={String(rule.field ?? "")} onChange={(v) => setRule(v)} {...pickers} />
+          <FieldRow label="Formato esperado"><Select value={String(rule.format ?? "nonempty")} onChange={(v) => setRule({ format: v })} options={FORMATS} /></FieldRow>
+          {rule.format === "tax_id" && <FieldRow label="País del ID fiscal" help="Sin país, solo se revisa que parezca un identificador."><Select value={String(rule.country ?? "")} onChange={(v) => setRule({ country: v || undefined })} options={COUNTRIES} placeholder="Cualquier país" /></FieldRow>}
         </>
       )}
 
       {kind === "document_required" && (
-        <div>
-          <span className={lbl}>Documentos obligatorios en el caso</span>
-          <div className="space-y-1 mt-1">
-            {docTypes.length === 0 && <p className="text-[11px] text-muted-foreground">Agrega nodos de Entrada primero.</p>}
-            {docTypes.map((d) => {
-              const list = (rule.docTypes as string[]) ?? [];
-              const on = list.includes(d.key);
-              return <label key={d.key} className="flex items-center gap-2 text-xs text-foreground"><input type="checkbox" checked={on} onChange={(e) => setRule({ docTypes: e.target.checked ? [...list, d.key] : list.filter((x) => x !== d.key) })} /> {d.name}</label>;
-            })}
-          </div>
-        </div>
+        <FieldGroup label="Documentos que el caso debe traer" help={docTypes.length === 0 ? "Agrega primero etapas «Documento esperado»." : undefined}>
+          {docTypes.map((d) => {
+            const list = (rule.docTypes as string[]) ?? [];
+            const on = list.includes(d.key);
+            return <label key={d.key} className="flex items-start gap-2 text-[13px]"><input type="checkbox" className={check} checked={on} onChange={(e) => setRule({ docTypes: e.target.checked ? [...list, d.key] : list.filter((x) => x !== d.key) })} />{d.name}</label>;
+          })}
+        </FieldGroup>
       )}
 
       {kind === "signatures_complete" && (
         <>
-          <DocFieldPicker label="Partes esperadas" docType={ref("subjects").docType ?? ""} field={ref("subjects").field ?? ""} onChange={(v) => setRule({ subjects: v })} docTypes={docTypes} fieldsByType={fieldsByType} />
-          <DocFieldPicker label="Firmas registradas" docType={ref("signatures").docType ?? ""} field={ref("signatures").field ?? ""} onChange={(v) => setRule({ signatures: v })} docTypes={docTypes} fieldsByType={fieldsByType} />
+          <DocFieldPicker label="Quiénes deben firmar" help="La lista de partes. Ej.: los representantes del contrato." docType={ref("subjects").docType ?? ""} field={ref("subjects").field ?? ""} onChange={(v) => setRule({ subjects: v })} {...pickers} />
+          <DocFieldPicker label="Quiénes firmaron" help="El dato con las firmas que trae el documento." docType={ref("signatures").docType ?? ""} field={ref("signatures").field ?? ""} onChange={(v) => setRule({ signatures: v })} {...pickers} />
         </>
       )}
     </div>
@@ -618,19 +732,30 @@ function ValidateForm({ data, patch, docTypes, fieldsByType }: { data: AnyData; 
 function GenerateForm({ data, patch, onOpenEditor, onOpenWordTemplate }: { data: AnyData; patch: (p: AnyData) => void; onOpenEditor: () => void; onOpenWordTemplate: () => void }) {
   const hasContent = !!(data.html || data.body);
   const source = data.source === "word" ? "word" : "editor";
+  const openBtn = "flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-medium text-primary-foreground shadow-[0_1px_3px_oklch(0.48_0.15_182_/_0.3)] transition-colors hover:bg-primary/90";
   return (
-    <div className="space-y-3">
-      <FieldRow label="Nombre del documento"><input className={inp} value={String(data.name ?? "")} onChange={(e) => patch({ name: e.target.value })} placeholder="Cotización" /></FieldRow>
-      <div className="grid grid-cols-2 gap-2 rounded-lg bg-secondary/60 p-1">
-        <button type="button" onClick={() => patch({ source: "editor" })} className={`rounded-md px-2 py-2 text-xs font-medium transition-colors ${source === "editor" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}><PanelLeft className="mr-1 inline h-3.5 w-3.5" /> Editor</button>
-        <button type="button" onClick={() => { patch({ source: "word" }); onOpenWordTemplate(); }} className={`rounded-md px-2 py-2 text-xs font-medium transition-colors ${source === "word" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}><FileUp className="mr-1 inline h-3.5 w-3.5" /> Plantilla Word</button>
-      </div>
-      {source === "editor" ? <><button onClick={onOpenEditor}
-        className="w-full flex items-center justify-center gap-2 rounded-lg bg-primary text-primary-foreground px-4 py-3 text-sm font-medium shadow-[0_1px_3px_oklch(0.48_0.15_182_/_0.3)] hover:bg-primary/90 transition-colors"><FileText className="w-4 h-4" /> Abrir editor del documento</button>
-        <p className="text-[11px] text-muted-foreground leading-relaxed">Diseña el documento desde cero: títulos, tablas, imágenes/logo y campos del caso. Se exporta a PDF. {hasContent ? "Ya tiene contenido guardado." : "Aún sin contenido."}</p></> : <><button onClick={onOpenWordTemplate}
-        className="w-full flex items-center justify-center gap-2 rounded-lg bg-primary text-primary-foreground px-4 py-3 text-sm font-medium shadow-[0_1px_3px_oklch(0.48_0.15_182_/_0.3)] hover:bg-primary/90 transition-colors"><FileUp className="w-4 h-4" /> {data.wordTemplate ? "Abrir plantilla y mapeo" : "Cargar plantilla Word"}</button>
-        <p className="text-[11px] text-muted-foreground leading-relaxed">Sube el Word corporativo y selecciona en él qué texto representa cada campo. La salida conserva su diseño y queda como Word editable.</p></>}
-      <p className="text-[10px] text-muted-foreground">Tip: también puedes hacer <strong className="text-foreground font-medium">doble clic</strong> en el nodo de Generación para abrir el modo seleccionado.</p>
+    <div className="flex flex-col gap-4">
+      <FieldRow label="Nombre del documento" help="El nombre con el que se genera y aparece en el caso.">
+        <input className={inp} value={String(data.name ?? "")} onChange={(e) => patch({ name: e.target.value })} placeholder="Ej. Cotización" />
+      </FieldRow>
+      <FieldGroup label="Cómo se arma" help="Diseñado aquí y exportado a PDF, o sobre tu propia plantilla de Word.">
+        <div className="grid grid-cols-2 gap-1 rounded-lg bg-secondary/60 p-1">
+          <button type="button" aria-pressed={source === "editor"} onClick={() => patch({ source: "editor" })} className={`rounded-md px-2 py-2 text-[13px] font-medium transition-colors ${source === "editor" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}><PanelLeft className="mr-1 inline size-4" /> Editor</button>
+          <button type="button" aria-pressed={source === "word"} onClick={() => { patch({ source: "word" }); onOpenWordTemplate(); }} className={`rounded-md px-2 py-2 text-[13px] font-medium transition-colors ${source === "word" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}><FileUp className="mr-1 inline size-4" /> Plantilla Word</button>
+        </div>
+      </FieldGroup>
+      {source === "editor" ? (
+        <>
+          <button type="button" onClick={onOpenEditor} className={openBtn}><FileText className="size-4" /> Abrir editor del documento</button>
+          <p className={hlp}>Diseña el documento desde cero: títulos, tablas, logo y datos del caso. Se exporta a PDF. {hasContent ? "Ya tiene contenido guardado." : "Aún sin contenido."}</p>
+        </>
+      ) : (
+        <>
+          <button type="button" onClick={onOpenWordTemplate} className={openBtn}><FileUp className="size-4" /> {data.wordTemplate ? "Abrir plantilla y mapeo" : "Cargar plantilla Word"}</button>
+          <p className={hlp}>Sube el Word de tu empresa y marca en él qué texto corresponde a cada dato. El resultado conserva su diseño y queda como Word editable.</p>
+        </>
+      )}
+      <p className={hlp}>También puedes hacer <strong className="font-semibold text-foreground">doble clic</strong> en la etapa, en el lienzo, para abrirlo.</p>
     </div>
   );
 }
@@ -651,14 +776,14 @@ function Select({ value, onChange, options, placeholder, disabled }: { value: st
       <button type="button" disabled={disabled} onClick={() => setOpen((o) => !o)}
         className={`${inp} flex items-center justify-between gap-1 text-left disabled:opacity-50 ${open ? "border-primary ring-2 ring-primary/15" : ""}`}>
         <span className={`truncate ${sel ? "text-foreground" : "text-muted-foreground"}`}>{sel ? sel.label : (placeholder ?? "—")}</span>
-        <ChevronDown className={`w-3 h-3 text-muted-foreground shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />
+        <ChevronDown className={`size-3.5 text-muted-foreground shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
       {open && !disabled && (
         <div className="absolute z-50 mt-1 w-full max-h-52 overflow-y-auto rounded-md border border-border bg-popover py-1 shadow-[0_8px_32px_oklch(0.18_0.015_258_/_0.12)]">
-          {options.length === 0 && <p className="px-2.5 py-1.5 text-[11px] text-muted-foreground">Sin opciones</p>}
+          {options.length === 0 && <p className="px-2.5 py-1.5 text-xs text-muted-foreground">Sin opciones</p>}
           {options.map((o) => (
             <button key={o.value} type="button" onClick={() => { onChange(o.value); setOpen(false); }}
-              className={`w-full text-left px-2.5 py-1.5 text-xs transition-colors hover:bg-secondary ${o.value === value ? "bg-primary/5 text-primary font-medium" : "text-foreground"}`}>
+              className={`w-full text-left px-2.5 py-1.5 text-[13px] transition-colors hover:bg-secondary ${o.value === value ? "bg-primary/5 text-primary font-medium" : "text-foreground"}`}>
               {o.label}
             </button>
           ))}
@@ -856,11 +981,14 @@ function FlowBuilder({ flowId }: { flowId: string }) {
     .map((n) => ({ key: String((n.data as AnyData).docTypeKey ?? ""), name: String((n.data as AnyData).name || (n.data as AnyData).docTypeKey || "") }))
     .filter((d) => d.key);
   const fieldsByType: Record<string, string[]> = {};
+  // What each key is called, so the pickers show "Número del contrato" and not "numero_contrato".
+  const fieldNames: FieldNames = {};
   for (const n of nodes.filter((n) => n.type === "extract")) {
     const k = String((n.data as AnyData).docTypeKey ?? "");
     if (!k) continue;
-    const fs = (Array.isArray((n.data as AnyData).fields) ? (n.data as AnyData).fields as FieldT[] : []).map((f) => f.fieldKey).filter(Boolean);
-    (fieldsByType[k] ??= []).push(...fs);
+    const fs = (Array.isArray((n.data as AnyData).fields) ? (n.data as AnyData).fields as FieldT[] : []).filter((f) => f.fieldKey);
+    (fieldsByType[k] ??= []).push(...fs.map((f) => f.fieldKey));
+    for (const f of fs) (fieldNames[k] ??= {})[f.fieldKey] = f.label;
   }
   const analysisNodes: AnalysisNodeOption[] = nodes
     .filter((node) => node.type === "validate" && (node.data as AnyData).rule && typeof (node.data as AnyData).rule === "object" && ((node.data as AnyData).rule as { kind?: unknown }).kind === "ai_analysis")
@@ -940,7 +1068,7 @@ function FlowBuilder({ flowId }: { flowId: string }) {
         )}
       </header>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[216px_minmax(0,1fr)_400px]">
+      <div className="grid min-h-0 flex-1 grid-cols-[216px_minmax(0,1fr)_440px]">
         <aside aria-label="Etapas disponibles" className="flex min-h-0 flex-col gap-1.5 overflow-y-auto border-r border-border bg-card p-3">
           <h2 className="px-1.5 pb-1 pt-1 text-xs font-semibold uppercase tracking-[0.06em] text-foreground/75">Agregar etapa</h2>
           {(Object.keys(KIND_META) as Kind[]).map((k) => {
@@ -996,21 +1124,34 @@ function FlowBuilder({ flowId }: { flowId: string }) {
               <div className="flex items-start justify-between gap-3 border-b border-line-soft px-5 pb-3.5 pt-4">
                 <div className="min-w-0">
                   <p className="text-[12.5px] text-muted-foreground">{KIND_META[selected.type as Kind]?.title}</p>
-                  <h2 className="truncate text-[17px] font-semibold tracking-[-0.01em]">{String((selected.data as AnyData).name || (selected.data as AnyData).label || KIND_META[selected.type as Kind]?.title || "Etapa")}</h2>
+                  {/* An extraction has no name of its own: it is known by the document it reads. */}
+                  <h2 className="truncate text-[17px] font-semibold tracking-[-0.01em]">{String((selected.data as AnyData).name || (selected.data as AnyData).label || (selected.type === "extract" && docTypeOpts.find((d) => d.key === (selected.data as AnyData).docTypeKey)?.name) || KIND_META[selected.type as Kind]?.title || "Etapa")}</h2>
                 </div>
                 <button type="button" onClick={() => setSelectedId(null)} aria-label="Cerrar" className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-border text-foreground/70 hover:text-foreground"><X className="size-4" /></button>
               </div>
-              <div className="flex flex-col gap-3 p-5">
+              <FieldNamesContext.Provider value={fieldNames}>
+              <div className="flex flex-col gap-4 p-5">
                 {selected.type === "intake"   && <IntakeForm   data={selected.data as AnyData} patch={patchSelected} order={intakeOrder.get(selected.id)} total={intakeOrder.size} onMove={(dir) => moveIntake(selected.id, dir)} />}
                 {selected.type === "extract"  && <ExtractForm  data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} onTrain={setVisualTraining} />}
                 {selected.type === "calculate" && <CalculationForm key={selected.id} data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} fieldsByType={fieldsByType} analysisNodes={analysisNodes} />}
                 {selected.type === "validate" && <ValidateForm key={selected.id} data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} fieldsByType={fieldsByType} />}
-                {selected.type === "reference_lookup" && <div className="space-y-3"><FieldRow label="Nombre de la etapa"><input className={inp} value={String((selected.data as AnyData).name ?? "")} onChange={(event) => patchSelected({ name: event.target.value })} /></FieldRow><FieldRow label="Si falta el documento citado"><select className={inp} value={String((selected.data as AnyData).severity ?? "warn")} onChange={(event) => patchSelected({ severity: event.target.value })}><option value="info">Informar</option><option value="warn">Advertir</option><option value="block">Bloquear</option></select></FieldRow><p className="text-xs leading-relaxed text-muted-foreground">Detecta códigos en los documentos de entrada, busca su origen en el Archivo y compara si tratan el mismo asunto. Los enlaces dudosos se revisan en Archivo.</p></div>}
+                {selected.type === "reference_lookup" && (
+                  <div className="flex flex-col gap-4">
+                    <p className={hlp}>Detecta los códigos de otros documentos que cita el caso, busca cada uno en el Archivo y compara si tratan el mismo asunto. Los enlaces dudosos se revisan en Archivo.</p>
+                    <FieldRow label="Nombre de la etapa" help="Así aparece en el resultado del caso.">
+                      <input className={inp} value={String((selected.data as AnyData).name ?? "")} onChange={(event) => patchSelected({ name: event.target.value })} />
+                    </FieldRow>
+                    <FieldRow label="Si un documento citado no está en el Archivo" help={SEVERITIES.find((s) => s.value === String((selected.data as AnyData).severity ?? "warn"))?.effect}>
+                      <Select value={String((selected.data as AnyData).severity ?? "warn")} onChange={(value) => patchSelected({ severity: value })} options={SEVERITIES.map((s) => ({ value: s.value, label: s.label }))} />
+                    </FieldRow>
+                  </div>
+                )}
                 {selected.type === "generate" && <GenerateForm data={selected.data as AnyData} patch={patchSelected} onOpenEditor={() => setDocEditorOpen(true)} onOpenWordTemplate={() => setWordTemplateOpen(true)} />}
                 {selected.type === "approval" && <ApprovalForm key={selected.id} data={selected.data as AnyData} patch={patchSelected} docTypes={docTypeOpts} fieldsByType={fieldsByType} />}
                 {selected.type === "note" && <p className="text-[13px] leading-relaxed text-muted-foreground">Edita el texto directamente en el lienzo y ajusta su tamaño desde los bordes. Una nota no cambia el resultado del caso.</p>}
                 <button type="button" onClick={deleteSelected} className="mt-2 inline-flex items-center gap-1.5 self-start text-[13px] font-semibold text-tone-err hover:underline"><Trash2 className="size-4" />Quitar esta etapa</button>
               </div>
+              </FieldNamesContext.Provider>
             </>
           )}
         </aside>

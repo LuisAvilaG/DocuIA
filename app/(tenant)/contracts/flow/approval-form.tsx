@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useFieldName } from "./field-names";
 
 type AnyData = Record<string, unknown>;
 interface Approvers { mode: "any" | "users"; userIds: string[] }
@@ -47,6 +48,7 @@ function ApproverPicker({ value, onChange, people, anyLabel = "Cualquier persona
 
 /** Formulario de la etapa Aprobación: reglas en orden, excepción y recordatorio (este último en Ajustes). */
 export function ApprovalForm({ data, patch, docTypes, fieldsByType }: { data: AnyData; patch: (p: AnyData) => void; docTypes: DocTypeOpt[]; fieldsByType: Record<string, string[]> }) {
+  const fieldName = useFieldName();
   const [people, setPeople] = useState<Person[]>([]);
   useEffect(() => {
     fetch("/api/v1/contracts/approvers").then((r) => r.json()).then((d) => setPeople(Array.isArray(d.users) ? d.users : [])).catch(() => setPeople([]));
@@ -85,7 +87,7 @@ export function ApprovalForm({ data, patch, docTypes, fieldsByType }: { data: An
                 </select>
                 <select className={inp} aria-label="Dato" value={c.field} onChange={(e) => setCond(i, { field: e.target.value })} disabled={!c.docType}>
                   <option value="">Dato…</option>
-                  {(fieldsByType[c.docType] ?? []).map((f) => <option key={f} value={f}>{f}</option>)}
+                  {(fieldsByType[c.docType] ?? []).map((f) => <option key={f} value={f}>{fieldName(c.docType, f)}</option>)}
                 </select>
                 <select className={inp} aria-label="Comparación" value={c.op} onChange={(e) => setCond(i, { op: e.target.value as Condition["op"] })}>
                   <option value="gt">es mayor que</option>

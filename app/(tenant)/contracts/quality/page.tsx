@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { desc, and, eq } from "drizzle-orm";
+import { desc, and, eq, isNull } from "drizzle-orm";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
 import { contractExtractionLearnings } from "@/db/schema";
@@ -15,7 +15,7 @@ export default async function ContractQualityPage() {
   if (session.role !== "admin") redirect("/cases");
 
   const learnings = await db.query.contractExtractionLearnings.findMany({
-    where: and(eq(contractExtractionLearnings.organizationId, session.orgId), eq(contractExtractionLearnings.isActive, true)),
+    where: and(eq(contractExtractionLearnings.organizationId, session.orgId), isNull(contractExtractionLearnings.retiredAt)),
     orderBy: [desc(contractExtractionLearnings.createdAt)],
   });
   return <ContractLearningClient learnings={learnings.map((learning) => ({
@@ -25,6 +25,7 @@ export default async function ContractQualityPage() {
     originalValue: learning.originalValue,
     correctedValue: learning.correctedValue,
     citation: learning.citation,
+    isActive: learning.isActive,
     createdAt: learning.createdAt.toISOString(),
   }))} />;
 }

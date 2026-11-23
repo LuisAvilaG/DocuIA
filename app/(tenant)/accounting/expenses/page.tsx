@@ -22,7 +22,7 @@ export default async function AccountingExpensesPage() {
     syncError: string | null;
     netsuiteExpenseReportId: string | null;
     submitter: { fullName: string | null; email: string };
-    items: { id: string; total: string | null }[];
+    items: { id: string; total: string | null; currency: string | null }[];
   }[] = [];
 
   try {
@@ -33,7 +33,7 @@ export default async function AccountingExpensesPage() {
       ),
       with: {
         submitter: { columns: { fullName: true, email: true } },
-        items: { columns: { id: true, total: true } },
+        items: { columns: { id: true, total: true, currency: true } },
       },
       orderBy: desc(expenseReports.createdAt),
     });
@@ -48,10 +48,18 @@ export default async function AccountingExpensesPage() {
       syncError:               r.syncError,
       netsuiteExpenseReportId: r.netsuiteExpenseReportId,
       submitter:               r.submitter,
-      items:                   r.items.map((i) => ({ id: i.id, total: i.total })),
+      items:                   r.items.map((i) => ({ id: i.id, total: i.total, currency: i.currency })),
     }));
   } catch (err) {
     console.error("[accounting/expenses]", err);
+    // An empty list here read as "nothing to review".
+    return (
+      <div className="p-6">
+        <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+          No se pudieron cargar los informes de gastos. Recarga la página; si sigue igual, avisa a soporte.
+        </p>
+      </div>
+    );
   }
 
   return <AccountingExpenseList reports={reports} />;

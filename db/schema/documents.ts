@@ -1,5 +1,5 @@
 import {
-  pgTable, varchar, text, boolean, integer, json,
+  pgTable, varchar, text, boolean, integer, json, jsonb,
   timestamp, bigserial, bigint, decimal, pgEnum, index,
 } from "drizzle-orm/pg-core";
 
@@ -40,6 +40,11 @@ export const historyDocuments = pgTable("history_documents", {
   attachmentKey:    text("attachment_key"),
   // 3-way match wait: when it started and when to check the receipts again.
   awaitingSince:    timestamp("awaiting_since"),
+  // Modo QA: el documento llegó durante una ronda de pruebas y cada envío QA al ERP.
+  isQa:             boolean("is_qa").notNull().default(false),
+  qaSends:          json("qa_sends"),
+  // Datos para métricas: correcciones en la revisión, duplicado detectado, diferencia con la OC.
+  metricsJson:      jsonb("metrics_json"),
   nextReceiptCheckAt: timestamp("next_receipt_check_at"),
   createdAt:        timestamp("created_at").notNull().defaultNow(),
   updatedAt:        timestamp("updated_at").notNull().defaultNow(),

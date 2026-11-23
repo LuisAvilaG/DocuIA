@@ -16,7 +16,8 @@ async function handleGET(req: NextRequest) {
   const enabled = await isFeatureEnabled(session.orgId, "tenant_audit_log");
   if (!enabled) return NextResponse.json({ error: "Feature not enabled" }, { status: 403 });
 
-  const offset = Math.max(0, parseInt(req.nextUrl.searchParams.get("offset") ?? "0", 10));
+  const rawOffset = parseInt(req.nextUrl.searchParams.get("offset") ?? "0", 10);
+  const offset = Number.isFinite(rawOffset) ? Math.max(0, rawOffset) : 0;
 
   const entries = await db
     .select()

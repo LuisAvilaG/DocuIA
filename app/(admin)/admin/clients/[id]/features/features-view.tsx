@@ -11,6 +11,7 @@ import { Pill, Chip, Notice, fmtDate } from "@/components/admin/ui";
 import { Field, TextInput, Select } from "@/components/admin/form";
 import { ProductArt } from "@/components/admin/product-art";
 import { FeatureConfigPanel, type ConfigParam } from "@/components/admin/feature-config-panel";
+import { TENANT_EDITABLE } from "@/lib/features/tenant-editable";
 
 export interface ProductState {
   key: string; name: string; description: string; requiresIntegration: boolean;
@@ -91,7 +92,7 @@ export function FeaturesView({ orgId, products, features, subsidiaries, playbook
   }
 
   /** PATCH one feature; returns false (and restores the row) on failure. */
-  async function saveFeature(f: FeatureRow, patch: { adminGranted?: boolean; config?: Record<string, unknown>; notes?: string }): Promise<boolean> {
+  async function saveFeature(f: FeatureRow, patch: { adminGranted?: boolean; config?: Record<string, unknown>; notes?: string }): Promise<true | string> {
     const before = rows;
     const next = { ...f, ...patch, hasOverride: true };
     setRows((r) => r.map((x) => (x.id === f.id ? next : x)));
@@ -99,15 +100,21 @@ export function FeaturesView({ orgId, products, features, subsidiaries, playbook
     try {
       const res = await fetch(`/api/admin/clients/${orgId}/features/${f.id}`, {
         method: "PATCH", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ adminGranted: next.adminGranted, config: next.config, notes: next.notes ?? "" }),
+        // The config goes only when it is what was edited: sent with every switch
+        // or note, it overwrote whatever the client had changed since the page loaded.
+        body: JSON.stringify({ adminGranted: next.adminGranted, ...(patch.config ? { config: next.config } : {}), notes: next.notes ?? "" }),
       });
-      if (!res.ok) throw new Error();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(typeof data.error === "string" ? data.error : "");
+      // El servidor puede completar la configuración (p. ej. la fecha de vencimiento del modo QA).
+      if (data.config) setRows((r) => r.map((x) => (x.id === f.id ? { ...next, config: data.config } : x)));
       router.refresh();
       return true;
-    } catch {
+    } catch (e) {
       setRows(before);
-      setError(`No se pudo guardar "${f.name}".`);
-      return false;
+      const msg = e instanceof Error && e.message ? e.message : `No se pudo guardar "${f.name}".`;
+      setError(msg);
+      return msg;
     } finally {
       setSaving(null);
     }
@@ -205,6 +212,9 @@ export function FeaturesView({ orgId, products, features, subsidiaries, playbook
                           {f.name}
                           {f.isBeta && <span className="text-[10px] uppercase tracking-wider text-[oklch(0.50_0.14_80)]">beta</span>}
                           {f.id === "netsuite_dry_run" && f.adminGranted && <Chip>{f.tenantEnabled ? "cliente: activo" : "cliente: apagado"}</Chip>}
+                          {f.id === "qa_mode" && f.adminGranted && typeof f.config.expires_on === "string" && <Chip>hasta {f.config.expires_on}</Chip>}
+                          {f.adminGranted && f.config.tenant_off === true && <Chip>cliente: apagada</Chip>}
+                          {TENANT_EDITABLE[f.id] && <span className="text-[11px] text-muted-foreground">el cliente lo ajusta</span>}
                           {f.hasOverride && <span className="text-[11px] text-muted-foreground">ajuste propio</span>}
                         </div>
                         {f.description && <div className="text-xs text-muted-foreground truncate">{f.description}</div>}

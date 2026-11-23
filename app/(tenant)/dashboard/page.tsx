@@ -3,6 +3,7 @@ import { getTenantSession } from "@/lib/auth/jwt";
 import { requireApAutomation } from "@/lib/products";
 import { isFeatureEnabled } from "@/lib/features";
 import { getDashboardData, type DashboardData } from "@/lib/dashboard/ap-dashboard";
+import { canUploadDocuments } from "@/lib/ap/upload-access";
 import { DashboardView } from "./view";
 
 export default async function TenantDashboardPage() {
@@ -16,6 +17,10 @@ export default async function TenantDashboardPage() {
   } catch (err) {
     console.error("[tenant-dashboard]", err);
   }
-  const statsEnabled = await isFeatureEnabled(session.orgId, "advanced_analytics");
-  return <DashboardView data={data} statsEnabled={statsEnabled} />;
+  const [statsEnabled, exceptionsEnabled, canUpload] = await Promise.all([
+    isFeatureEnabled(session.orgId, "advanced_analytics"),
+    isFeatureEnabled(session.orgId, "exception_queue"),
+    canUploadDocuments(session),
+  ]);
+  return <DashboardView data={data} statsEnabled={statsEnabled} exceptionsEnabled={exceptionsEnabled} canUpload={canUpload} />;
 }

@@ -4,6 +4,9 @@
  * Returns structured fields + per-field confidence + detected document type.
  */
 
+import { generateJson } from "@/lib/ai/provider";
+import { parseLocaleNumber } from "@/lib/numbers";
+
 export type ExpenseDocumentType = "invoice" | "receipt" | "cuenta_cobro" | "documento_equivalente" | "unknown";
 
 export interface ExpenseOcrResult {
@@ -26,24 +29,41 @@ function normalize(v: unknown): string {
   return String(v ?? "").replace(/\s+/g, " ").trim();
 }
 
-function toNumber(v: unknown): number | null {
-  let s = String(v ?? "").replace(/[$€£¥\s]/g, "").trim();
-  if (!s) return null;
+/**
+ * Amount as the model returned it. Parsed as text on purpose, so a model that
+ * answers 1.610 for "1.610" (thousands) is still read as 1610, and "45,90" is
+ * 45.9 instead of 4590. An amount with exactly three decimals is therefore
+ * read as thousands: on a receipt that is what it almost always is.
+ */
+export function toNumber(v: unknown): number | null {
+  const n = parseLocaleNumber(String(v ?? ""));
+  return n !== null && n >= 0 ? n : null;
+}
 
-  // European format: 1.234,56 or 1.234 (dot = thousands, comma = decimal)
-  if (/^\d{1,3}(\.\d{3})+(,\d+)?$/.test(s)) {
-    s = s.replace(/\./g, "").replace(",", ".");
-  // US format: 1,234.56 or 1,234 (comma = thousands, dot = decimal)
-  } else if (/^\d{1,3}(,\d{3})+(\.\d+)?$/.test(s)) {
-    s = s.replace(/,/g, "");
-  } else {
-    // Ambiguous single comma — strip it (treat as thousands separator)
-    s = s.replace(/,/g, "");
-  }
+/**
+ * The amount exactly as the model wrote it in its answer. JSON.parse turns
+ * `12.500` into 12.5 before anyone can read it as twelve thousand five hundred,
+ * so the digits are taken from the text of the answer when they are there.
+ */
+export function amountFromAnswer(rawText: string, raw: Record<string, unknown>, key: string): number | null {
+  const literal = rawText.match(new RegExp(`"${key}"\\s*:\\s*"?\\s*(-?[\\d.,]*\\d)`))?.[1];
+  return toNumber(literal ?? raw[key]);
+}
 
-  s = s.replace(/[^\d.\-]/g, "");
-  const n = Number(s);
-  return Number.isFinite(n) && n >= 0 ? n : null;
+/** A date the form's date field can hold (YYYY-MM-DD), or none. */
+export function toIsoDate(v: unknown): string | null {
+  const text = normalize(v);
+  const valid = (y: number, m: number, d: number) => {
+    const date = new Date(Date.UTC(y, m - 1, d));
+    return y > 1990 && y < 2100 && date.getUTCMonth() === m - 1 && date.getUTCDate() === d
+      ? `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}` : null;
+  };
+  const iso = text.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  if (iso) return valid(Number(iso[1]), Number(iso[2]), Number(iso[3]));
+  // Day first, as receipts in Latin America print it.
+  const dmy = text.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})\b/);
+  if (dmy) return valid(Number(dmy[3]), Number(dmy[2]), Number(dmy[1]));
+  return null;
 }
 
 function detectDocType(raw: Record<string, unknown>): ExpenseDocumentType {
@@ -96,45 +116,13 @@ function getInstruction(): string {
   ].join(" ");
 }
 
-function getApiKey(override?: string): string {
-  // || not ??: an empty GOOGLE_API_KEY= (as in .env.example) must fall through.
-  const key = (override || process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || "").trim();
-  if (!key) throw new Error("Missing GOOGLE_API_KEY — configura la clave de IA en el panel de administración");
-  return key;
-}
+/** Modelo del OCR de gastos. Claude lee PDF, JPG, PNG, WEBP y GIF; otros formatos de foto van a Gemini. */
+export const EXPENSE_OCR_MODEL = "claude-haiku-5-5";
+const CLAUDE_IMAGES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 
-const GEMINI_TIMEOUT_MS = Number(process.env.GEMINI_TIMEOUT_MS) || 90_000;
-
-async function callGemini(parts: Record<string, unknown>[], apiKey?: string): Promise<string> {
-  const model = "gemini-2.5-flash";
-  const url    = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
-
-  const res = await fetch(url, {
-    method:  "POST",
-    headers: { "Content-Type": "application/json", "x-goog-api-key": getApiKey(apiKey) },
-    body: JSON.stringify({
-      contents:         [{ role: "user", parts }],
-      generationConfig: { temperature: 0, responseMimeType: "application/json" },
-    }),
-    cache: "no-store",
-    signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
-  });
-
-  if (!res.ok) throw new Error(`Gemini error (${res.status}): ${await res.text()}`);
-
-  type GeminiReply = { candidates?: Array<{ content?: { parts?: Array<{ text?: unknown }> } }> };
-  const json = await res.json() as GeminiReply;
-  const candidates = Array.isArray(json.candidates) ? json.candidates : [];
-  let text = "";
-  for (const c of candidates) {
-    for (const p of (Array.isArray(c?.content?.parts) ? c.content.parts : [])) {
-      const t = String(p?.text ?? "").trim();
-      if (t) { text = t; break; }
-    }
-    if (text) break;
-  }
-  if (!text) throw new Error("Gemini returned empty response");
-  return text;
+export function expenseOcrModel(mimeType: string, preferred = EXPENSE_OCR_MODEL): string {
+  if (preferred.startsWith("claude") && mimeType !== "application/pdf" && !CLAUDE_IMAGES.has(mimeType)) return "gemini-2.5-flash";
+  return preferred;
 }
 
 function parseJsonSafe(text: string): Record<string, unknown> {
@@ -148,7 +136,7 @@ function parseJsonSafe(text: string): Record<string, unknown> {
 export async function extractExpenseDocument(
   fileBuffer: Buffer,
   mimeType:   string,
-  options?:   { apiKey?: string },
+  options?:   { apiKey?: string; model?: string },
 ): Promise<ExpenseOcrResult> {
   const isImage = mimeType.startsWith("image/");
   const isPdf   = mimeType === "application/pdf";
@@ -157,28 +145,28 @@ export async function extractExpenseDocument(
     throw new Error(`Tipo de archivo no soportado para OCR: ${mimeType}`);
   }
 
-  const parts: Record<string, unknown>[] = [
-    { text: getInstruction() },
-    {
-      inline_data: {
-        mime_type: mimeType,
-        data:      fileBuffer.toString("base64"),
-      },
-    },
-  ];
-
-  const text = await callGemini(parts, options?.apiKey);
-  const raw  = parseJsonSafe(text);
+  const { rawText } = await generateJson({
+    model: expenseOcrModel(mimeType, options?.model),
+    instruction: getInstruction(),
+    parts: [{ kind: "file", base64: fileBuffer.toString("base64"), mimeType }],
+    apiKey: options?.apiKey,
+    maxOutputTokens: 4000,
+    timeoutMs: 90_000,
+  });
+  const raw  = parseJsonSafe(rawText);
 
   const vendorName      = normalize(raw.vendor_name)     || null;
   const vendorNit       = normalize(raw.vendor_nit)      || null;
   const invoiceNumber   = normalize(raw.invoice_number)  || null;
-  const invoiceDate     = normalize(raw.invoice_date)    || null;
-  const subtotal        = toNumber(raw.subtotal);
-  const taxAmount       = toNumber(raw.tax_amount);
-  const retentionAmount = toNumber(raw.retention_amount);
-  const total           = toNumber(raw.total);
-  const currency        = normalize(raw.currency).toUpperCase() || "COP";
+  // Anything that is not a real date reaches the form as "no date": a date
+  // field shows other text as empty while it still holds it, and saving failed.
+  const invoiceDate     = toIsoDate(raw.invoice_date);
+  const subtotal        = amountFromAnswer(rawText, raw, "subtotal");
+  const taxAmount       = amountFromAnswer(rawText, raw, "tax_amount");
+  const retentionAmount = amountFromAnswer(rawText, raw, "retention_amount");
+  const total           = amountFromAnswer(rawText, raw, "total");
+  // Empty when the receipt does not print it: the form applies the organization's currency.
+  const currency        = normalize(raw.currency).toUpperCase();
   const documentType    = detectDocType(raw);
 
   const fieldConfidence: Record<string, number> = {

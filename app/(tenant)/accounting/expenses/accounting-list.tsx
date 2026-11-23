@@ -8,6 +8,7 @@ import {
   CheckCircle2, AlertCircle, XCircle, RefreshCw, Download,
 } from "lucide-react";
 import { EXPENSE_REPORT_STATUS } from "@/lib/status-config";
+import { formatExpenseTotals } from "@/lib/expense/totals";
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -21,7 +22,7 @@ export interface ReportRow {
   syncError: string | null;
   netsuiteExpenseReportId: string | null;
   submitter: { fullName: string | null; email: string };
-  items: { id: string; total: string | null }[];
+  items: { id: string; total: string | null; currency: string | null }[];
 }
 
 
@@ -40,20 +41,10 @@ type TabKey = (typeof TABS)[number]["key"];
 
 // ── Helpers ───────────────────────────────────────────────────────────
 
-function calcTotal(items: { total: string | null }[]): number {
-  return items.reduce((s, i) => s + parseFloat(i.total ?? "0"), 0);
-}
-
 function fmtDate(iso: string | null): string {
   if (!iso) return "—";
   return new Date(iso).toLocaleDateString("es-CO", {
     day: "2-digit", month: "short", year: "numeric",
-  });
-}
-
-function fmtCurrency(n: number): string {
-  return n.toLocaleString("es-CO", {
-    style: "currency", currency: "COP", maximumFractionDigits: 0,
   });
 }
 
@@ -74,7 +65,7 @@ export function AccountingExpenseList({ reports }: { reports: ReportRow[] }) {
     all:       reports.length,
     submitted: reports.filter((r) => r.status === "submitted" || r.status === "under_review").length,
     approved:  reports.filter((r) => r.status === "approved").length,
-    synced:    reports.filter((r) => r.status === "synced" || r.status === "syncing").length,
+    synced:    reports.filter((r) => r.status === "synced").length,
     exception: reports.filter((r) => r.status === "exception").length,
     rejected:  reports.filter((r) => r.status === "rejected").length,
   };
@@ -139,7 +130,6 @@ export function AccountingExpenseList({ reports }: { reports: ReportRow[] }) {
           filtered.map((report) => {
             const cfg   = EXPENSE_REPORT_STATUS[report.status] ?? EXPENSE_REPORT_STATUS["submitted"];
             const Icon  = cfg.icon;
-            const total = calcTotal(report.items);
 
             return (
               <button
@@ -190,7 +180,7 @@ export function AccountingExpenseList({ reports }: { reports: ReportRow[] }) {
                       </div>
                       {/* Right: total */}
                       <span className="text-sm font-semibold tabular-nums text-foreground">
-                        {fmtCurrency(total)}
+                        {formatExpenseTotals(report.items)}
                       </span>
                     </div>
 

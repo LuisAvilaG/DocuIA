@@ -1,6 +1,8 @@
 "use client";
 
+import { defaultExpenseCurrency } from "@/lib/expense/item-input";
 import { parseLocaleNumber } from "@/lib/numbers";
+import { formatExpenseAmount } from "@/lib/expense/totals";
 import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
@@ -79,7 +81,7 @@ export function ItemCaptureClient({ reportId, reportPurpose, categories, departm
   const [taxAmount,       setTaxAmount]       = useState("");
   const [retentionAmount, setRetentionAmount] = useState("");
   const [total,           setTotal]           = useState("");
-  const [currency,        setCurrency]        = useState("COP");
+  const [currency,        setCurrency]        = useState(() => defaultExpenseCurrency(countryCode));
   const [categoryId,      setCategoryId]      = useState("");
   const [departmentId,    setDepartmentId]    = useState("");
   const [classId,         setClassId]         = useState("");
@@ -113,6 +115,8 @@ export function ItemCaptureClient({ reportId, reportPurpose, categories, departm
             invoiceNumber: invoiceNumber || undefined,
             subtotal:      amount(subtotal) ?? undefined,
             categoryId:    categoryId ? Number(categoryId) : undefined,
+            // The caps add up the day and month of the expense, not of its capture.
+            expenseDate:   invoiceDate || undefined,
           }),
         });
         if (res.ok) {
@@ -122,7 +126,7 @@ export function ItemCaptureClient({ reportId, reportPurpose, categories, departm
       } catch { /* silent — non-blocking */ }
     }, 800);
     return () => { if (validateTimer.current) clearTimeout(validateTimer.current); };
-  }, [vendorNit, invoiceNumber, subtotal, categoryId, step]);
+  }, [vendorNit, invoiceNumber, invoiceDate, subtotal, categoryId, step]);
 
   // Client-side tax preview
   const taxPreview = (() => {
@@ -170,12 +174,12 @@ export function ItemCaptureClient({ reportId, reportPurpose, categories, departm
       setVendorName(data.ocr.vendorName ?? "");
       setVendorNit(data.ocr.vendorNit ?? "");
       setInvoiceNumber(data.ocr.invoiceNumber ?? "");
-      setInvoiceDate(data.ocr.invoiceDate ?? "");
+      setInvoiceDate(/^\d{4}-\d{2}-\d{2}$/.test(data.ocr.invoiceDate ?? "") ? data.ocr.invoiceDate : "");
       setSubtotal(amountText(data.ocr.subtotal));
       setTaxAmount(amountText(data.ocr.taxAmount));
       setRetentionAmount(amountText(data.ocr.retentionAmount));
       setTotal(amountText(data.ocr.total));
-      setCurrency(data.ocr.currency || "COP");
+      setCurrency(data.ocr.currency || defaultExpenseCurrency(countryCode));
       setStep("review");
     } catch {
       setError("No se pudo conectar con el servidor");
@@ -582,17 +586,17 @@ export function ItemCaptureClient({ reportId, reportPurpose, categories, departm
               </p>
               {taxPreview.taxes.map((t) => (
                 <div key={t.type} className="flex items-center justify-between text-xs">
-                  <span className="text-muted-foreground">{t.type} {(t.rate * 100).toFixed(0)}%</span>
+                  <span className="text-muted-foreground">{t.type} {(t.rate * 100).toLocaleString("es-CO", { maximumFractionDigits: 2 })}%</span>
                   <span className={cn("tabular-nums font-medium", RETENTION_TYPES.has(t.type) ? "text-warning" : "text-foreground")}>
                     {RETENTION_TYPES.has(t.type) ? "−" : "+"}
-                    {t.amount.toLocaleString("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 })}
+                    {formatExpenseAmount(t.amount, currency)}
                   </span>
                 </div>
               ))}
               <div className="flex items-center justify-between text-xs pt-1.5 border-t border-border">
                 <span className="font-medium text-foreground">Total estimado</span>
                 <span className="tabular-nums font-semibold text-foreground">
-                  {taxPreview.total.toLocaleString("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 })}
+                  {formatExpenseAmount(taxPreview.total, currency)}
                 </span>
               </div>
             </div>
@@ -607,7 +611,7 @@ export function ItemCaptureClient({ reportId, reportPurpose, categories, departm
             <label className="text-xs text-muted-foreground">Categoría</label>
             {categories.length === 0 ? (
               <p className="text-xs text-warning py-2 px-3 rounded-lg bg-warning/10 border border-warning/20">
-                Sin categorías cargadas — el administrador debe sincronizarlas desde NetSuite. Puedes guardar el gasto sin categoría.
+                Sin categorías cargadas — el administrador debe sincronizarlas desde el ERP. Puedes guardar el gasto sin categoría.
               </p>
             ) : (
               <div className="relative">
@@ -692,7 +696,7 @@ export function ItemCaptureClient({ reportId, reportPurpose, categories, departm
             </div>
             {paymentMethod === "company_pays_vendor" && ocr?.documentType === "invoice" && (
               <p className="text-[0.625rem] text-primary">
-                Se creará como Factura de Proveedor en NetSuite
+                Se creará como factura de proveedor en el ERP
               </p>
             )}
           </div>

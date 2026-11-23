@@ -67,8 +67,14 @@ export function describeAdminAction(row: {
   const str = (v: unknown) => (typeof v === "string" || typeof v === "number" ? String(v) : "");
   switch (row.action) {
     case "toggle_feature":
-    case "feature.updated":
-      return `${after.adminGranted ? "Activó" : "Desactivó"} la feature ${row.targetFeature ?? ""}${after.notes ? ` con nota "${str(after.notes)}"` : ""}.`;
+    case "feature.updated": {
+      const verb = before.adminGranted === after.adminGranted
+        ? "Cambió la configuración de"
+        : after.adminGranted ? "Activó" : "Desactivó";
+      return `${verb} la feature ${row.targetFeature ?? ""}${after.notes ? ` con nota "${str(after.notes)}"` : ""}.`;
+    }
+    case "feature.auto_disabled":
+      return `Se apagó sola la feature ${row.targetFeature ?? ""}${after.reason === "environment_production" ? " al pasar el ERP a producción" : after.reason === "expired" ? " al vencer" : ""}.`;
     case "feature_default.updated":
       return `Cambió el valor por defecto de ${row.targetFeature ?? ""} a ${after.defaultEnabled ? "activo" : "inactivo"}${after.affected !== undefined ? ` (afecta a ${str(after.affected)} clientes)` : ""}.`;
     case "org.created":
@@ -82,14 +88,18 @@ export function describeAdminAction(row: {
     case "org.deleted":
       return "Marcó la organización para eliminación (recuperable 30 días).";
     case "org.purged":
-      return "Purgó definitivamente los datos de la organización.";
+      return `Purgó definitivamente los datos de la organización${after.files !== undefined ? ` (${str(after.files)} archivos, ${str(after.tables)} tablas)` : ""}.`;
+    case "org.purge_failed":
+      return `No pudo purgar los datos de la organización: ${str(after.error)}`;
+    case "org.undeleted":
+      return "Recuperó la organización marcada para eliminación; quedó suspendida.";
     case "org.plan_changed":
       return `Cambió el plan de ${str(before.planId)} a ${str(after.planId)}.`;
     case "products.updated":
       return `Actualizó los productos contratados (${str(after.summary)}).`;
     case "netsuite_connection.created":
     case "netsuite_connection.updated":
-      return `Guardó credenciales ERP de ${str(after.environment)} (cuenta ${str(after.accountId)})${after.tested === true ? ", probadas" : after.tested === false ? ", sin probar" : ""}.`;
+      return `Guardó credenciales ERP de ${str(after.environment)} (cuenta ${str(after.accountId)})${after.tested === true ? ", probadas" : after.tested === false ? ", la prueba falló" : ", sin probar"}.`;
     case "netsuite_connection.tested":
       return `Probó la conexión ERP de ${str(after.environment)}: ${after.ok ? "correcta" : `falló (${str(after.error)})`}.`;
     case "netsuite_scripts.updated":

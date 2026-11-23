@@ -3,11 +3,12 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { LayoutDashboard, Building2, Cpu, ShieldCheck, ScrollText, LogOut } from "lucide-react";
+import { LayoutDashboard, Building2, BarChart3, Cpu, ShieldCheck, ScrollText, LogOut } from "lucide-react";
 
 const NAV = [
   { href: "/admin",                label: "Resumen",               icon: LayoutDashboard, exact: true },
   { href: "/admin/clients",        label: "Clientes",              icon: Building2 },
+  { href: "/admin/metrics",        label: "Métricas",              icon: BarChart3 },
   { href: "/admin/features",       label: "Catálogo de features",  icon: Cpu },
   { href: "/admin/administrators", label: "Administradores",       icon: ShieldCheck },
   { href: "/admin/audit",          label: "Auditoría",             icon: ScrollText },

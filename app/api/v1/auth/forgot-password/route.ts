@@ -13,7 +13,8 @@ import { rateLimit } from "@/lib/auth/rate-limit";
 async function handlePOST(req: NextRequest) {
   try {
     // Throttle to stop reset-email bombing / provider abuse.
-    const rl = await rateLimit(`forgot:${clientIp(req.headers)}`, { max: 5, windowSec: 900 });
+    const ip = clientIp(req.headers);
+    const rl = await rateLimit(`forgot:${ip}`, { max: 5, windowSec: 900 });
     if (!rl.ok) {
       return NextResponse.json({ error: "Demasiados intentos. Inténtalo más tarde." },
         { status: 429, headers: { "Retry-After": String(rl.retryAfterSec ?? 900) } });
@@ -26,8 +27,16 @@ async function handlePOST(req: NextRequest) {
     }
 
     const normalized = parsedEmail.data;
-    const accountLimit = await rateLimit(accountRateKey("forgot", normalized), { max: 3, windowSec: 900 });
-    if (!accountLimit.ok) return NextResponse.json({ ok: true, message: "Si el email existe, recibirás un enlace de recuperación." });
+    // Keyed by email + IP: someone who knows the address cannot use up the
+    // owner's allowance from another network and block their reset emails.
+    const accountLimit = await rateLimit(accountRateKey("forgot", `${normalized}|${ip}`), { max: 3, windowSec: 900 });
+    // Ceiling across all IPs so a distributed sender cannot flood the mailbox.
+    // Set above what one IP can reach (3 per 15 min = 12 per hour), so it
+    // takes several networks to trip it.
+    const mailboxLimit = accountLimit.ok
+      ? await rateLimit(accountRateKey("forgot-mailbox", normalized), { max: 20, windowSec: 3600 })
+      : accountLimit;
+    if (!accountLimit.ok || !mailboxLimit.ok) return NextResponse.json({ ok: true, message: "Si el email existe, recibirás un enlace de recuperación." });
 
     // Always respond with 200 to avoid email enumeration
     const user = await db.query.orgUsers.findFirst({
@@ -48,11 +57,13 @@ async function handlePOST(req: NextRequest) {
       const appUrl  = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
       const resetUrl = `${appUrl}/reset-password?token=${token}`;
 
-      await sendEmail({
+      // Not awaited: waiting for the mail provider made the answer slower only
+      // when the address has an account, which told them apart.
+      void sendEmail({
         to:      normalized,
         subject: "Recuperar contraseña — DocuIA",
         html:    buildResetEmail({ email: normalized, resetUrl }),
-      });
+      }).catch((err) => console.error("[forgot-password] email", err instanceof Error ? err.message : err));
     }
 
     return NextResponse.json({

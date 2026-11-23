@@ -50,6 +50,7 @@ export function parsePoMatchConfig(raw: unknown): PoMatchConfig {
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
+const round6 = (n: number) => Math.round(n * 1e6) / 1e6;
 
 function normalizePoNumber(value: string): string {
   return value.toUpperCase().replace(/[^A-Z0-9]/g, "");
@@ -145,6 +146,8 @@ export interface LineComparison {
   priceDiffPct:  number | null;
   missingReceipt: number;
   status:        LineStatus;
+  /** PO lines this invoice line bills and how much on each (absent on comparisons stored before it existed). */
+  allocations?:  Array<{ poLine: string; quantity: number }>;
 }
 
 export interface PoComparison {
@@ -191,18 +194,29 @@ export function comparePoLines(
 
     const pending = candidates.reduce((s, l) => s + l.pending, 0);
     const receivedAvailable = candidates.reduce((s, l) => s + l.receivedAvailable, 0);
-    const first = candidates[0];
+    // The PO line this invoice line starts on: the first one of the item that
+    // still has quantity to bill, not one an earlier invoice line already used up.
+    const first = candidates.find((l) => l.pending > 0) ?? candidates[0];
     const rate = inv.rate ?? (inv.amount !== null && inv.quantity ? inv.amount / inv.quantity : null);
     const priceDiffPct = rate !== null && first.rate ? round2(((rate - first.rate) / first.rate) * 100) : null;
 
     // Consume quantity so a later line of the same item sees what is left.
+    const allocations: Array<{ poLine: string; quantity: number }> = [];
     let toTake = inv.quantity;
     for (const l of candidates) {
       const take = Math.min(l.pending, toTake);
+      if (take > 0) allocations.push({ poLine: l.line, quantity: round6(take) });
       l.pending -= take;
       l.receivedAvailable = Math.max(0, l.receivedAvailable - take);
       toTake -= take;
       if (toTake <= 0) break;
+    }
+    // More than the PO has pending (status qty_over): the excess stays on the
+    // last line it reached so the allocations still add up to the invoice line.
+    if (toTake > 1e-9) {
+      const last = allocations[allocations.length - 1];
+      if (last) last.quantity = round6(last.quantity + toTake);
+      else allocations.push({ poLine: first.line, quantity: inv.quantity });
     }
 
     const qtyAllowed = pending * (1 + cfg.qtyTolerancePct / 100) + 1e-9;
@@ -214,7 +228,7 @@ export function comparePoLines(
     else if (priceDiffPct !== null && Math.abs(priceDiffPct) >= 0.005) status = "price_within_tolerance";
 
     return {
-      ...base, poLine: first.line, poPending: pending, poReceivedAvailable: receivedAvailable,
+      ...base, poLine: allocations[0]?.poLine ?? first.line, allocations, poPending: pending, poReceivedAvailable: receivedAvailable,
       poRate: first.rate, priceDiffPct, missingReceipt, status,
     };
   });
@@ -269,10 +283,14 @@ export function poOutcome(cmp: PoComparison, cfg: Pick<PoMatchConfig, "onMismatc
     if (cfg.onMismatch === "block") return { kind: "blocked", reason };
     if (cfg.onMismatch === "approval") return { kind: "needs_approval", reason };
   }
+  // "Only warn" does not stop a person from posting, but the warning has to be
+  // seen by one: without this the automatic path posted the difference unseen.
+  const warned = mismatches.length ? mismatches.join("; ") : null;
   if (cmp.counts.not_received) {
     const missing = cmp.lines.filter((l) => l.status === "not_received");
     return { kind: "await_receipt", reason: missing.map((l) => `${l.description}: faltan ${l.missingReceipt} por recibir`).join("; ") };
   }
-  if (extra) return { kind: "needs_review", reason: `${extra} línea(s) no están en la OC` };
+  const notes = [warned, extra && cfg.extraLines !== "block" ? `${extra} línea(s) no están en la OC` : null].filter(Boolean);
+  if (notes.length) return { kind: "needs_review", reason: notes.join("; ") };
   return { kind: "ok" };
 }

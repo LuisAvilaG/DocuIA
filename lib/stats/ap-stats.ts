@@ -2,8 +2,11 @@
 // time to the ERP, funnel, vendors (or ERP vendor categories), reasons the
 // documents stop and the team's activity.
 
+import { orgTimeZone } from "@/lib/org-time-zone";
+import { startOfMonthIn } from "@/lib/time-zone";
 import { db } from "@/lib/db";
-import { catalogVendors, exceptionQueue, historyDocuments, orgUsers } from "@/db/schema";
+import { catalogVendors, exceptionQueue, historyDocuments, orgUsers, subsidiaries } from "@/db/schema";
+import { amountsByCurrency, docCurrency } from "./doc-currency";
 import { and, desc, eq, gte, inArray, isNotNull, lt, ne, sql, type SQL } from "drizzle-orm";
 
 export type Period = "7d" | "month" | "quarter";
@@ -13,15 +16,19 @@ export interface StatsFilters {
   period: Period;
   subsidiaryId: string | null;
   vendor: string | null;
+  /** Los documentos de rondas del modo QA no cuentan salvo que se pidan. */
+  includeQa?: boolean;
 }
 
-export function periodRange(period: Period, now = new Date()): { from: Date; to: Date; prevFrom: Date; label: string; prevLabel: string } {
+export function periodRange(period: Period, now = new Date(), timeZone?: string): { from: Date; to: Date; prevFrom: Date; label: string; prevLabel: string } {
   const to = now;
   if (period === "month") {
-    const from = new Date(now.getFullYear(), now.getMonth(), 1);
-    const prevFrom = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    const month = (d: Date) => d.toLocaleDateString("es-MX", { month: "long" });
-    return { from, to, prevFrom, label: `${month(from)} ${from.getFullYear()}`, prevLabel: month(prevFrom) };
+    // With a zone, the month is the client's; without one, the server's.
+    const from = timeZone ? startOfMonthIn(timeZone, now) : new Date(now.getFullYear(), now.getMonth(), 1);
+    const prevFrom = timeZone ? startOfMonthIn(timeZone, new Date(from.getTime() - 1)) : new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const month = (d: Date) => d.toLocaleDateString("es-MX", { month: "long", timeZone });
+    const year = from.toLocaleDateString("es-MX", { year: "numeric", timeZone });
+    return { from, to, prevFrom, label: `${month(from)} ${year}`, prevLabel: month(prevFrom) };
   }
   const days = period === "7d" ? 7 : 90;
   const from = new Date(now.getTime() - days * 86_400_000);
@@ -43,12 +50,14 @@ export function reasonBucket(reason: string | null): string {
   return "Otros motivos";
 }
 
-const vendorIdExpr = sql<string | null>`coalesce(${historyDocuments.products}->'approval_draft'->>'vendorId', ${historyDocuments.products}->'document'->'vendor'->>'selected_internal_id')`;
-const poOutcomeExpr = sql<string | null>`(${historyDocuments.products}->'ap_checks'->'po'->'outcome'->>'kind')`;
+// Once a document is posted, products holds only the posted lines: the vendor,
+// PO outcome and reviewer are then read from metrics_json.
+const vendorIdExpr = sql<string | null>`coalesce(${historyDocuments.products}->'approval_draft'->>'vendorId', ${historyDocuments.products}->'document'->'vendor'->>'selected_internal_id', ${historyDocuments.metricsJson}->'sent'->>'vendorId')`;
+const poOutcomeExpr = sql<string | null>`coalesce(${historyDocuments.products}->'ap_checks'->'po'->'outcome'->>'kind', ${historyDocuments.metricsJson}->'po'->>'outcome')`;
 const isAuto = sql`${historyDocuments.status} = 'completed' and ${historyDocuments.approvedBy} is null`;
 
 export async function loadApStats(f: StatsFilters, opts: { byCategory: boolean }) {
-  const range = periodRange(f.period);
+  const range = periodRange(f.period, new Date(), await orgTimeZone(f.organizationId));
   const scope = (from: Date, to: Date): SQL[] => [
     eq(historyDocuments.organizationId, f.organizationId),
     ne(historyDocuments.documentType, "purchase_order"),
@@ -56,6 +65,7 @@ export async function loadApStats(f: StatsFilters, opts: { byCategory: boolean }
     lt(historyDocuments.createdAt, to),
     ...(f.subsidiaryId ? [eq(historyDocuments.subsidiaryId, f.subsidiaryId)] : []),
     ...(f.vendor ? [eq(historyDocuments.vendor, f.vendor)] : []),
+    ...(f.includeQa ? [] : [eq(historyDocuments.isQa, false)]),
   ];
   const cur = and(...scope(range.from, range.to));
   const prev = and(...scope(range.prevFrom, range.from));
@@ -71,6 +81,31 @@ export async function loadApStats(f: StatsFilters, opts: { byCategory: boolean }
     medianHours: sql<number | null>`percentile_cont(0.5) within group (order by extract(epoch from (${historyDocuments.updatedAt} - ${historyDocuments.createdAt})) / 3600) filter (where ${historyDocuments.status} = 'completed')`,
   }).from(historyDocuments).where(where);
 
+  // The same scope as the rest of the page, for the per-person counts: they
+  // ignored subsidiary, vendor and QA, counted purchase orders and had no end date.
+  const teamScope = sql`and h.created_at < ${range.to} and h.document_type <> 'purchase_order'
+    ${f.subsidiaryId ? sql`and h.subsidiary_id = ${f.subsidiaryId}` : sql``}
+    ${f.vendor ? sql`and h.vendor = ${f.vendor}` : sql``}
+    ${f.includeQa ? sql`` : sql`and h.is_qa = false`}`;
+  const groupName = opts.byCategory
+    ? sql<string>`coalesce(max(${catalogVendors.categoryName}), 'Sin categoría')`
+    : sql<string>`coalesce(${historyDocuments.vendor}, 'Sin proveedor')`;
+  const amountSum = sql<number>`coalesce(sum(${historyDocuments.total}), 0)::float`;
+  // Money by currency, for the period and for each row of the table: a total
+  // that adds pesos and dollars means nothing.
+  const [periodAmounts, groupAmounts] = await Promise.all([
+    db.select({ currency: docCurrency, amount: amountSum }).from(historyDocuments)
+      .leftJoin(subsidiaries, eq(subsidiaries.id, historyDocuments.subsidiaryId))
+      .where(cur).groupBy(docCurrency),
+    opts.byCategory
+      ? db.select({ name: groupName, currency: docCurrency, amount: amountSum }).from(historyDocuments)
+          .leftJoin(subsidiaries, eq(subsidiaries.id, historyDocuments.subsidiaryId))
+          .leftJoin(catalogVendors, and(eq(catalogVendors.subsidiaryId, historyDocuments.subsidiaryId), eq(catalogVendors.internalId, vendorIdExpr)))
+          .where(cur).groupBy(catalogVendors.categoryId, docCurrency)
+      : db.select({ name: groupName, currency: docCurrency, amount: amountSum }).from(historyDocuments)
+          .leftJoin(subsidiaries, eq(subsidiaries.id, historyDocuments.subsidiaryId))
+          .where(cur).groupBy(historyDocuments.vendor, docCurrency),
+  ]);
   const [curRow, prevRow, weeks, vendorsRows, exceptionRows, openExceptions, team] = await Promise.all([
     summary(cur),
     summary(prev),
@@ -114,9 +149,9 @@ export async function loadApStats(f: StatsFilters, opts: { byCategory: boolean }
       email:    orgUsers.email,
       role:     orgUsers.role,
       // Correlated subqueries: the outer column must be qualified or it binds to h.id.
-      uploaded: sql<number>`(select count(*) from history_documents h where h.organization_id = ${f.organizationId} and h.processed_by = "org_users"."id" and h.created_at >= ${range.from})::int`,
-      reviewed: sql<number>`(select count(*) from history_documents h where h.organization_id = ${f.organizationId} and h.products->>'approval_requested_by' = "org_users"."id" and h.created_at >= ${range.from})::int`,
-      approved: sql<number>`(select count(*) from history_documents h where h.organization_id = ${f.organizationId} and h.approved_by = "org_users"."id" and h.created_at >= ${range.from})::int`,
+      uploaded: sql<number>`(select count(*) from history_documents h where h.organization_id = ${f.organizationId} and h.processed_by = "org_users"."id" and h.created_at >= ${range.from} ${teamScope})::int`,
+      reviewed: sql<number>`(select count(*) from history_documents h where h.organization_id = ${f.organizationId} and coalesce(h.products->>'approval_requested_by', h.metrics_json->'sent'->>'reviewedBy') = "org_users"."id" and h.created_at >= ${range.from} ${teamScope})::int`,
+      approved: sql<number>`(select count(*) from history_documents h where h.organization_id = ${f.organizationId} and h.approved_by = "org_users"."id" and h.created_at >= ${range.from} ${teamScope})::int`,
     }).from(orgUsers).where(and(eq(orgUsers.organizationId, f.organizationId), isNotNull(orgUsers.email))),
   ]);
 
@@ -145,6 +180,7 @@ export async function loadApStats(f: StatsFilters, opts: { byCategory: boolean }
     autoDelta: autoPct !== null && prevAutoPct !== null ? autoPct - prevAutoPct : null,
     received: c.received,
     amount: c.amount,
+    amounts: amountsByCurrency(periodAmounts),
     medianHours: c.medianHours === null ? null : Number(c.medianHours),
     exceptions: { total: exceptions.length, open: openExceptions[0]?.count ?? 0, pct: c.received ? Math.round((exceptions.length / c.received) * 1000) / 10 : 0 },
     funnel: [
@@ -158,6 +194,7 @@ export async function loadApStats(f: StatsFilters, opts: { byCategory: boolean }
       name: v.name,
       count: v.count,
       amount: v.amount,
+      amounts: amountsByCurrency(groupAmounts.filter((g) => g.name === v.name)),
       poPct: v.poChecked ? Math.round((v.poOk / v.poChecked) * 100) : null,
       exceptions: (v.docIds ?? []).reduce((s, id) => s + (exceptionDocs.get(Number(id)) ?? 0), 0),
     })),

@@ -1,4 +1,4 @@
-import { parseLocaleNumber } from "@/lib/numbers";
+import { normalizeContractNumber } from "./normalization";
 export const CALCULATION_OPERATIONS = ["percentage", "multiply", "add", "subtract", "divide"] as const;
 export type CalculationOperation = typeof CALCULATION_OPERATIONS[number];
 
@@ -56,7 +56,8 @@ export interface CalculationResult {
 type DocsByTypeLike = Record<string, Array<{ values: Record<string, unknown> }>>;
 
 function toNumber(value: unknown): number | null {
-  return parseLocaleNumber(value);
+  // Same reading as validations and approval steps: a text with two figures is not a number.
+  return normalizeContractNumber(value);
 }
 
 function refName(ref: CalculationReference | CalculationOperand | number): string {

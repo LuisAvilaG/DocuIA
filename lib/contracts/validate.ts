@@ -1,4 +1,5 @@
 import { compareContractValues, normalizeContractDate, normalizeContractNumber, textValuesMatch, type ComparisonNormalizer } from "./normalization";
+import { evidenceForFinding, type EvidenceRef } from "./evidence";
 
 // ── Declarative validation engine ─────────────────────────────────────
 // Rules are configured per flow (validate nodes). Each rule is ONE condition
@@ -7,7 +8,7 @@ import { compareContractValues, normalizeContractDate, normalizeContractNumber, 
 
 export type Severity = "info" | "warn" | "block";
 
-export interface DocData { values: Record<string, unknown>; citations: Record<string, unknown> }
+export interface DocData { values: Record<string, unknown>; citations: Record<string, unknown>; documentId?: string }
 export type DocsByType = Record<string, DocData[]>;
 
 export interface ValidationResult {
@@ -19,6 +20,8 @@ export interface ValidationResult {
   reason:   string;
   checks:   Array<{ label: string; ok: boolean | null }>;
   citation: string | null;
+  /** Citas que respaldan el hallazgo (documento y página cuando se conocen). */
+  evidence?: EvidenceRef[];
 }
 
 interface Ref { docType: string; field: string }
@@ -43,10 +46,32 @@ function hasValue(v: unknown): boolean {
 export function namesMatch(a: string, b: string): boolean {
   return textValuesMatch(a, b);
 }
-function truthy(v: unknown): boolean {
+const CLAUSE_ABSENT = new Set(["", "false", "0", "no", "n/a", "na", "ninguna", "ninguno", "ausente", "no aplica", "no presente"]);
+/**
+ * Whether a clause field says the clause is in the document. The extraction
+ * returns the clause's own text (or null when it is not there), so any text
+ * that is not an explicit "no" counts as present.
+ */
+export function clausePresent(v: unknown): boolean {
   if (typeof v === "boolean") return v;
-  const s = String(v ?? "").trim().toLowerCase();
-  return ["true", "1", "si", "sí", "yes", "revocado", "presente", "incluye", "x"].includes(s);
+  if (Array.isArray(v)) return v.length > 0;
+  if (v === null || v === undefined) return false;
+  // "No.", "No aplica." or "No pactada" are the model saying it is not there.
+  const s = String(v).trim().toLowerCase().replace(/[\s.;,!]+$/, "");
+  return !CLAUSE_ABSENT.has(s) && !/^no (se |hay |aparece|incluye|contiene|existe|figura|consta|aplica|pactad|estipulad|presenta|registra|tiene)/.test(s);
+}
+/**
+ * Whether a confirmation field says the power was revoked. The extraction
+ * returns free text ("Sí, revocado el 12/03/2024", "Vigente"), so it is read
+ * as such; null when the text does not say either way.
+ */
+export function revocationStated(v: unknown): boolean | null {
+  if (typeof v === "boolean") return v;
+  if (v === null || v === undefined) return false;
+  const s = String(v).trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  if (CLAUSE_ABSENT.has(s) || /^no\b/.test(s) || /\b(vigente|sin revoc|no (ha sido |fue |esta |se encuentra )?revoc)/.test(s)) return false;
+  if (["true", "1", "yes", "x", "presente", "incluye"].includes(s) || /^si\b/.test(s) || /revoc/.test(s)) return true;
+  return null;
 }
 function toNumber(v: unknown): number | null {
   return normalizeContractNumber(v);
@@ -167,7 +192,12 @@ function runCrossReference(r: Extract<ValidationRule, { kind: "cross_reference" 
     if (!inMembers) return fail(s, labels.fail, `No aparece en ${noun}.`, checks);
     if (r.confirmation) {
       if (confDocs.length === 0) { checks.push({ label: r.confirmation.label, ok: null }); return unk(s, labels.unknown, `Aparece en ${noun} pero no hay ${r.confirmation.label.toLowerCase()} que lo confirme.`, checks); }
-      const revoked = confDocs.some((d) => r.confirmation!.revokedWhenTruthy !== false && truthy(d.values[r.confirmation!.field]));
+      const states = r.confirmation.revokedWhenTruthy !== false ? confDocs.map((d) => revocationStated(d.values[r.confirmation!.field])) : [];
+      const revoked = states.some((state) => state === true);
+      if (!revoked && states.some((state) => state === null)) {
+        checks.push({ label: r.confirmation.label, ok: null });
+        return unk(s, labels.unknown, `No se pudo determinar si el ${r.confirmation.label.toLowerCase()} indica revocación; revísalo.`, checks);
+      }
       checks.push({ label: r.confirmation.label, ok: !revoked });
       return revoked ? fail(s, labels.fail, `El ${r.confirmation.label.toLowerCase()} indica revocación.`, checks) : pass(s, labels.pass, "Confirmado.", checks);
     }
@@ -178,7 +208,7 @@ function runCrossReference(r: Extract<ValidationRule, { kind: "cross_reference" 
 function runFieldMatch(r: Extract<ValidationRule, { kind: "field_match" }>, docs: DocsByType): Finding[] {
   const a = firstValue(docs, r.left), b = firstValue(docs, r.right);
   const subject = `${r.left.field} vs ${r.right.field}`;
-  if (a === undefined || b === undefined) return [unk(subject, "faltante", "Falta uno de los campos a comparar.")];
+  if (!hasValue(a) || !hasValue(b)) return [unk(subject, "faltante", "Falta uno de los campos a comparar.")];
   const equal = compareContractValues({
     left: a,
     right: b,
@@ -194,8 +224,12 @@ function runFieldMatch(r: Extract<ValidationRule, { kind: "field_match" }>, docs
 }
 
 function runClause(r: Extract<ValidationRule, { kind: "clause_presence" }>, docs: DocsByType): Finding[] {
-  const present = truthy(firstValue(docs, { docType: r.docType, field: r.field }));
+  const present = clausePresent(firstValue(docs, { docType: r.docType, field: r.field }));
   const mustExist = r.mustExist !== false;
+  // A forbidden clause cannot be "absent" from a document that is not in the case.
+  if (!mustExist && (docs[r.docType] ?? []).length === 0) {
+    return [unk(r.field, "sin documento", "El documento no está en el caso: no se pudo comprobar que la cláusula no aparezca.")];
+  }
   return [(mustExist ? present : !present)
     ? pass(r.field, present ? "presente" : "ausente", mustExist ? "La cláusula requerida está presente." : "La cláusula prohibida no aparece.")
     : fail(r.field, present ? "presente" : "ausente", mustExist ? "Falta la cláusula requerida." : "Aparece una cláusula que no debería estar.")];
@@ -229,6 +263,7 @@ function runDate(r: Extract<ValidationRule, { kind: "date_rule" }>, docs: DocsBy
     const ok = other ? d.getTime() < other.getTime() : null;
     checks.push({ label: `Antes de ${r.before.field}`, ok });
     if (ok === false) return [fail(r.field, "orden inválido", `${r.field} no es anterior a ${r.before.field}.`, checks)];
+    if (ok === null) return [unk(r.field, "sin fecha", `No se pudo leer ${r.before.field} para comparar.`, checks)];
   }
   return [pass(r.field, "válida", "La fecha cumple las condiciones.", checks)];
 }
@@ -241,6 +276,8 @@ function runFormat(r: Extract<ValidationRule, { kind: "field_format" }>, docs: D
   let okr: boolean;
   if (r.format === "tax_id") okr = validateTaxId(s, r.country);
   else if (r.format === "date") okr = toDate(s) !== null;
+  // Amounts and percentages are extracted with their symbol ("$58.833.600", "20%").
+  else if (r.format === "number") okr = toNumber(s) !== null;
   else okr = FORMAT_RE[r.format].test(s);
   const label = r.format === "tax_id" ? `ID fiscal${r.country ? ` (${r.country})` : ""}` : r.format;
   return [okr ? pass(r.field, "formato válido", `"${s}" es un ${label} válido.`) : fail(r.field, "formato inválido", `"${s}" no es un ${label} válido.`)];
@@ -280,17 +317,29 @@ export function runValidations(rules: ConfiguredRule[], docsByType: DocsByType, 
       default: continue;
     }
     const severity = r.severity ?? "warn";
-    for (const f of findings) out.push({ ...f, ruleName: r.name, severity });
+    // Los hallazgos (no los aprobados) llevan las citas de los campos que usa la regla.
+    for (const f of findings) out.push({ ...f, ruleName: r.name, severity, ...(f.ok === true ? {} : { evidence: evidenceForFinding(c, f.subject, docsByType) }) });
   }
   return out;
 }
 
+/**
+ * Cuánto pesa una validación en el caso. Un bloqueante que falla bloquea; uno
+ * que no se pudo verificar (falta el dato) queda «a revisar», igual que una
+ * advertencia que falla o no se verificó. Los aprobados e informativos no pesan.
+ */
+export function findingLevel(v: { ok: boolean | null; severity: string | null }): "block" | "warn" | null {
+  if (v.ok === true || (v.severity !== "block" && v.severity !== "warn")) return null;
+  return v.ok === false && v.severity === "block" ? "block" : "warn";
+}
+
 // Overall case verdict for the semáforo: block > warn > ok.
-export function caseVerdict(results: ValidationResult[]): "ok" | "warn" | "block" {
+export function caseVerdict(results: Array<{ ok: boolean | null; severity: string | null }>): "ok" | "warn" | "block" {
   let worst: "ok" | "warn" | "block" = "ok";
   for (const r of results) {
-    if (r.ok === false && r.severity === "block") return "block";
-    if (r.ok !== true && r.severity === "warn" && worst === "ok") worst = "warn";
+    const level = findingLevel(r);
+    if (level === "block") return "block";
+    if (level === "warn") worst = "warn";
   }
   return worst;
 }

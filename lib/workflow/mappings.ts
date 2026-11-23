@@ -56,9 +56,11 @@ export async function upsertItemMappings(
     }
 
     const row = {
-      subsidiaryId: entry.subsidiaryId, vendor: entry.vendor, vendorNorm,
-      vendorItemName: entry.vendorItemName, vendorItemNorm,
-      netsuiteInternalId: entry.netsuiteInternalId, netsuiteItemName: entry.netsuiteItemName ?? null,
+      // Cut to the column sizes: one long description must not fail the insert
+      // and lose the mappings of the rest of the document.
+      subsidiaryId: entry.subsidiaryId, vendor: entry.vendor.slice(0, 191), vendorNorm,
+      vendorItemName: entry.vendorItemName.slice(0, 512), vendorItemNorm,
+      netsuiteInternalId: entry.netsuiteInternalId, netsuiteItemName: entry.netsuiteItemName?.slice(0, 255) ?? null,
       netsuiteUnit: entry.netsuiteUnit ?? null, autoMap: entry.autoMap, lastConfirmed: now,
     };
     await db.insert(itemMappings).values(row).onConflictDoUpdate({

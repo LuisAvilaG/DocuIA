@@ -4,21 +4,27 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
-  LayoutDashboard, FileUp, Clock, AlertTriangle,
-  GitMerge, Database, BarChart3, Settings, Workflow, ClipboardCheck,
-  LogOut, User, Zap, Crown, Receipt, ScrollText, FolderOpen, BrainCircuit, KeyRound, ListChecks,
+  LayoutDashboard, FileUp, FileText, Clock, AlertTriangle,
+  GitMerge, Database, SlidersHorizontal, BarChart3, Settings, Workflow, ClipboardCheck,
+  LogOut, User, Users, Zap, Crown, Receipt, ScrollText, FolderOpen, BrainCircuit, KeyRound, ListChecks, Menu, X,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { ChangePasswordDialog } from "@/components/shared/change-password-dialog";
 import Image from "next/image";
 import { useFeatures } from "@/components/providers/feature-provider";
-import { PRODUCTS, PRODUCT_AREA, PRODUCT_MODULES, PLATFORM_MODULES, type ProductKey, type NavModule } from "@/lib/products/registry";
+import { PRODUCTS, PRODUCT_AREA, PRODUCT_MODULES, PLATFORM_MODULES, productForPath, type ProductKey, type NavModule } from "@/lib/products/registry";
 import { canAccessTenantArea, TENANT_ROLE_LABELS, isTenantRole } from "@/lib/auth/permissions";
+
+const LAST_PRODUCT_KEY = "docuia:product";
+const noopSubscribe = () => () => {};
+function readLastProduct(): ProductKey | null {
+  try { return sessionStorage.getItem(LAST_PRODUCT_KEY) as ProductKey | null; } catch { return null; }
+}
 
 // lucide icon name → component (registry stores names as strings)
 const ICONS: Record<string, React.ElementType> = {
-  LayoutDashboard, FileUp, Clock, AlertTriangle, GitMerge, Database,
-  BarChart3, Settings, Workflow, ClipboardCheck, Receipt, ScrollText, FolderOpen, BrainCircuit, ListChecks,
+  LayoutDashboard, FileUp, FileText, Clock, AlertTriangle, GitMerge, Database, SlidersHorizontal,
+  BarChart3, Settings, Workflow, ClipboardCheck, Receipt, ScrollText, FolderOpen, BrainCircuit, ListChecks, Users,
 };
 
 const PLAN_BADGE: Record<string, string> = {
@@ -46,25 +52,45 @@ export function TenantSidebar({ orgName, plan, userEmail, userRole, activeProduc
   const router   = useRouter();
   const features = useFeatures();
   const [changingPassword, setChangingPassword] = useState(false);
+  // En pantallas angostas el menú es un panel que se abre desde la barra superior.
+  const [menuOpen, setMenuOpen] = useState(false);
 
   const active = new Set(activeProducts);
   const isVisible = (m: NavModule) =>
     (!m.feature || features[m.feature])
     && (userRole === "admin" || (!m.adminOnly && (!m.roles || m.roles.includes(userRole))));
 
-  // One section per active product the role can use; hide empty sections.
-  const sections = PRODUCTS
+  // One entry per active product the role can use; hide products with nothing to show.
+  const products = PRODUCTS
     .filter((p) => active.has(p.key) && canAccessTenantArea(userRole, { area: PRODUCT_AREA[p.key as ProductKey] }))
-    .map((p) => ({ name: p.name, items: PRODUCT_MODULES[p.key as ProductKey].filter(isVisible) }))
+    .map((p) => ({ key: p.key, name: p.shortName, items: PRODUCT_MODULES[p.key as ProductKey].filter(isVisible) }))
     .filter((s) => s.items.length > 0);
+
+  // Rediseño 2026: con más de un producto, un selector arriba y solo el menú del
+  // producto actual (el de la ruta; en rutas de plataforma, el primero).
+  const routeProduct = productForPath(pathname);
+  // En rutas de plataforma (Ajustes y usuarios) se queda el último producto visitado.
+  const lastProduct = useSyncExternalStore(noopSubscribe, readLastProduct, () => null);
+  useEffect(() => {
+    try { if (routeProduct) sessionStorage.setItem(LAST_PRODUCT_KEY, routeProduct); } catch { /* sin almacenamiento */ }
+  }, [routeProduct]);
+  const current = products.find((p) => p.key === (routeProduct ?? lastProduct)) ?? products[0];
+  const sections = current
+    ? [
+        { name: "", items: current.items.filter((m) => m.group !== "config") },
+        { name: "Configuración", items: current.items.filter((m) => m.group === "config") },
+      ].filter((s) => s.items.length > 0)
+    : [];
 
   const platformItems = PLATFORM_MODULES.filter(isVisible);
 
   // Highlight only the most specific matching route (longest href prefix), so a
   // parent like "/contracts" doesn't stay active on "/contracts/flow".
+  // Rutas que viven dentro de otra entrada del menú (carga y detalle → Documentos).
+  const navPath = pathname.startsWith("/workflow") || pathname.startsWith("/history") ? "/documents" : pathname;
   const allHrefs = [...sections.flatMap((s) => s.items), ...platformItems].map((m) => m.href);
   const activeHref = allHrefs
-    .filter((h) => pathname === h || pathname.startsWith(h + "/"))
+    .filter((h) => navPath === h || navPath.startsWith(h + "/"))
     .sort((a, b) => b.length - a.length)[0];
 
   async function logout() {
@@ -73,7 +99,28 @@ export function TenantSidebar({ orgName, plan, userEmail, userRole, activeProduc
   }
 
   return (
-    <aside className="fixed inset-y-0 left-0 w-56 bg-card border-r border-border flex flex-col z-40">
+    <>
+    <header className="lg:hidden fixed inset-x-0 top-0 z-30 h-12 flex items-center gap-3 border-b border-border bg-card px-3">
+      <button type="button" onClick={() => setMenuOpen(true)} aria-label="Abrir menú" aria-expanded={menuOpen}
+        className="flex size-9 items-center justify-center rounded-lg text-muted-foreground hover:bg-secondary hover:text-foreground">
+        <Menu className="size-5" />
+      </button>
+      <Image src="/logo-icon.png" alt="" width={22} height={22} className="object-contain" />
+      <span className="min-w-0 truncate text-[13px] font-semibold">{orgName}</span>
+    </header>
+    {menuOpen && <div aria-hidden onClick={() => setMenuOpen(false)} className="lg:hidden fixed inset-0 z-40 bg-[oklch(0.18_0.015_258)]/50" />}
+    <aside
+      className={cn(
+        "fixed inset-y-0 left-0 w-64 lg:w-56 bg-card border-r border-border flex flex-col z-50 lg:z-40 transition-transform duration-200 lg:translate-x-0",
+        menuOpen ? "translate-x-0 shadow-xl" : "-translate-x-full",
+      )}
+      // Al elegir una opción del menú en el teléfono, el panel se cierra.
+      onClick={(e) => { if ((e.target as HTMLElement).closest("a")) setMenuOpen(false); }}
+    >
+      <button type="button" onClick={() => setMenuOpen(false)} aria-label="Cerrar menú"
+        className="lg:hidden absolute right-2 top-3 z-10 flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-secondary hover:text-foreground">
+        <X className="size-4" />
+      </button>
       {/* Marca / Org */}
       <div className="h-14 px-4 flex items-center gap-3 border-b border-border shrink-0">
         <div className="w-8 h-8 shrink-0 flex items-center justify-center">
@@ -93,11 +140,33 @@ export function TenantSidebar({ orgName, plan, userEmail, userRole, activeProduc
         </div>
       </div>
 
-      {/* Navegación — una sección por producto activo */}
+      {/* Selector de producto (solo con más de uno) */}
+      {products.length > 1 && (
+        <div role="group" aria-label="Producto" className="mx-2 mt-3 grid gap-0.5 rounded-[9px] bg-secondary p-[3px]" style={{ gridTemplateColumns: `repeat(${products.length}, minmax(0, 1fr))` }}>
+          {products.map((p) => {
+            const on = p.key === current?.key;
+            return (
+              <Link
+                key={p.key}
+                href={p.items[0].href}
+                aria-current={on ? "true" : undefined}
+                className={cn(
+                  "flex min-h-[30px] items-center justify-center rounded-[7px] px-1 text-[11.5px] transition-all duration-[120ms]",
+                  on ? "bg-card font-semibold text-foreground shadow-sm" : "font-medium text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {p.name}
+              </Link>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Navegación del producto actual */}
       <nav className="flex-1 px-2 py-3 space-y-3 overflow-y-auto">
         {sections.map((section) => (
-          <div key={section.name} className="space-y-0.5">
-            {sections.length > 1 && (
+          <div key={section.name || "main"} className="space-y-0.5">
+            {section.name && (
               <p className="px-[10px] pt-1 pb-1 text-[10px] font-semibold uppercase tracking-[0.06em] text-muted-foreground/60">
                 {section.name}
               </p>
@@ -172,7 +241,8 @@ export function TenantSidebar({ orgName, plan, userEmail, userRole, activeProduc
           Cerrar sesión
         </button>
       </div>
-      <ChangePasswordDialog open={changingPassword} onClose={() => setChangingPassword(false)} userEmail={userEmail} />
     </aside>
+    <ChangePasswordDialog open={changingPassword} onClose={() => setChangingPassword(false)} userEmail={userEmail} />
+    </>
   );
 }

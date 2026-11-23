@@ -5,9 +5,9 @@
 
 import { db } from "@/lib/db";
 import { catalogVendors, historyDocuments, subsidiaries, vendorRules } from "@/db/schema";
-import { and, eq, ne } from "drizzle-orm";
-import { getActiveNsConnection, nsCredentials } from "@/lib/netsuite/connection";
-import { fetchOpenPurchaseOrders, fetchPurchaseOrderLines, type NSOpenPurchaseOrder } from "@/lib/netsuite/client";
+import { and, eq, isNotNull, ne, or } from "drizzle-orm";
+import { getErp } from "@/lib/erp";
+import type { ErpOpenPurchaseOrder as NSOpenPurchaseOrder } from "@/lib/erp/types";
 import { consultSatStatus } from "@/lib/cfdi/sat";
 import { evaluateFiscalValidation, parseSatValidationConfig, type FiscalValidation } from "@/lib/cfdi/validation";
 import type { CfdiData } from "./cfdi-parser";
@@ -83,12 +83,27 @@ export async function comparePurchaseOrder(
   cfg: PoMatchConfig,
   requireReceipt: boolean,
 ): Promise<{ comparison: PoComparison | null; error: string | null }> {
-  const conn = await getActiveNsConnection(organizationId);
-  if (!conn?.catalogScriptId || !conn.catalogDeployId) return { comparison: null, error: "No hay script de catálogo configurado para consultar la OC" };
-  const res = await fetchPurchaseOrderLines(nsCredentials(conn), conn.catalogScriptId, conn.catalogDeployId, [poInternalId]);
+  const erp = await getErp(organizationId);
+  if (!erp?.capabilities.purchaseOrders) return { comparison: null, error: "El ERP conectado no permite consultar la OC" };
+  const res = await erp.fetchPurchaseOrderLines([poInternalId]);
   const po = res.ok ? res.data?.[0] : undefined;
   if (!po) return { comparison: null, error: res.error ?? "No se pudo leer la OC en el ERP" };
   return { comparison: comparePoLines(lines, po, cfg, { requireReceipt, invoiceTotal }), error: null };
+}
+
+/** The rule that applies to a vendor today (its own, its category's or the default); null when rules are off. */
+export async function vendorRuleFor(organizationId: string, subsidiaryId: string, vendorId: string | null, flags: ApFeatureFlags): Promise<EffectiveVendorRule | null> {
+  if (!flags.isEnabled("vendor_rules")) return null;
+  const [rules, vendor] = await Promise.all([
+    db.query.vendorRules.findMany({ where: eq(vendorRules.organizationId, organizationId) }),
+    vendorId
+      ? db.query.catalogVendors.findFirst({
+          where: and(eq(catalogVendors.subsidiaryId, subsidiaryId), eq(catalogVendors.internalId, vendorId)),
+          columns: { categoryId: true },
+        })
+      : Promise.resolve(undefined),
+  ]);
+  return resolveVendorRule(rules, { internalId: vendorId, categoryId: vendor?.categoryId ?? null }, parseVendorRuleConfig({}));
 }
 
 export async function runApChecks(ctx: {
@@ -99,6 +114,8 @@ export async function runApChecks(ctx: {
   payload:        UiPayload;
   cfdi:           CfdiData | null;
   flags:          ApFeatureFlags;
+  /** QA round: the document is a test, and the round may accept repeats on purpose. */
+  qa?:            { skipDuplicates: boolean } | null;
 }): Promise<{ checks: ApChecks; decision: ApDecision }> {
   const checks: ApChecks = { vendorRule: null, fiscal: null, po: null };
   if (ctx.documentType === "purchase_order") return { checks, decision: { next: "continue" } };
@@ -124,9 +141,21 @@ export async function runApChecks(ctx: {
   }
 
   // ── Fiscal validation (CFDI XML only) ────────────────────────────────
+  if (ctx.flags.isEnabled("sat_cfdi_validation") && ctx.cfdi && !ctx.cfdi.uuid) {
+    // No fiscal stamp: there is nothing to validate against the SAT, and an
+    // unstamped XML is not an invoice yet. A person decides, it never posts alone.
+    checks.fiscal = {
+      checkedAt: new Date().toISOString(),
+      checks: [{ key: "sat_status", ok: false, label: "CFDI sin timbre fiscal", detail: "El XML no incluye el TimbreFiscalDigital; puede ser un comprobante previo al timbrado." }],
+      outcome: "review",
+      reason: "el XML no trae timbre fiscal (UUID)",
+    };
+  }
   if (ctx.flags.isEnabled("sat_cfdi_validation") && ctx.cfdi?.uuid) {
     const cfg = parseSatValidationConfig(ctx.flags.getConfig("sat_cfdi_validation"));
     if (checks.vendorRule && !checks.vendorRule.satRequired) cfg.checkSatStatus = false;
+    // A QA round that accepts repeats re-uploads the same CFDI on purpose.
+    if (ctx.qa?.skipDuplicates) cfg.checkDuplicateUuid = false;
     const [sat, dup] = await Promise.all([
       cfg.checkSatStatus
         ? consultSatStatus({ emisorRfc: ctx.cfdi.emisorRfc, receptorRfc: ctx.cfdi.receptorRfc, total: ctx.cfdi.total, uuid: ctx.cfdi.uuid })
@@ -139,6 +168,10 @@ export async function runApChecks(ctx: {
               eq(historyDocuments.cfdiUuid, ctx.cfdi.uuid.toUpperCase()),
               ne(historyDocuments.id, ctx.documentId),
               ne(historyDocuments.status, "failed"),
+              // Same scope as the duplicate check of the pipeline: a dry run
+              // created nothing, and test documents do not block the real invoice.
+              or(ne(historyDocuments.status, "completed"), isNotNull(historyDocuments.netsuiteDocId)),
+              ctx.qa ? undefined : eq(historyDocuments.isQa, false),
             ),
             columns: { id: true, numDoc: true },
           })
@@ -161,11 +194,11 @@ export async function runApChecks(ctx: {
     const cfg = effectivePoConfig(parsePoMatchConfig(ctx.flags.getConfig("po_matching")), checks.vendorRule);
     const requireReceipt = requiresReceipt(ctx.flags, checks.vendorRule);
     const po: PoCheck = { openPurchaseOrders: [], suggestions: [], selectedPoId: null, comparison: null, outcome: null, requireReceipt, error: null };
-    const conn = await getActiveNsConnection(ctx.organizationId);
-    if (!conn?.catalogScriptId || !conn.catalogDeployId) {
-      po.error = "No hay script de catálogo configurado para consultar las OC";
+    const erp = await getErp(ctx.organizationId);
+    if (!erp?.capabilities.purchaseOrders) {
+      po.error = "El ERP conectado no permite consultar las OC";
     } else {
-      const open = await fetchOpenPurchaseOrders(nsCredentials(conn), conn.catalogScriptId, conn.catalogDeployId, sub.nsSubsidiaryId, vendorId);
+      const open = await erp.fetchOpenPurchaseOrders(sub.nsSubsidiaryId, vendorId);
       if (!open.ok) {
         po.error = open.error ?? "No se pudieron consultar las OC abiertas";
       } else {

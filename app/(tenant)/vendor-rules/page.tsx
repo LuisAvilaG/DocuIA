@@ -5,7 +5,7 @@ import { requireApAutomation } from "@/lib/products";
 import { getFeature, isFeatureEnabled } from "@/lib/features";
 import { db } from "@/lib/db";
 import { organizations } from "@/db/schema";
-import { listVendorCategories, listVendorRules } from "@/lib/workflow/vendor-rules-store";
+import { listVendorCategories, listVendorRules, ruleUsage } from "@/lib/workflow/vendor-rules-store";
 import { VendorRulesClient } from "./client";
 
 export default async function VendorRulesPage() {
@@ -15,13 +15,14 @@ export default async function VendorRulesPage() {
   const feature = await getFeature(session.orgId, "vendor_rules");
   if (!feature.isEnabled) redirect("/dashboard");
 
-  const [rules, categories, org, poMatching, threeWay, sat] = await Promise.all([
+  const [rules, categories, org, poMatching, threeWay, sat, usage] = await Promise.all([
     listVendorRules(session.orgId),
     listVendorCategories(session.orgId),
     db.query.organizations.findFirst({ where: eq(organizations.id, session.orgId), columns: { autoProcessThreshold: true } }),
     isFeatureEnabled(session.orgId, "po_matching"),
     isFeatureEnabled(session.orgId, "three_way_match"),
     isFeatureEnabled(session.orgId, "sat_cfdi_validation"),
+    ruleUsage(session.orgId).catch(() => ({})),
   ]);
 
   return (
@@ -32,6 +33,7 @@ export default async function VendorRulesPage() {
       maxRules={Math.max(1, Number(feature.config.max_rules) || 50)}
       orgThresholdPct={Math.round((org?.autoProcessThreshold ?? 0.85) * 100)}
       features={{ poMatching, threeWay, sat }}
+      usage={usage}
     />
   );
 }

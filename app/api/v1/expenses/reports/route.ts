@@ -50,14 +50,26 @@ async function handlePOST(req: NextRequest) {
     return NextResponse.json({ error: "Módulo de gastos no activado" }, { status: 403 });
   }
 
-  const { purpose, periodStart, periodEnd } = await req.json() as {
-    purpose:     string;
-    periodStart?: string;
-    periodEnd?:   string;
-  };
-
-  if (!purpose?.trim()) {
+  const body = await req.json().catch(() => null) as { purpose?: unknown; periodStart?: unknown; periodEnd?: unknown } | null;
+  const purpose = typeof body?.purpose === "string" ? body.purpose.trim() : "";
+  if (!purpose) {
     return NextResponse.json({ error: "El propósito del informe es requerido" }, { status: 400 });
+  }
+  if (purpose.length > 500) {
+    return NextResponse.json({ error: "El propósito admite hasta 500 caracteres" }, { status: 400 });
+  }
+  // No date is fine; something that is not a date is not.
+  const day = (value: unknown): Date | null | undefined => {
+    if (value === undefined || value === null || value === "") return null;
+    const parsed = typeof value === "string" ? new Date(value) : null;
+    return parsed && !Number.isNaN(parsed.getTime()) ? parsed : undefined;
+  };
+  const periodStart = day(body?.periodStart), periodEnd = day(body?.periodEnd);
+  if (periodStart === undefined || periodEnd === undefined) {
+    return NextResponse.json({ error: "Las fechas del periodo no son válidas" }, { status: 400 });
+  }
+  if (periodStart && periodEnd && periodEnd < periodStart) {
+    return NextResponse.json({ error: "El fin del periodo no puede ser anterior a su inicio" }, { status: 400 });
   }
 
   const id = randomUUID();
@@ -65,9 +77,9 @@ async function handlePOST(req: NextRequest) {
     id,
     organizationId: session.orgId,
     submitterId:    session.sub,
-    purpose:        purpose.trim(),
-    periodStart:    periodStart ? new Date(periodStart) : null,
-    periodEnd:      periodEnd   ? new Date(periodEnd)   : null,
+    purpose,
+    periodStart,
+    periodEnd,
     status:         "draft",
   });
 

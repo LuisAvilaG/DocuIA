@@ -3,10 +3,11 @@ import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
 import { organizations, orgUsers, subsidiaries, subscriptions, webhooks, expenseCategories, catalogDepartments, catalogClasses } from "@/db/schema";
 import { eq, and, count } from "drizzle-orm";
-import { getFeature, isFeatureEnabled } from "@/lib/features";
+import { isFeatureEnabled } from "@/lib/features";
 import { SettingsClient } from "./client";
 
-export default async function SettingsPage() {
+export default async function SettingsPage({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
+  const { tab } = await searchParams;
   // Settings is admin-only; other signed-in roles go back to their portal
   // instead of the login form. Data errors surface through the error boundary.
   const session = await getTenantSession();
@@ -15,7 +16,7 @@ export default async function SettingsPage() {
 
   const expenseEnabled = await isFeatureEnabled(session.orgId, "expense_management");
 
-  const [org, users, subs, sub, hooks, dryRunFeature] = await Promise.all([
+  const [org, users, subs, sub, hooks] = await Promise.all([
     db.query.organizations.findFirst({
       where: eq(organizations.id, session.orgId),
     }),
@@ -55,7 +56,6 @@ export default async function SettingsPage() {
       columns: { secret: false },
     }),
 
-    getFeature(session.orgId, "netsuite_dry_run"),
   ]);
 
   if (!org) redirect("/login");
@@ -96,6 +96,7 @@ export default async function SettingsPage() {
 
   return (
     <SettingsClient
+      initialTab={tab}
       org={{
         id:                   org.id,
         name:                 org.name,
@@ -126,8 +127,7 @@ export default async function SettingsPage() {
       }))}
       plan={sub?.planId ?? "starter"}
       currentUserRole={session.role ?? "operator"}
-      dryRun={dryRunFeature.tenantEnabled}
-      dryRunGranted={dryRunFeature.adminGranted}
+      currentUserId={session.sub}
       webhooks={hooks.map(h => ({
         id:              h.id,
         url:             h.url,

@@ -52,6 +52,11 @@ async function handleGET(req: NextRequest) {
       ...flow,
       documentCount: nodes.filter((node) => node.kind === "intake").length,
       validationCount: nodes.filter((node) => node.kind === "validate" || node.kind === "reference_lookup").length,
+      // Top to bottom on the canvas: the "Orden de entrada" the editor numbers.
+      intakes: [...nodes].sort((a, b) => a.position.y - b.position.y || a.position.x - b.position.x).flatMap((node) => node.kind === "intake"
+        ? [{ key: node.data.docTypeKey, name: node.data.name, hint: node.data.hint ?? null, required: node.data.required !== false }]
+        : []),
+      generates: nodes.some((node) => node.kind === "generate"),
     };
   });
   return NextResponse.json({ flows, maxFlows, count: flows.length });

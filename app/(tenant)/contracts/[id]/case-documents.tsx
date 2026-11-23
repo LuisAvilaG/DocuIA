@@ -150,8 +150,8 @@ function DocViewer({ doc, canTrain, onClose, onUpdated }: { doc: CaseDoc; canTra
           {/* Fields + origin */}
           <div className="w-80 shrink-0 flex flex-col">
             <div className="px-4 py-2.5 border-b border-border shrink-0">
-              <div className="flex items-center justify-between gap-2"><p className="text-xs font-semibold text-foreground">Datos del documento</p>{selected && !editing && <button onClick={startEditing} className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-foreground hover:bg-secondary"><Pencil className="w-3 h-3" /> Corregir</button>}</div>
-              <p className="text-[11px] text-muted-foreground">Selecciona un dato para ver su origen o corregirlo.</p>
+              <div className="flex items-center justify-between gap-2"><p className="text-xs font-semibold text-foreground">Datos del documento</p>{selected && !editing && canTrain && !Array.isArray(doc.extractedJson[selected]) && <button onClick={startEditing} className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-foreground hover:bg-secondary"><Pencil className="w-3 h-3" /> Corregir</button>}</div>
+              <p className="text-[11px] text-muted-foreground">{canTrain ? "Selecciona un dato para ver su origen o corregirlo." : "Selecciona un dato para ver su origen."}</p>
             </div>
             {editing && selected && (
               <div className="border-b border-border bg-secondary/35 p-3 space-y-2.5">
@@ -167,7 +167,7 @@ function DocViewer({ doc, canTrain, onClose, onUpdated }: { doc: CaseDoc; canTra
               {entries.map(([k, v]) => {
                 const active = selected === k;
                 return (
-                  <button key={k} onClick={() => setSelected(k)}
+                  <button key={k} onClick={() => { if (saving) return; if (editing && k !== selected) setEditing(false); setSelected(k); }}
                     className={`w-full text-left px-4 py-2.5 border-b border-border/60 transition-colors ${active ? "bg-primary/5" : "hover:bg-secondary/50"}`}>
                     <p className="text-[10px] font-medium uppercase tracking-[0.06em] text-muted-foreground">{pretty(k)}</p>
                     <p className="text-xs text-foreground mt-0.5 break-words">{flat(v)}</p>
@@ -187,6 +187,7 @@ function DocViewer({ doc, canTrain, onClose, onUpdated }: { doc: CaseDoc; canTra
   );
 }
 
+/** `canTrain`: administrators, the only role the API lets correct a value (and save it for future documents). */
 export function CaseDocuments({ documents, canTrain = false }: { documents: CaseDoc[]; canTrain?: boolean }) {
   const router = useRouter();
   const [overrides, setOverrides] = useState<Record<string, CaseDoc>>({});

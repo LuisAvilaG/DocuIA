@@ -32,9 +32,35 @@ export type CfdiData = {
   lineas: CfdiLine[];
 };
 
+const XML_ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
+
+// Attribute values arrive escaped ("Pérez &amp; Hijos", "&#209;"). One pass, so
+// "&amp;lt;" becomes "&lt;" and not "<".
+export function decodeXmlEntities(value: string): string {
+  return value.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (match, entity: string) => {
+    if (entity[0] !== "#") return XML_ENTITIES[entity.toLowerCase()] ?? match;
+    const code = entity[1].toLowerCase() === "x" ? parseInt(entity.slice(2), 16) : parseInt(entity.slice(1), 10);
+    return Number.isInteger(code) && code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : match;
+  });
+}
+
+// Inside a tag: anything but ">" or a quote, or a whole quoted value (which
+// may contain ">": several serializers do not escape it in attributes).
+const TAG_BODY = `(?:[^>"']|"[^"]*"|'[^']*')*`;
+
 function attr(xml: string, name: string): string {
-  const re = new RegExp(`(?:^|\\s)${name}="([^"]*)"`, "i");
-  return re.exec(xml)?.[1]?.trim() ?? "";
+  const re = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, "i");
+  const m = re.exec(xml);
+  return decodeXmlEntities(m?.[1] ?? m?.[2] ?? "").trim();
+}
+
+/**
+ * Number the invoice is known by. Folios restart in every Serie, so A-123 and
+ * B-123 are different invoices; without a folio the UUID identifies it.
+ */
+export function cfdiInvoiceNumber(cfdi: Pick<CfdiData, "serie" | "folio" | "uuid">): string {
+  if (!cfdi.folio) return cfdi.uuid.slice(0, 8);
+  return cfdi.serie ? `${cfdi.serie}-${cfdi.folio}` : cfdi.folio;
 }
 
 function num(v: string): number {
@@ -45,17 +71,17 @@ function num(v: string): number {
 function extractTag(xml: string, tag: string): string {
   // Lookahead (?=[\s/>]) prevents matching a longer sibling tag
   // (e.g. tag "Concepto" must NOT match "<cfdi:Conceptos>").
-  const re = new RegExp(`<(?:cfdi:)?${tag}(?=[\\s/>])[^>]*>`, "i");
+  const re = new RegExp(`<(?:cfdi:)?${tag}(?=[\\s/>])${TAG_BODY}>`, "i");
   return re.exec(xml)?.[0] ?? "";
 }
 
 function extractAllTags(xml: string, tag: string): string[] {
-  const re = new RegExp(`<(?:cfdi:)?${tag}(?=[\\s/>])[^>]*/?>`, "gi");
+  const re = new RegExp(`<(?:cfdi:)?${tag}(?=[\\s/>])${TAG_BODY}>`, "gi");
   return xml.match(re) ?? [];
 }
 
 function extractUUID(xml: string): string {
-  const tfd = /<tfd:TimbreFiscalDigital[^>]*/i.exec(xml)?.[0] ?? "";
+  const tfd = new RegExp(`<tfd:TimbreFiscalDigital${TAG_BODY}`, "i").exec(xml)?.[0] ?? "";
   return attr(tfd, "UUID");
 }
 
@@ -69,14 +95,28 @@ export function findPoReference(xmlText: string): string {
   const text = xmlText
     .replace(/\s(?:Sello|SelloCFD|SelloSAT|Certificado|NoCertificado|NoCertificadoSAT)="[^"]*"/gi, " ")
     .replace(/&[a-z#0-9]+;/gi, " ");
-  const labeled = /(?:orden\s+de\s+compra|pedido|\bO\.?\s?C\.?|\bP\.?\s?O\.?)\s*(?:n[oº°.]*|#|:|-)?\s*([A-Z]{0,4}-?\d{3,12})\b/i.exec(text);
+  // The short forms must end there: "OCT2024" or "POS-1234" are not "OC T2024" / "PO S-1234".
+  const labeled = /(?:orden\s+de\s+compra|pedido|(?:\bO\.?\s?C\.?|\bP\.?\s?O\.?)(?![a-z]))\s*(?:n[oº°.]*|#|:|-)?\s*([A-Z]{0,4}-?\d{3,12})\b/i.exec(text);
   if (labeled) return labeled[1].toUpperCase();
   const bare = /\b((?:PO|OC)-?\d{4,12})\b/i.exec(text);
   return bare ? bare[1].toUpperCase() : "";
 }
 
+const CFDI_TYPES: Record<string, string> = { E: "egreso (nota de crédito)", P: "pago", T: "traslado", N: "nómina" };
+
+/**
+ * Only "I" (ingreso) is a vendor invoice. A credit note posted as a bill would
+ * add to the payable instead of reducing it. Returns why it cannot be
+ * processed, or null when it can (a CFDI without the attribute is let through).
+ */
+export function cfdiNotInvoiceReason(tipoComprobante: string): string | null {
+  const tipo = tipoComprobante.trim().toUpperCase();
+  if (!tipo || tipo === "I") return null;
+  return `El CFDI es de tipo ${CFDI_TYPES[tipo] ?? tipo}, no una factura de ingreso: no se registra como factura de proveedor.`;
+}
+
 export function parseCfdi(xmlText: string): CfdiData {
-  const comprobante = /<cfdi:Comprobante[^>]*/i.exec(xmlText)?.[0] ?? xmlText;
+  const comprobante = new RegExp(`<cfdi:Comprobante${TAG_BODY}`, "i").exec(xmlText)?.[0] ?? xmlText;
   const emisorTag   = extractTag(xmlText, "Emisor");
   const receptorTag = extractTag(xmlText, "Receptor");
   const conceptos   = extractAllTags(xmlText, "Concepto");

@@ -1,4 +1,4 @@
-import { eq, and, asc } from "drizzle-orm";
+import { eq, and, asc, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   catalogItems, catalogVendors, catalogLocations, itemMappings,
@@ -216,6 +216,11 @@ function tokenCoverage(queryTokens: string[], target: string): number {
   return hits / queryTokens.length;
 }
 
+// A tax-id match (+400) or an exact name (≥ 460) identifies the vendor; below
+// that, a runner-up this close means the name alone does not decide.
+const VENDOR_CERTAIN_SCORE = 400;
+const VENDOR_TIE_MARGIN = 10;
+
 export async function searchVendors(query: string, subsidiaryId: string, limit = 20, rfc?: string): Promise<VendorOption[]> {
   const term = normalize(query).slice(0, 250);
   const rfcNorm = (rfc ?? "").toUpperCase().replace(/[^A-Z0-9&Ñ]/g, "");
@@ -299,11 +304,18 @@ async function getMemorySuggestions(
 ): Promise<Record<string, MemorySuggestion>> {
   if (!vendor || !lineNames.length) return {};
 
+  // Only the mappings of vendors that match this one. Reading the first 500 of
+  // the subsidiary, in no order, dropped learned items once it had more.
+  const known = await db
+    .selectDistinct({ vendor: itemMappings.vendor })
+    .from(itemMappings)
+    .where(eq(itemMappings.subsidiaryId, subsidiaryId));
+  const sameVendor = known.map((r) => r.vendor).filter((v) => computeSimilarity(vendor, v) >= options.vendorSimilarityThreshold);
+  if (!sameVendor.length) return {};
   const rows = await db
     .select()
     .from(itemMappings)
-    .where(eq(itemMappings.subsidiaryId, subsidiaryId))
-    .limit(500);
+    .where(and(eq(itemMappings.subsidiaryId, subsidiaryId), inArray(itemMappings.vendor, sameVendor)));
 
   const result: Record<string, MemorySuggestion> = {};
 
@@ -359,7 +371,12 @@ export async function buildUiPayload(
   const parserVersion = normalize(options?.parserVersion || "") || "invoice-gemini-file-tiered-v1";
 
   const vendors = await searchVendors(extracted.vendor, subsidiaryId, 20, extracted.vendorRfc);
-  const selectedVendor = vendors[0] || null;
+  // Two vendors that fit the printed name equally well ("Sysco Houston" and
+  // "Sysco Dallas") with nothing to tell them apart (no tax id, no exact name):
+  // the first of the list is not a match, a person picks.
+  const topScore = vendors[0]?._score ?? 0;
+  const ambiguousVendor = vendors.length > 1 && topScore < VENDOR_CERTAIN_SCORE && (vendors[1]._score ?? 0) >= topScore - VENDOR_TIE_MARGIN;
+  const selectedVendor = ambiguousVendor ? null : vendors[0] || null;
   const vendorForMemory = normalize(selectedVendor?.name || extracted.vendor);
 
   const lineNames = extracted.lines.map((l) => normalize(l.description));
@@ -499,6 +516,17 @@ export async function buildUiPayload(
   }).format(new Date());
 
   const invoiceDate = extracted.invoiceDate || now;
+  // What was filled in rather than read, so the reviewer sees it was assumed.
+  const uncertainFields = [...(extracted.uncertainFields ?? [])];
+  if (!extracted.invoiceDate && !uncertainFields.some((f) => f.field === "invoice_date")) {
+    uncertainFields.push({ field: "invoice_date", reason: "no se leyó; se puso la fecha de hoy", header: true });
+  }
+  if (ambiguousVendor && !uncertainFields.some((f) => f.field === "vendor")) {
+    uncertainFields.push({ field: "vendor", reason: "más de un proveedor del ERP coincide con el nombre", header: true });
+  }
+  if (!extracted.currency && !uncertainFields.some((f) => f.field === "currency")) {
+    uncertainFields.push({ field: "currency", reason: "no se leyó; el ERP usará la moneda del proveedor", header: true });
+  }
 
   // Vendor quality: the top vendor's score (exact name ≈ 220) normalized to 0–1.
   // A weak vendor match drags header confidence down, gating auto-process — so we
@@ -506,12 +534,13 @@ export async function buildUiPayload(
   const vendorQuality = selectedVendor ? Math.min(1, (selectedVendor._score ?? 0) / 220) : 0;
   // Header fields the model itself flagged as doubtful count as half-read:
   // a total it could not see clearly must not auto-post on completeness alone.
-  const doubted = new Set((extracted.uncertainFields ?? []).filter((f) => f.header).map((f) => f.field));
+  const doubted = new Set(uncertainFields.filter((f) => f.header).map((f) => f.field));
   const doubt = (field: string, value: number) => (doubted.has(field) ? value * 0.5 : value);
   const headerConfidence = Number(
     ((doubt("vendor", vendorQuality) +
       doubt("invoice_number", extracted.invoiceNumber ? 1 : 0) +
-      doubt("invoice_date", invoiceDate ? 1 : 0) +
+      // Today's date as a stand-in is not a date that was read.
+      doubt("invoice_date", extracted.invoiceDate ? 1 : 0) +
       doubt("total", extracted.total !== null ? 1 : 0)) / 4).toFixed(4)
   );
   const linesConfidence = lines.length > 0
@@ -539,7 +568,8 @@ export async function buildUiPayload(
       invoice_date: invoiceDate,
       due_date: extracted.dueDate || null,
       purchase_order: extracted.purchaseOrder || null,
-      currency: extracted.currency || "USD",
+      // Never guessed: without a currency the ERP keeps the vendor's own.
+      currency: extracted.currency || "",
       totals: {
         subtotal: toMoneyString(extracted.subtotal),
         tax: toMoneyString(extracted.tax) || "0.00",
@@ -554,7 +584,7 @@ export async function buildUiPayload(
       lines_count: lines.length,
       generated_date: now,
       delivery_date: extracted.deliveryDate || null,
-      uncertain_fields: extracted.uncertainFields ?? [],
+      uncertain_fields: uncertainFields,
       ...(options?.meta || {}),
     },
   };

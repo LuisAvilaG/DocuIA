@@ -8,7 +8,9 @@
 // only (that is what the admin "clave de IA propia" stores); Claude always uses
 // the platform key.
 
+import { fitImages } from "./image-fit";
 import Anthropic from "@anthropic-ai/sdk";
+import { recordAiUsage } from "./usage";
 
 export type AiProvider = "gemini" | "anthropic";
 
@@ -46,6 +48,8 @@ export interface AiJsonRequest {
   timeoutMs?: number;
   /** Reasoning depth on Claude (ignored by Gemini). Lower is faster; the model still reasons. */
   effort?: "low" | "medium" | "high";
+  /** Segundo modelo tras una lectura dudosa (para las métricas de uso). */
+  fallback?: boolean;
 }
 
 export interface AiUsage {
@@ -189,11 +193,19 @@ export function anthropic(): Anthropic {
   return anthropicClient;
 }
 
+const CLAUDE_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+
+/** Whether Claude can take this file as-is (PDF or one of its image formats). */
+export function claudeReadsFile(mimeType: string): boolean {
+  return mimeType === "application/pdf" || CLAUDE_IMAGE_TYPES.has(mimeType);
+}
+
 /** The Messages request for one JSON task; shared by direct calls and batches. */
 export function claudeParams(req: AiJsonRequest): Anthropic.MessageCreateParamsNonStreaming {
   const content: Anthropic.ContentBlockParam[] = req.parts.map((p) => {
     if (p.kind === "text") return { type: "text", text: p.text };
     if (p.mimeType === "application/pdf") return { type: "document", source: { type: "base64", media_type: "application/pdf", data: p.base64 } };
+    if (!CLAUDE_IMAGE_TYPES.has(p.mimeType)) throw new Error(`Claude no lee archivos ${p.mimeType}: conviértelo a PDF, PNG o JPG`);
     return { type: "image", source: { type: "base64", media_type: p.mimeType as "image/png" | "image/jpeg" | "image/webp" | "image/gif", data: p.base64 } };
   });
   // Documents first, then the per-document note: the model reads the material before the ask.
@@ -226,13 +238,16 @@ function claudeResult(res: Anthropic.Message, req: AiJsonRequest): AiJsonResult 
   };
 }
 
-async function claudeJson(req: AiJsonRequest): Promise<AiJsonResult> {
+async function claudeJson(original: AiJsonRequest): Promise<AiJsonResult> {
+  const req = await fitImages(original);
   const res = await anthropic().messages.create(claudeParams(req), { timeout: req.timeoutMs ?? Math.max(DEFAULT_TIMEOUT_MS, 120_000) });
   return claudeResult(res, req);
 }
 
 export async function generateJson(req: AiJsonRequest): Promise<AiJsonResult> {
-  return providerOf(req.model) === "anthropic" ? claudeJson(req) : geminiJson(req);
+  const result = providerOf(req.model) === "anthropic" ? await claudeJson(req) : await geminiJson(req);
+  recordAiUsage({ model: result.model, ...result.usage, fallback: req.fallback });
+  return result;
 }
 
 // ── Batches (Claude only) ─────────────────────────────────────────────
@@ -245,10 +260,16 @@ export type BatchItemResult = { customId: string; ok: true; result: AiJsonResult
 
 export async function createBatch(requests: BatchRequest[]): Promise<string> {
   if (requests.some((r) => providerOf(r.request.model) !== "anthropic")) throw new Error("Los lotes solo están disponibles con modelos Claude");
+  const fitted = await Promise.all(requests.map(async (r) => ({ customId: r.customId, request: await fitImages(r.request) })));
   const batch = await anthropic().messages.batches.create({
-    requests: requests.map((r) => ({ custom_id: r.customId, params: claudeParams(r.request) })),
+    requests: fitted.map((r) => ({ custom_id: r.customId, params: claudeParams(r.request) })),
   });
   return batch.id;
+}
+
+/** Asks the provider to stop a batch (the requests it has not processed are not charged). */
+export async function cancelBatch(id: string): Promise<void> {
+  await anthropic().messages.batches.cancel(id);
 }
 
 export async function getBatch(id: string): Promise<BatchStatus> {

@@ -13,7 +13,9 @@ async function main() {
     await db.insert(features).values(f).onConflictDoUpdate({
       target: features.id,
       set: {
-        name: f.name, description: f.description, category: f.category, defaultEnabled: f.defaultEnabled,
+        // Not defaultEnabled: it is set when the feature is first inserted and
+        // then belongs to the superadmin, who can change it from the panel.
+        name: f.name, description: f.description, category: f.category,
         featureType: f.featureType, defaultConfig: f.defaultConfig, configSchema: f.configSchema,
         planRequired: f.planRequired, isBeta: f.isBeta, sortOrder: f.sortOrder,
       },

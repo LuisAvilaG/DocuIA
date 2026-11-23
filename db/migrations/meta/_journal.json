@@ -127,6 +127,83 @@
       "when": 1793374452369,
       "tag": "0017_ai_batches",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1794368577808,
+      "tag": "0018_status_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1794403784826,
+      "tag": "0019_subsidiary_invoice_format",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1794406937074,
+      "tag": "0020_qa_mode_documents",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1794411630788,
+      "tag": "0021_retire_obligations",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1794411656362,
+      "tag": "0022_learning_retired_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1794412915237,
+      "tag": "0023_document_requests",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1794413369900,
+      "tag": "0024_flow_versions",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1794414359666,
+      "tag": "0025_validation_evidence",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1794416812824,
+      "tag": "0026_doc_metrics",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1794423169633,
+      "tag": "0027_contractor_upload_links",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1795279770751,
+      "tag": "0028_erp_provider",
+      "breakpoints": true
     }
   ]
 }

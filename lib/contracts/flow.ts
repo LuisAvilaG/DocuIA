@@ -18,7 +18,7 @@ import { CALCULATION_OPERATIONS, type CalculationDefinition } from "./calculatio
 //   validate → "valida esto"            (cross-document rule)
 //   generate → "al final genera esto"   (output template)
 
-export type FlowNodeKind = "intake" | "extract" | "calculate" | "validate" | "reference_lookup" | "generate" | "note";
+export type FlowNodeKind = "intake" | "extract" | "calculate" | "validate" | "reference_lookup" | "generate" | "approval" | "note";
 
 const zPosition = z.object({ x: z.number(), y: z.number() });
 const zField = z.object({
@@ -68,9 +68,13 @@ const zRule = z.discriminatedUnion("kind", [
   }),
 ]);
 
+/** Controles configurables (lo que valida un nodo «Control»). */
+export const ruleSchema = zRule;
+
 const zIntake = z.object({
   id: z.string().min(1), kind: z.literal("intake"), position: zPosition,
-  data: z.object({ docTypeKey: z.string().min(1), name: z.string().min(1), hint: z.string().nullish() }),
+  // `required`: si falta, el caso no se puede crear (por omisión es obligatorio).
+  data: z.object({ docTypeKey: z.string().min(1), name: z.string().min(1), hint: z.string().nullish(), required: z.boolean().nullish() }),
 });
 const zExtract = z.object({
   id: z.string().min(1), kind: z.literal("extract"), position: zPosition,
@@ -119,6 +123,25 @@ const zGenerate = z.object({
     }).optional(),
   }),
 });
+// Aprobación por reglas (feature contract_approval_rules): quién decide siempre,
+// condiciones por valor que suman otra aprobación y quién aprueba con excepción.
+// Sin la feature, la etapa se ignora y vale la aprobación de siempre.
+const zApprovers = z.object({ mode: z.enum(["any", "users"]).default("any"), userIds: z.array(z.string().min(1)).max(50).default([]) });
+const zApproval = z.object({
+  id: z.string().min(1), kind: z.literal("approval"), position: zPosition,
+  data: z.object({
+    name: z.string().min(1).default("Aprobación"),
+    base: zApprovers.default({ mode: "any", userIds: [] }),
+    conditions: z.array(z.object({
+      label: z.string().max(120).default(""),
+      docType: z.string().min(1), field: z.string().min(1),
+      op: z.enum(["gt", "gte"]).default("gt"),
+      value: z.number(),
+      approvers: zApprovers,
+    })).max(5).default([]),
+    exceptionUserIds: z.array(z.string().min(1)).max(50).default([]),
+  }),
+});
 // Notes are visual annotations for the team. They are deliberately ignored by
 // compilation, validation and execution.
 const zNote = z.object({
@@ -128,7 +151,7 @@ const zNote = z.object({
   height: z.number().positive().max(520).optional(),
 });
 
-const zNode = z.discriminatedUnion("kind", [zIntake, zExtract, zCalculate, zValidate, zReferenceLookup, zGenerate, zNote]);
+const zNode = z.discriminatedUnion("kind", [zIntake, zExtract, zCalculate, zValidate, zReferenceLookup, zGenerate, zApproval, zNote]);
 const zEdge = z.object({ id: z.string().min(1), source: z.string().min(1), target: z.string().min(1) });
 
 export const flowGraphSchema = z.object({
@@ -279,6 +302,22 @@ export function validateFlowReferences(graph: FlowGraph): string | null {
         const err = checkRef(ref, where);
         if (err) return err;
       }
+    }
+    if (n.kind === "approval") {
+      const where = `aprobación "${n.data.name}"`;
+      // "Specific people" with nobody ticked is a step no one can sign: the
+      // cases of the flow could only be rejected.
+      const nobody = (a: { mode: string; userIds: string[] }) => a.mode === "users" && a.userIds.length === 0;
+      if (nobody(n.data.base)) return `La ${where} pide personas específicas en «Siempre» pero no hay ninguna marcada.`;
+      for (const condition of n.data.conditions) {
+        const label = condition.label || `${condition.field} ${condition.op === "gte" ? "≥" : ">"} ${condition.value}`;
+        if (nobody(condition.approvers)) return `La ${where} pide personas específicas en la condición «${label}» pero no hay ninguna marcada.`;
+        // A condition on a field that no longer exists never applies, and the
+        // extra approval stops being asked for without anyone noticing.
+        const err = checkRef({ docType: condition.docType, field: condition.field }, `${where}, condición «${label}»`);
+        if (err) return err;
+      }
+      continue;
     }
     if (n.kind !== "validate") continue;
     const rule = n.data.rule as ValidationRule;

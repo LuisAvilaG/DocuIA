@@ -7,16 +7,16 @@ import { organizations, subsidiaries } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import { runPipeline, createQueuedDocument } from "@/lib/workflow/pipeline";
 import { enqueuePipeline, scheduleBatchCollection } from "@/lib/queue";
-import { batchModeFor, queueDocumentForBatch } from "@/lib/ai/batch-jobs";
+import { batchModeFor, queueDocumentForBatch, withdrawDocumentFromBatch } from "@/lib/ai/batch-jobs";
 import { isFeatureEnabled } from "@/lib/features";
 import { uploadFile } from "@/lib/storage/minio";
+import { formatMismatch } from "@/lib/subsidiaries/invoice-format";
 
 const ALLOWED_MIME_TYPES = new Set([
   "application/pdf",
   "image/jpeg",
   "image/png",
   "image/webp",
-  "image/tiff",
   "text/xml",
   "application/xml",
 ]);
@@ -81,6 +81,13 @@ async function handlePOST(req: NextRequest) {
     if (!sub) {
       return NextResponse.json({ error: "Subsidiaria no válida" }, { status: 404 });
     }
+    // La subsidiaria define cómo llegan sus facturas (CFDI con XML o PDF/imagen).
+    const mismatch = formatMismatch(sub.invoiceFormat, documentType);
+    if (mismatch) return NextResponse.json({ error: mismatch }, { status: 400 });
+    // Carga manual: las personas necesitan la feature; las integraciones por API no.
+    if (session.role !== "api_key" && !await isFeatureEnabled(session.orgId, "manual_upload")) {
+      return NextResponse.json({ error: "La carga manual no está activa para tu empresa." }, { status: 403 });
+    }
 
     const fileBuffer = Buffer.from(await file.arrayBuffer());
     if (!matchesFileType(fileBuffer, file.type)) return NextResponse.json({ error: "El contenido no corresponde al tipo de archivo" }, { status: 415 });
@@ -120,11 +127,15 @@ async function handlePOST(req: NextRequest) {
 
     // ── Batch path: bulk uploads grouped into one provider batch (half price,
     // results within hours). Falls through to the normal queue on any failure.
+    // The document row is created once and reused by whichever path ends up
+    // processing it, so a failed path never leaves a second copy behind.
+    let queued: { documentId: number; storageKey: string } | null = null;
     if (isBulk && storageEnabled) {
       const mode = await batchModeFor(session.orgId, documentType).catch(() => null);
       if (mode) {
         try {
-          const { documentId, storageKey } = await createQueuedDocument(pipelineInput);
+          queued = await createQueuedDocument(pipelineInput);
+          const { documentId, storageKey } = queued;
           await queueDocumentForBatch({
             documentId, storageKey, organizationId: session.orgId, subsidiaryId, documentType,
             fileName: file.name, mimeType: file.type, requestedBy: session.sub,
@@ -134,6 +145,15 @@ async function handlePOST(req: NextRequest) {
           return NextResponse.json({ ok: true, status: "queued", documentId, batch: true });
         } catch (batchErr) {
           console.error("[upload] batch path failed, using the regular queue:", batchErr instanceof Error ? batchErr.message : batchErr);
+          // It may already be waiting for a batch: take it out before another path runs it.
+          if (queued) {
+            try { await withdrawDocumentFromBatch(queued.documentId); }
+            catch (withdrawErr) {
+              // Still in the batch wait: a later collection will process it. Running it here too would duplicate it.
+              console.error("[upload] could not withdraw the document from the batch wait:", withdrawErr instanceof Error ? withdrawErr.message : withdrawErr);
+              return NextResponse.json({ ok: true, status: "queued", documentId: queued.documentId, batch: true });
+            }
+          }
         }
       }
     }
@@ -143,7 +163,8 @@ async function handlePOST(req: NextRequest) {
     // polls /status. Falls back to inline processing if enqueue fails.
     if (storageEnabled) {
       try {
-        const { documentId, storageKey } = await createQueuedDocument(pipelineInput);
+        queued ??= await createQueuedDocument(pipelineInput);
+        const { documentId, storageKey } = queued;
         await enqueuePipeline({
           documentId,
           storageKey,
@@ -163,12 +184,14 @@ async function handlePOST(req: NextRequest) {
       }
     }
 
-    const result = await runPipeline(pipelineInput);
+    const result = await runPipeline(queued ? { ...pipelineInput, documentId: queued.documentId, storageKey: queued.storageKey } : pipelineInput);
 
     if (result.status === "failed") {
       return NextResponse.json(
         { ok: false, error: result.error, documentId: result.documentId },
-        { status: 500 }
+        // The document could not go on (a duplicate, an unreadable file): that
+        // is an answer about the document, not a failure of the server.
+        { status: 422 }
       );
     }
 

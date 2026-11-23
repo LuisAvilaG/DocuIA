@@ -154,7 +154,16 @@ function evaluateCondition(condition: string, subtotal: number): boolean {
 
 export function validateNitColombia(nit: string): boolean {
   const digits = nit.replace(/[^0-9]/g, "");
-  if (digits.length < 2) return false;
+  // Written with its check digit apart ("900.123.456-7"): the digit must match.
+  if (/\d\s*[-–]\s*\d$/.test(nit.trim())) return nitCheckDigitMatches(digits);
+  // Without it, receipts print the number both ways: alone (a NIT or a cédula,
+  // 6 to 10 digits, nothing to verify) or followed by its digit. Calling the
+  // first one "invalid" flagged most receipts.
+  return nitCheckDigitMatches(digits) || (digits.length >= 6 && digits.length <= 10);
+}
+
+function nitCheckDigitMatches(digits: string): boolean {
+  if (digits.length < 2 || digits.length > 16) return false;
   const body = digits.slice(0, -1);
   const dv   = parseInt(digits.slice(-1), 10);
   const weights = [71, 67, 59, 53, 47, 43, 41, 37, 29, 23, 19, 17, 13, 7, 3];
@@ -255,6 +264,7 @@ export interface AmountValidationResult {
 }
 
 export const MONEY_TOLERANCE = 0.01;
+export const MAX_EXPENSE_AMOUNT = 999_999_999_999.99;
 
 export function validateExpenseAmounts(a: ExpenseAmounts): AmountValidationResult {
   for (const [name, v] of Object.entries(a)) {
@@ -267,6 +277,9 @@ export function validateExpenseAmounts(a: ExpenseAmounts): AmountValidationResul
   if (total <= 0)           return { ok: false, error: "El total debe ser mayor a 0" };
   if (taxAmount < 0)        return { ok: false, error: "El impuesto no puede ser negativo" };
   if (retentionAmount < 0)  return { ok: false, error: "La retención no puede ser negativa" };
+  // What the amount columns hold (14 digits, 2 decimals): more ended in a database error.
+  if (Math.max(subtotal, taxAmount, retentionAmount, total) > MAX_EXPENSE_AMOUNT)
+    return { ok: false, error: "El importe supera el máximo que se puede registrar" };
   if (taxAmount > subtotal + MONEY_TOLERANCE)
     return { ok: false, error: "El impuesto no puede superar el subtotal" };
   if (retentionAmount > subtotal + MONEY_TOLERANCE)

@@ -1,14 +1,18 @@
+import { findingLevel } from "@/lib/contracts/validate";
 import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { canApprove } from "@/lib/auth/permissions";
 import { db } from "@/lib/db";
-import { contractCases, contractValidations } from "@/db/schema";
-import { and, eq } from "drizzle-orm";
+import { contractCases, contractLargeUploads, contractValidations } from "@/db/schema";
+import { and, eq, isNull } from "drizzle-orm";
+import { getOwnedUpload } from "@/lib/contracts/uploads";
+import { caseApprovalRules } from "@/lib/contracts/approval-state";
+import { checkApproval } from "@/lib/contracts/approval-rules";
 import { logAudit } from "@/lib/audit/log";
 import { getFeature, isFeatureEnabled } from "@/lib/features";
 
-type Outcome = { error: string; status: number; needsOverride?: boolean } | { blocked: boolean };
+type Outcome = { error: string; status: number; needsOverride?: boolean } | { blocked: boolean; pending?: string };
 
 async function handlePOST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getTenantSession({ area: "contracts", permission: "write" });
@@ -21,14 +25,23 @@ async function handlePOST(req: NextRequest, { params }: { params: Promise<{ id: 
   const body = await req.json().catch(() => ({}));
   const reason = typeof body?.reason === "string" ? body.reason.trim() : "";
   const override = !!body?.override;
+  // Aprobar con excepción: las validaciones sin resolver que el aprobador revisó y un soporte opcional.
+  const acknowledged = new Set(Array.isArray(body?.acknowledged) ? (body.acknowledged as unknown[]).filter((x): x is number => Number.isSafeInteger(x)) : []);
+  const supportUploadId = typeof body?.supportUploadId === "string" ? body.supportUploadId : null;
+  const support = supportUploadId ? await getOwnedUpload(supportUploadId, session.orgId, session.sub) : null;
+  if (supportUploadId && (!support || support.status !== "completed" || support.claimedBy)) {
+    return NextResponse.json({ error: "El soporte no terminó de cargar o ya se usó." }, { status: 400 });
+  }
   const validationsEnabled = await isFeatureEnabled(session.orgId, "contract_advanced_validations");
   const allowOverride = approvalFeature.config.allow_override !== false;
+  // Aprobación por reglas: pasos según el flujo y los valores del caso (null si no aplica).
+  const rules = await caseApprovalRules(session.orgId, id);
 
   // The case row stays locked while validations are read and the decision is
   // written, so a concurrent correction, rejection or second approval cannot
   // interleave (e.g. approving against validations that were just replaced).
   const outcome: Outcome = await db.transaction(async (tx) => {
-    const [kase] = await tx.select({ status: contractCases.status, resultJson: contractCases.resultJson })
+    const [kase] = await tx.select({ status: contractCases.status, resultJson: contractCases.resultJson, createdBy: contractCases.createdBy })
       .from(contractCases)
       .where(and(eq(contractCases.id, id), eq(contractCases.organizationId, session.orgId)))
       .for("update");
@@ -38,7 +51,7 @@ async function handlePOST(req: NextRequest, { params }: { params: Promise<{ id: 
     }
 
     // Gate on blocking validations: cannot approve unless the reviewer overrides + explains.
-    const vals = await tx.select({ ok: contractValidations.ok, severity: contractValidations.severity })
+    const vals = await tx.select({ id: contractValidations.id, ok: contractValidations.ok, severity: contractValidations.severity })
       .from(contractValidations)
       .where(eq(contractValidations.caseId, id));
     const blocked = validationsEnabled && vals.some((v) => v.ok === false && v.severity === "block");
@@ -47,11 +60,53 @@ async function handlePOST(req: NextRequest, { params }: { params: Promise<{ id: 
     }
     if (blocked && !reason) return { error: "Escribe el motivo para aprobar pese a los bloqueos.", status: 400 };
     if (blocked && !allowOverride) return { error: "Este cliente no permite aprobar casos con bloqueos.", status: 409 };
+    // Con excepción, cada validación sin resolver debe estar marcada como revisada.
+    const open = validationsEnabled ? vals.filter((v) => findingLevel(v) !== null) : [];
+    if (blocked && open.some((v) => !acknowledged.has(v.id))) {
+      return { error: "Marca como revisadas todas las validaciones sin resolver antes de aprobar con excepción.", status: 400 };
+    }
+    // El soporte se consume solo cuando la firma ya pasó todas las reglas: un
+    // rechazo no debe dejarlo marcado como usado.
+    const claimSupport = async (): Promise<boolean> => {
+      if (!support) return true;
+      const claimed = await tx.update(contractLargeUploads).set({ status: "claimed", claimedBy: id })
+        .where(and(eq(contractLargeUploads.id, support.id), eq(contractLargeUploads.status, "completed"), isNull(contractLargeUploads.claimedBy)))
+        .returning({ id: contractLargeUploads.id });
+      return claimed.length === 1;
+    };
+    const supportRef = support ? { storageKey: support.storageKey, name: support.originalName, mimeType: support.mimeType } : null;
 
     const prev = (kase.resultJson ?? {}) as Record<string, unknown>;
+    const now = new Date().toISOString();
+    let approvals: unknown[] | undefined;
+    if (rules) {
+      const done = Array.isArray(prev.approvals) ? prev.approvals as typeof rules.done : [];
+      const check = checkApproval({
+        steps: rules.steps, done,
+        actor: { id: session.sub, canApprove: true },
+        creatorId: kase.createdBy, noSelfApproval: rules.noSelfApproval,
+        blocked, exceptionUserIds: rules.node.exceptionUserIds,
+      });
+      if (!check.ok) return { error: check.reason, status: 403 };
+      if (!await claimSupport()) return { error: "El soporte ya se usó en otro caso.", status: 409 };
+      // El soporte queda con la firma que lo adjuntó, sea o no la última.
+      approvals = [...done, { stepKey: check.step.key, label: check.step.label, byId: session.sub, byEmail: session.email, at: now, reason: reason || null, ...(supportRef ? { support: supportRef } : {}) }];
+      if (!check.last) {
+        // Falta otra aprobación: el caso sigue por decidir con el registro de esta firma.
+        await tx.update(contractCases).set({ resultJson: { ...prev, approvals }, updatedAt: new Date() }).where(eq(contractCases.id, id));
+        const next = rules.steps.find((st) => st.key !== check.step.key && !done.some((d) => d.stepKey === st.key));
+        return { blocked, pending: next?.label ?? "otra aprobación" };
+      }
+    } else if (!await claimSupport()) {
+      return { error: "El soporte ya se usó en otro caso.", status: 409 };
+    }
     await tx.update(contractCases).set({
       status: "approved",
-      resultJson: { ...prev, decision: { action: "approve", reason: reason || null, byId: session.sub, byEmail: session.email, at: new Date().toISOString(), override: blocked } },
+      resultJson: { ...prev, ...(approvals ? { approvals } : {}), decision: {
+        action: "approve", reason: reason || null, byId: session.sub, byEmail: session.email, at: new Date().toISOString(), override: blocked,
+        ...(blocked ? { acknowledged: [...acknowledged] } : {}),
+        ...(supportRef ? { support: supportRef } : {}),
+      } },
       updatedAt: new Date(),
     }).where(eq(contractCases.id, id));
     return { blocked };
@@ -61,7 +116,11 @@ async function handlePOST(req: NextRequest, { params }: { params: Promise<{ id: 
     return NextResponse.json({ error: outcome.error, ...(outcome.needsOverride ? { needsOverride: true } : {}) }, { status: outcome.status });
   }
 
-  await logAudit({ orgId: session.orgId, userId: session.sub, userEmail: session.email, action: "contract.approved", resourceType: "contract_case", resourceId: id, metadata: { override: outcome.blocked, reason: reason || null } });
+  if (outcome.pending) {
+    await logAudit({ orgId: session.orgId, userId: session.sub, userEmail: session.email, action: "contract.approval_step", resourceType: "contract_case", resourceId: id, metadata: { pending: outcome.pending, reason: reason || null } });
+    return NextResponse.json({ ok: true, status: "partial", pending: outcome.pending });
+  }
+  await logAudit({ orgId: session.orgId, userId: session.sub, userEmail: session.email, action: "contract.approved", resourceType: "contract_case", resourceId: id, metadata: { override: outcome.blocked, reason: reason || null, acknowledged: outcome.blocked ? [...acknowledged] : undefined, support: support?.originalName ?? undefined } });
   return NextResponse.json({ ok: true, status: "approved" });
 }
 

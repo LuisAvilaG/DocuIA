@@ -1,273 +1,188 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useInBrowser } from "@/lib/use-in-browser";
+import { useMemo, useState } from "react";
+import Link from "next/link";
+import { Loader2, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
-import {
-  AlertTriangle, Search, CheckCircle2, Clock,
-  RotateCcw, FileText, XCircle, Loader2,
-} from "lucide-react";
+import { btn, EmptyState, PageFrame, StatusPill, type BtnVariant } from "@/components/kit";
+import type { Tone } from "@/lib/status-vocabulary";
+import { friendlyError } from "@/lib/ap/friendly-error";
 
-const STATUS_META: Record<string, { label: string; color: string; bg: string; border: string }> = {
-  pending:     { label: "Pendiente",   color: "text-warning",          bg: "bg-warning/10",         border: "border-warning/20" },
-  in_progress: { label: "En proceso", color: "text-primary",           bg: "bg-primary/10",         border: "border-primary/20" },
-  resolved:    { label: "Resuelto",   color: "text-success",           bg: "bg-success/10",         border: "border-success/20" },
-  dismissed:   { label: "Descartado", color: "text-muted-foreground",  bg: "bg-muted",              border: "border-border" },
-};
-
-const STAGE_META: Record<string, { label: string; color: string }> = {
-  extract:  { label: "Extracción", color: "text-destructive" },
-  validate: { label: "Validación", color: "text-warning" },
-  process:  { label: "Proceso",    color: "text-warning" },
-};
-
-const DOC_LABELS: Record<string, string> = {
-  invoice: "Factura", purchase_order: "OC", xml_cfdi: "CFDI",
-};
-
-interface ExRow {
-  id: number; documentType: string | null; originalFilename: string | null;
+export interface ExRow {
+  id: number;
+  documentId: number | null; numDoc: string | null; vendor: string | null; total: number | null;
+  documentType: string | null; originalFilename: string | null;
   failureStage: string; failureReason: string | null; errorCode: string | null;
-  status: string; retryCount: number; createdAt: string;
+  status: string; retryCount: number; lastRetryAt: string | null; canRetry: boolean; createdAt: string;
 }
 
-export function ExceptionsClient({ exceptions: initial }: { exceptions: ExRow[] }) {
-  const [exceptions, setExceptions] = useState(initial);
+const FILTERS = [
+  { key: "pending",     label: "Pendientes" },
+  { key: "in_progress", label: "En proceso" },
+  { key: "resolved",    label: "Resueltas" },
+  { key: "dismissed",   label: "Descartadas" },
+] as const;
+
+const STAGE: Record<string, { label: string; tone: Tone }> = {
+  extract:  { label: "Lectura",      tone: "warn" },
+  validate: { label: "Validación",   tone: "warn" },
+  process:  { label: "Envío al ERP", tone: "err" },
+};
+
+const DOC_LABEL: Record<string, string> = { invoice: "Factura", purchase_order: "Orden de compra", xml_cfdi: "CFDI" };
+
+function when(iso: string): string {
+  const d = new Date(iso);
+  const days = Math.floor((Date.now() - d.getTime()) / 86_400_000);
+  const mins = Math.floor((Date.now() - d.getTime()) / 60_000);
+  if (mins < 60) return mins < 1 ? "ahora" : `hace ${mins} min`;
+  if (days === 0) return `hace ${Math.floor(mins / 60)} h`;
+  if (days === 1) return "ayer";
+  return d.toLocaleDateString("es-MX", { day: "numeric", month: "short" });
+}
+
+const title = (e: ExRow) => [e.numDoc ?? e.originalFilename ?? `Excepción ${e.id}`, e.vendor].filter(Boolean).join(" · ");
+const reason = (e: ExRow) => friendlyError(e.failureReason?.split("\n")[0]) ?? "Sin descripción del error";
+
+export function ExceptionsClient({ exceptions: initial, canAct }: { exceptions: ExRow[]; canAct: boolean }) {
+  const inBrowser = useInBrowser();
+  const [rows, setRows] = useState(initial);
+  const [filter, setFilter] = useState<string>("pending");
   const [search, setSearch] = useState("");
-  const [status, setStatus] = useState("pending");
-  const [expanded, setExpanded] = useState<number | null>(null);
-  const [loadingId, setLoadingId] = useState<number | null>(null);
-  const [actionError, setActionError] = useState<Record<number, string>>({});
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState("");
 
-  async function handleRetry(id: number) {
-    setLoadingId(id);
-    setActionError((p) => ({ ...p, [id]: "" }));
+  const counts = useMemo(() => Object.fromEntries(FILTERS.map((f) => [f.key, rows.filter((r) => r.status === f.key).length])), [rows]);
+  const shown = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return rows.filter((r) => r.status === filter && (!q || [r.originalFilename, r.numDoc, r.vendor, r.errorCode, r.failureReason].some((v) => v?.toLowerCase().includes(q))));
+  }, [rows, filter, search]);
+  const selected = shown.find((r) => r.id === selectedId) ?? shown[0] ?? null;
+
+  async function act(e: ExRow, kind: "retry" | "resolve" | "dismiss") {
+    setBusy(kind); setError("");
     try {
-      const res = await fetch(`/api/v1/exceptions/${id}/retry`, { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) { setActionError((p) => ({ ...p, [id]: data.error ?? "Error al reintentar" })); return; }
-      const retryStatus = data.result?.status;
-      setExceptions((prev) => prev.map((e) =>
-        e.id === id ? { ...e, status: retryStatus && retryStatus !== "failed" ? "resolved" : "pending" } : e
-      ));
-      setExpanded(null);
-    } catch { setActionError((p) => ({ ...p, [id]: "No se pudo conectar al servidor" })); }
-    finally { setLoadingId(null); }
+      const res = kind === "retry"
+        ? await fetch(`/api/v1/exceptions/${e.id}/retry`, { method: "POST" })
+        : await fetch(`/api/v1/exceptions/${e.id}/resolve`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(kind === "dismiss" ? { dismiss: true } : {}),
+        });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setError(data.error ?? "No se pudo completar la acción."); return; }
+      const next = kind === "dismiss" ? "dismissed"
+        : kind === "resolve" ? "resolved"
+        : data.result?.status && data.result.status !== "failed" ? "resolved" : "pending";
+      setRows((prev) => prev.map((r) => (r.id === e.id ? { ...r, status: next, retryCount: kind === "retry" ? r.retryCount + 1 : r.retryCount, lastRetryAt: kind === "retry" ? new Date().toISOString() : r.lastRetryAt } : r)));
+      if (kind === "retry" && next === "pending") setError("El reintento volvió a fallar. El motivo se actualiza al recargar.");
+    } catch {
+      setError("No se pudo conectar al servidor.");
+    } finally {
+      setBusy(null);
+    }
   }
 
-  async function handleResolve(id: number) {
-    setLoadingId(id);
-    setActionError((p) => ({ ...p, [id]: "" }));
-    try {
-      const res = await fetch(`/api/v1/exceptions/${id}/resolve`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ notes: "Resuelto manualmente desde panel" }) });
-      const data = await res.json();
-      if (!res.ok) { setActionError((p) => ({ ...p, [id]: data.error ?? "Error al resolver" })); return; }
-      setExceptions((prev) => prev.map((e) => e.id === id ? { ...e, status: "resolved" } : e));
-      setExpanded(null);
-    } catch { setActionError((p) => ({ ...p, [id]: "No se pudo conectar al servidor" })); }
-    finally { setLoadingId(null); }
-  }
-
-  const filtered = useMemo(() => {
-    return exceptions.filter(e => {
-      if (status && e.status !== status) return false;
-      if (search) {
-        const q = search.toLowerCase();
-        if (
-          !e.originalFilename?.toLowerCase().includes(q) &&
-          !e.errorCode?.toLowerCase().includes(q) &&
-          !e.failureReason?.toLowerCase().includes(q)
-        ) return false;
-      }
-      return true;
-    });
-  }, [exceptions, search, status]);
-
-  const pendingCount = exceptions.filter(e => e.status === "pending").length;
-
-  function fmtDate(iso: string) {
-    return new Date(iso).toLocaleDateString("es-MX", {
-      day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit",
-    });
-  }
+  const open = selected && (selected.status === "pending" || selected.status === "in_progress");
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
-      {/* Header */}
-      <div className="h-14 border-b border-border px-6 flex items-center gap-3 shrink-0">
-        <AlertTriangle className={cn("w-4 h-4", pendingCount > 0 ? "text-warning" : "text-muted-foreground")} />
-        <div>
-          <h1 className="text-sm font-semibold text-foreground">Excepciones</h1>
-          <p className="text-xs text-muted-foreground">
-            {pendingCount > 0 ? `${pendingCount} pendiente${pendingCount > 1 ? "s" : ""} de revisión` : "Sin excepciones pendientes"}
-          </p>
-        </div>
-      </div>
+    <PageFrame>
+      <h1 className="text-[26px] font-semibold leading-tight tracking-[-0.025em]">Excepciones</h1>
+      <p className="mt-1.5 text-sm text-muted-foreground">Documentos que no pudieron seguir solos. Cada uno dice qué pasó y cómo salir.</p>
 
-      {/* Filters */}
-      <div className="px-6 py-3 border-b border-border flex items-center gap-3 shrink-0">
-        <div className="relative flex-1 max-w-64">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
-          <input
-            type="text"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="Buscar por archivo o error..."
-            className="w-full bg-secondary/50 border border-border/60 rounded-lg pl-8 pr-3 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary/60 focus:ring-1 focus:ring-primary/20"
-          />
-        </div>
-        <div className="flex items-center gap-1.5">
-          {Object.entries(STATUS_META).map(([k, v]) => (
-            <button
-              key={k}
-              onClick={() => setStatus(status === k ? "" : k)}
-              className={cn(
-                "text-xs font-medium px-2.5 py-1 rounded-full border transition-all",
-                status === k
-                  ? `${v.bg} ${v.color} ${v.border}`
-                  : "border-border text-muted-foreground hover:text-foreground"
-              )}
-            >
-              {v.label}
-              <span className="ml-1.5 text-[10px] opacity-60">
-                {exceptions.filter(e => e.status === k).length}
-              </span>
+      <div className="mt-4.5 flex flex-wrap items-center gap-2.5">
+        <div role="group" aria-label="Estado" className="flex flex-wrap gap-1.5">
+          {FILTERS.map((f) => (
+            <button key={f.key} type="button" aria-pressed={filter === f.key} onClick={() => { setFilter(f.key); setSelectedId(null); setError(""); }}
+              className={cn("min-h-[34px] rounded-full border px-3 text-[13px] font-medium transition-colors",
+                filter === f.key ? "border-foreground bg-foreground text-background" : "border-[#D6D2C8] bg-white text-foreground/75 hover:text-foreground")}>
+              {f.label} <span className="tabular-nums">{counts[f.key]}</span>
             </button>
           ))}
         </div>
+        <label className="relative ml-auto w-full min-w-[260px] sm:w-[300px]">
+          <span className="sr-only">Buscar</span>
+          <Search aria-hidden className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar por archivo o error"
+            className="min-h-10 w-full rounded-lg border border-[#D6D2C8] bg-white pl-9 pr-3 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20" />
+        </label>
       </div>
 
-      {/* Content */}
-      <div className="flex-1 overflow-auto p-6">
-        {filtered.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-24 text-center">
-            <div className="w-12 h-12 rounded-2xl bg-success/10 border border-success/20 flex items-center justify-center mb-4">
-              <CheckCircle2 className="w-5 h-5 text-success" />
-            </div>
-            <p className="text-sm font-medium text-foreground">
-              {exceptions.length === 0 ? "Sin excepciones registradas" : "Sin resultados"}
-            </p>
-            <p className="text-xs text-muted-foreground mt-1">
-              {exceptions.length === 0
-                ? "Los documentos con errores de procesamiento aparecerán aquí"
-                : "Prueba con otro filtro"}
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {filtered.map(ex => {
-              const stMeta  = STATUS_META[ex.status] ?? STATUS_META.pending;
-              const stgMeta = STAGE_META[ex.failureStage] ?? STAGE_META.extract;
-              const isOpen  = expanded === ex.id;
-
+      {shown.length === 0 ? (
+        <EmptyState className="mt-4.5" title={rows.length === 0 ? "Sin excepciones" : search ? "Nada coincide con la búsqueda" : `No hay excepciones ${FILTERS.find((f) => f.key === filter)?.label.toLowerCase()}`}>
+          {rows.length === 0 ? "Cuando un documento no pueda seguir solo aparecerá aquí con su motivo." : "Prueba con otro estado o búsqueda."}
+        </EmptyState>
+      ) : (
+        <div className="mt-4.5 grid overflow-hidden rounded-xl border border-border bg-card lg:min-h-[560px] lg:grid-cols-[400px_minmax(0,1fr)]">
+          <ul className="border-b border-border lg:border-b-0 lg:border-r">
+            {shown.map((e) => {
+              const on = selected?.id === e.id;
               return (
-                <div
-                  key={ex.id}
-                  className={cn(
-                    "bg-card border rounded-xl overflow-hidden transition-all",
-                    isOpen ? "border-primary/30" : "border-border hover:border-border/80"
-                  )}
-                >
-                  {/* Row header */}
-                  <button
-                    className="w-full flex items-center gap-4 px-4 py-3 text-left"
-                    onClick={() => setExpanded(isOpen ? null : ex.id)}
-                  >
-                    <div className={cn("w-8 h-8 rounded-lg flex items-center justify-center shrink-0", stMeta.bg)}>
-                      <XCircle className={cn("w-4 h-4", stMeta.color)} />
-                    </div>
-
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-xs font-medium text-foreground">
-                          {ex.originalFilename ?? `Excepción #${ex.id}`}
-                        </span>
-                        {ex.documentType && (
-                          <span className="text-[10px] text-muted-foreground bg-secondary/80 px-1.5 py-0.5 rounded border border-border/60">
-                            {DOC_LABELS[ex.documentType] ?? ex.documentType}
-                          </span>
-                        )}
-                        <span className={cn("text-[10px] font-medium", stgMeta.color)}>
-                          {stgMeta.label}
-                        </span>
-                        {ex.errorCode && (
-                          <span className="text-[10px] text-muted-foreground font-mono bg-secondary/80 px-1.5 py-0.5 rounded">
-                            {ex.errorCode}
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-[11px] text-muted-foreground mt-0.5 truncate">
-                        {ex.failureReason ?? "Sin descripción del error"}
-                      </p>
-                    </div>
-
-                    <div className="flex items-center gap-3 shrink-0">
-                      {ex.retryCount > 0 && (
-                        <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                          <RotateCcw className="w-3 h-3" />
-                          {ex.retryCount}
-                        </div>
-                      )}
-                      <span className={cn(
-                        "text-[10px] font-medium px-2 py-0.5 rounded-full border",
-                        stMeta.bg, stMeta.color, stMeta.border
-                      )}>
-                        {stMeta.label}
-                      </span>
-                      <span className="text-[11px] text-muted-foreground whitespace-nowrap">
-                        {fmtDate(ex.createdAt)}
-                      </span>
-                    </div>
+                <li key={e.id}>
+                  <button type="button" onClick={() => { setSelectedId(e.id); setError(""); }} aria-current={on || undefined}
+                    className={cn("grid w-full grid-cols-[minmax(0,1fr)_auto] gap-x-2.5 gap-y-1 border-b border-line-soft px-4.5 py-3.5 text-left transition-colors", on ? "bg-[#FBF4F3]" : "hover:bg-secondary/40")}>
+                    <b className="truncate text-sm font-semibold">{title(e)}</b>
+                    <small className="text-xs text-muted-foreground">{inBrowser ? when(e.createdAt) : ""}</small>
+                    <span className="col-span-2 truncate text-[13px] text-foreground/80">{reason(e)}</span>
+                    <small className="col-span-2 text-xs text-muted-foreground">
+                      {STAGE[e.failureStage]?.label ?? e.failureStage}{e.retryCount > 0 ? ` · ${e.retryCount} reintento${e.retryCount === 1 ? "" : "s"}` : ""}
+                    </small>
                   </button>
-
-                  {/* Expanded detail */}
-                  {isOpen && (
-                    <div className="border-t border-border/60 px-4 py-4 bg-secondary/20 space-y-3">
-                      <div>
-                        <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1.5">
-                          Detalle del error
-                        </p>
-                        <p className="text-xs text-foreground font-mono bg-background/60 border border-border/60 rounded-lg px-3 py-2.5 leading-relaxed">
-                          {ex.failureReason ?? "Sin información adicional"}
-                        </p>
-                      </div>
-
-                      {actionError[ex.id] && (
-                        <p className="text-xs text-destructive flex items-center gap-1.5">
-                          <AlertTriangle className="w-3 h-3 shrink-0" />
-                          {actionError[ex.id]}
-                        </p>
-                      )}
-                      <div className="flex items-center gap-2 pt-1">
-                        {ex.status !== "resolved" && ex.status !== "dismissed" && (
-                          <>
-                            <button
-                              disabled={loadingId === ex.id}
-                              onClick={() => handleRetry(ex.id)}
-                              className="flex items-center gap-1.5 text-xs font-medium text-primary hover:text-primary/80 bg-primary/10 hover:bg-primary/15 border border-primary/20 px-3 py-1.5 rounded-lg transition-all disabled:opacity-50"
-                            >
-                              {loadingId === ex.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <RotateCcw className="w-3 h-3" />}
-                              Reintentar
-                            </button>
-                            <button
-                              disabled={loadingId === ex.id}
-                              onClick={() => handleResolve(ex.id)}
-                              className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground bg-secondary/50 hover:bg-secondary border border-border/60 px-3 py-1.5 rounded-lg transition-all disabled:opacity-50"
-                            >
-                              <CheckCircle2 className="w-3 h-3" />
-                              Marcar resuelto
-                            </button>
-                          </>
-                        )}
-                        <span className="text-[11px] text-muted-foreground ml-2">ID #{ex.id}</span>
-                      </div>
-                    </div>
-                  )}
-                </div>
+                </li>
               );
             })}
-          </div>
-        )}
-      </div>
-    </div>
+          </ul>
+
+          {selected && (
+            <section aria-labelledby="exc-title" className="flex flex-col gap-4.5 px-7 py-6">
+              <div>
+                <StatusPill tone={STAGE[selected.failureStage]?.tone ?? "warn"}>{STAGE[selected.failureStage]?.label ?? selected.failureStage}</StatusPill>
+                <h2 id="exc-title" className="mt-2 text-xl font-semibold tracking-[-0.015em]">{reason(selected)}</h2>
+              </div>
+              {selected.failureReason && selected.failureReason.includes("\n") && (
+                <p className="whitespace-pre-line text-[15px]">{selected.failureReason.split("\n").slice(1).join("\n")}</p>
+              )}
+              <dl className="grid grid-cols-[140px_minmax(0,1fr)] gap-x-3.5 gap-y-2 text-[13.5px]">
+                <dt className="text-muted-foreground">Documento</dt>
+                <dd>
+                  {selected.documentId
+                    ? <Link href={`/history/${selected.documentId}`} className="text-link hover:underline">{[selected.numDoc ?? `#${selected.documentId}`, DOC_LABEL[selected.documentType ?? ""], selected.total != null ? selected.total.toLocaleString("es-MX", { style: "currency", currency: "MXN" }) : null].filter(Boolean).join(" · ")}</Link>
+                    : selected.originalFilename ?? "—"}
+                </dd>
+                {selected.originalFilename && selected.documentId && <><dt className="text-muted-foreground">Archivo</dt><dd className="break-all">{selected.originalFilename}</dd></>}
+                {selected.errorCode && <><dt className="text-muted-foreground">Código</dt><dd className="font-mono text-[13px]">{selected.errorCode}</dd></>}
+                <dt className="text-muted-foreground">Reintentos</dt>
+                <dd>{selected.retryCount === 0 ? "Ninguno" : `${selected.retryCount}${selected.lastRetryAt && inBrowser ? ` · ${new Date(selected.lastRetryAt).toLocaleString("es-MX", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}` : ""}`}</dd>
+                <dt className="text-muted-foreground">Llegó</dt>
+                <dd>{inBrowser ? new Date(selected.createdAt).toLocaleString("es-MX", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : ""}</dd>
+              </dl>
+
+              {error && <p role="alert" className="text-sm text-tone-err">{error}</p>}
+
+              <div className="flex flex-wrap gap-2 border-t border-line-soft pt-4">
+                {selected.documentId && <Link href={`/history/${selected.documentId}`} className={btn("secondary")}>Abrir el documento</Link>}
+                {open && canAct && (
+                  <>
+                    {selected.canRetry && <ActBtn variant="primary" busy={busy === "retry"} disabled={busy !== null} onClick={() => act(selected, "retry")}>Reintentar</ActBtn>}
+                    <ActBtn variant="text" busy={busy === "resolve"} disabled={busy !== null} onClick={() => act(selected, "resolve")}>Marcar resuelto</ActBtn>
+                    <ActBtn variant="text" busy={busy === "dismiss"} disabled={busy !== null} onClick={() => act(selected, "dismiss")}>Descartar</ActBtn>
+                  </>
+                )}
+              </div>
+              {open && canAct && <p className="-mt-2 text-xs text-muted-foreground">Descartar la saca de la lista sin procesarla, por ejemplo si era un archivo equivocado.</p>}
+            </section>
+          )}
+        </div>
+      )}
+    </PageFrame>
+  );
+}
+
+function ActBtn({ variant, busy, disabled, onClick, children }: { variant: BtnVariant; busy: boolean; disabled: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button type="button" className={btn(variant)} disabled={disabled} onClick={onClick}>
+      {busy && <Loader2 className="animate-spin" />}{children}
+    </button>
   );
 }

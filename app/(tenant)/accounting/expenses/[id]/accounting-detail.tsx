@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -25,6 +26,13 @@ import {
   BadgeCheck,
 } from "lucide-react";
 import { EXPENSE_REPORT_STATUS } from "@/lib/status-config";
+import { formatExpenseTotals } from "@/lib/expense/totals";
+
+// pdf.js loads only when a PDF receipt is opened.
+const ReceiptPdf = dynamic(() => import("@/components/expense/receipt-pdf").then((m) => m.ReceiptPdf), {
+  ssr: false,
+  loading: () => <p className="p-6 text-center text-xs text-muted-foreground">Cargando visor…</p>,
+});
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -89,6 +97,13 @@ function fmtDate(iso: string | null): string {
   });
 }
 
+// Dates without a time (invoice date, report period) are stored as midnight
+// UTC: shown in the browser's zone they came out a day early in the Americas.
+function fmtDay(iso: string | null): string {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleDateString("es-CO", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" });
+}
+
 function fmtCurrency(val: string | null, currency = "COP"): string {
   return parseFloat(val ?? "0").toLocaleString("es-CO", {
     style: "currency", currency, maximumFractionDigits: 0,
@@ -103,6 +118,8 @@ export function AccountingExpenseDetail({ report, canDecide, canSync }: { report
   const [approving,  setApproving]  = useState(false);
   const [syncing,    setSyncing]    = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
+  // The PDF receipt open in the viewer.
+  const [receipt, setReceipt] = useState<{ url: string; name: string } | null>(null);
   const [rejectReason, setRejectReason] = useState("");
   const [rejecting,  setRejecting]  = useState(false);
   const [error,      setError]      = useState<string | null>(null);
@@ -111,10 +128,6 @@ export function AccountingExpenseDetail({ report, canDecide, canSync }: { report
 
   const cfg  = EXPENSE_REPORT_STATUS[localStatus] ?? EXPENSE_REPORT_STATUS["submitted"];
   const Icon = cfg.icon;
-
-  const grandTotal = report.items.reduce(
-    (s, i) => s + parseFloat(i.total ?? "0"), 0,
-  );
 
   // ── Actions ──────────────────────────────────────────────────────────
 
@@ -192,9 +205,9 @@ export function AccountingExpenseDetail({ report, canDecide, canSync }: { report
             <h1 className="text-base font-semibold text-foreground truncate">{report.purpose}</h1>
             {(report.periodStart || report.periodEnd) && (
               <p className="text-xs text-muted-foreground mt-0.5">
-                {report.periodStart && fmtDate(report.periodStart)}
+                {report.periodStart && fmtDay(report.periodStart)}
                 {report.periodStart && report.periodEnd && " – "}
-                {report.periodEnd && fmtDate(report.periodEnd)}
+                {report.periodEnd && fmtDay(report.periodEnd)}
               </p>
             )}
           </div>
@@ -237,7 +250,7 @@ export function AccountingExpenseDetail({ report, canDecide, canSync }: { report
         )}
 
         {/* Report-level sync error */}
-        {localStatus === "exception" && syncError && (
+        {(localStatus === "exception" || localStatus === "approved") && syncError && (
           <div className="mt-3 p-3 rounded-lg bg-destructive/10 border border-destructive/20">
             <p className="text-xs text-destructive font-medium flex items-center gap-1.5">
               <AlertCircle className="w-3.5 h-3.5" /> Error de sincronización
@@ -301,7 +314,7 @@ export function AccountingExpenseDetail({ report, canDecide, canSync }: { report
                   </span>
 
                   <span className="text-xs text-muted-foreground">
-                    {fmtDate(item.invoiceDate ?? item.expenseDate)}
+                    {fmtDay(item.invoiceDate ?? item.expenseDate)}
                   </span>
 
                   <span className="text-xs text-muted-foreground truncate">
@@ -337,7 +350,7 @@ export function AccountingExpenseDetail({ report, canDecide, canSync }: { report
                         {item.vendorNit && ` · NIT ${item.vendorNit}`}
                       </p>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        {fmtDate(item.invoiceDate ?? item.expenseDate)}
+                        {fmtDay(item.invoiceDate ?? item.expenseDate)}
                         {" · "}
                         {PAYMENT_METHOD_LABELS[item.paymentMethod] ?? item.paymentMethod}
                       </p>
@@ -354,18 +367,35 @@ export function AccountingExpenseDetail({ report, canDecide, canSync }: { report
                       <BadgeCheck className="w-3 h-3" /> Sincronizado
                     </span>
                   )}
-                  {item.documents.filter((d) => d.fileKey).map((d) => (
-                    <a
-                      key={d.id}
-                      href={`/api/v1/expenses/documents/${d.id}/file`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="mt-2 mr-3 inline-flex items-center gap-1 text-[0.6875rem] font-medium text-primary hover:underline"
-                    >
-                      Ver comprobante{d.originalName ? ` · ${d.originalName}` : ""}
-                    </a>
-                  ))}
                 </div>
+
+                {/* Receipts: on every screen size, the reviewer approves against them. */}
+                {item.documents.some((d) => d.fileKey) && (
+                  <div className="px-4 pb-3 lg:px-5">
+                    {item.documents.filter((d) => d.fileKey).map((d) => d.mimeType === "application/pdf" ? (
+                      // A PDF opens in the app's own viewer: in a new tab the browser's
+                      // viewer does not load files served with the storage policy.
+                      <button
+                        key={d.id}
+                        type="button"
+                        onClick={() => setReceipt({ url: `/api/v1/expenses/documents/${d.id}/file`, name: d.originalName || "Comprobante" })}
+                        className="mr-3 inline-flex items-center gap-1 text-[0.6875rem] font-medium text-primary hover:underline"
+                      >
+                        Ver comprobante{d.originalName ? ` · ${d.originalName}` : ""}
+                      </button>
+                    ) : (
+                      <a
+                        key={d.id}
+                        href={`/api/v1/expenses/documents/${d.id}/file`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mr-3 inline-flex items-center gap-1 text-[0.6875rem] font-medium text-primary hover:underline"
+                      >
+                        Ver comprobante{d.originalName ? ` · ${d.originalName}` : ""}
+                      </a>
+                    ))}
+                  </div>
+                )}
 
                 {/* Item sync error */}
                 {item.syncError && (
@@ -383,9 +413,7 @@ export function AccountingExpenseDetail({ report, canDecide, canSync }: { report
             <div className="flex items-center justify-between px-3 py-2.5 mt-1">
               <span className="text-sm text-muted-foreground">Total del informe</span>
               <span className="text-base font-bold tabular-nums text-foreground">
-                {grandTotal.toLocaleString("es-CO", {
-                  style: "currency", currency: "COP", maximumFractionDigits: 0,
-                })}
+                {formatExpenseTotals(report.items)}
               </span>
             </div>
           </div>
@@ -455,6 +483,19 @@ export function AccountingExpenseDetail({ report, canDecide, canSync }: { report
           </Button>
         )}
 
+        {/* approved / exception with nothing in the ERP yet → back to the employee */}
+        {canDecide && (localStatus === "approved" || localStatus === "exception")
+          && !report.netsuiteExpenseReportId && !report.items.some((item) => item.nsRecordId) && (
+          <Button
+            variant="outline"
+            onClick={() => setRejectOpen(true)}
+            disabled={syncing}
+            className="w-full border-destructive/40 text-destructive hover:bg-destructive/10"
+          >
+            <XCircle className="w-4 h-4 mr-2" /> Devolver al empleado
+          </Button>
+        )}
+
         {/* syncing → processing state */}
         {localStatus === "syncing" && (
           <div className="flex items-center justify-center gap-2 py-2.5 text-sm text-primary">
@@ -468,7 +509,7 @@ export function AccountingExpenseDetail({ report, canDecide, canSync }: { report
           <div className="flex items-center justify-center gap-2 py-2.5 text-sm text-success">
             <BadgeCheck className="w-4 h-4" />
             {report.netsuiteExpenseReportId
-              ? `Sincronizado · NS ${report.netsuiteExpenseReportId}`
+              ? `Sincronizado · ID en el ERP ${report.netsuiteExpenseReportId}`
               : "Sincronizado en el ERP"}
           </div>
         )}
@@ -482,6 +523,20 @@ export function AccountingExpenseDetail({ report, canDecide, canSync }: { report
       </div>
 
       {/* ── Reject Modal ── */}
+      <Dialog open={receipt !== null} onOpenChange={(open) => { if (!open) setReceipt(null); }}>
+        <DialogContent className="sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle className="truncate pr-6">{receipt?.name ?? "Comprobante"}</DialogTitle>
+          </DialogHeader>
+          <div className="max-h-[70vh] overflow-auto rounded-md bg-secondary/50 p-3">
+            {receipt && <ReceiptPdf url={receipt.url} />}
+          </div>
+          <DialogFooter>
+            {receipt && <a href={receipt.url} download={receipt.name} className="text-xs font-medium text-primary hover:underline">Descargar</a>}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={rejectOpen} onOpenChange={(open) => setRejectOpen(open)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>

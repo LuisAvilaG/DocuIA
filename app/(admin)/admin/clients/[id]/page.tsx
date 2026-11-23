@@ -1,6 +1,7 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
-import { desc, eq } from "drizzle-orm";
+import { notFound, redirect } from "next/navigation";
+import { requireAdminSession } from "@/lib/auth/admin";
+import { desc, eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { adminAuditLog } from "@/db/schema";
 import { loadOneOrgFacts, healthFromFacts, type OrgCheck } from "@/lib/admin/health";
@@ -18,12 +19,18 @@ const NEXT_STEP: Record<OrgCheck["key"], { title: string; href: string; cta: str
 };
 
 export default async function ClientExpedientePage({ params }: { params: Promise<{ id: string }> }) {
+  if ((await requireAdminSession()).error) redirect("/admin/login");
   const { id } = await params;
   const facts = await loadOneOrgFacts(id);
   if (!facts) notFound();
   const health = healthFromFacts(facts);
   const audit = await db.select().from(adminAuditLog).where(eq(adminAuditLog.targetOrgId, id)).orderBy(desc(adminAuditLog.createdAt)).limit(6);
 
+  // When the catalog was last read from the ERP (not the client's last activity).
+  const catalogSync = facts.subsidiaries.items > 0
+    ? await db.execute(sql`select max(ci.updated_at) as at from catalog_items ci join subsidiaries s on s.id = ci.subsidiary_id where s.organization_id = ${id}`)
+        .then((res) => (res as unknown as { rows: Array<{ at: string | Date | null }> }).rows?.[0]?.at ?? null).catch(() => null)
+    : null;
   const events: Event[] = [];
   const sandbox = facts.connections.find((c) => c.environment === "sandbox");
   const production = facts.connections.find((c) => c.environment === "production");
@@ -31,7 +38,7 @@ export default async function ClientExpedientePage({ params }: { params: Promise
     const p = health.pending;
     events.push({ at: new Date(), tone: "now", title: p.label.replace(/ conectado$/, " sin activar"), detail: p.detail });
   }
-  if (facts.subsidiaries.items > 0) events.push({ at: facts.lastActivityAt ?? facts.createdAt, tone: "ok", title: "Catálogo sincronizado", detail: `${facts.subsidiaries.active} subsidiaria${facts.subsidiaries.active === 1 ? "" : "s"} · ${num(facts.subsidiaries.items)} ítems` });
+  if (facts.subsidiaries.items > 0) events.push({ at: catalogSync ? new Date(catalogSync) : facts.createdAt, tone: "ok", title: "Catálogo sincronizado", detail: `${facts.subsidiaries.active} subsidiaria${facts.subsidiaries.active === 1 ? "" : "s"} · ${num(facts.subsidiaries.items)} ítems` });
   if (facts.firstRun.caseAt) events.push({ at: facts.firstRun.caseAt, tone: "ok", title: "Primer caso de contratos analizado", detail: `hoy lleva ${num(facts.usage30.cases)} casos en 30 días` });
   if (facts.firstRun.reportAt) events.push({ at: facts.firstRun.reportAt, tone: "ok", title: "Primer informe de gastos", detail: `${num(facts.usage30.reports)} informes en 30 días` });
   if (facts.firstRun.docAt) events.push({ at: facts.firstRun.docAt, tone: "ok", title: "Primer documento AP procesado", detail: `hoy lleva ${num(facts.usage30.docs)} documentos en 30 días` });

@@ -6,6 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "start:standalone": "node scripts/start-standalone.mjs",
+    "sync:pdf-worker": "node scripts/sync-pdf-worker.mjs",
     "lint": "eslint",
     "test": "tsx --test tests/*.test.ts",
     "test:security": "tsx --test tests/security.test.ts",

@@ -67,6 +67,9 @@ export function buildFlowTrace(
     if (n.kind === "reference_lookup") {
       return { nodeId: n.id, kind: n.kind, label: `Rastrea: ${n.data.name}`, status: "done", detail: "Referencias cotejadas con el Archivo documental" };
     }
+    if (n.kind === "approval") {
+      return { nodeId: n.id, kind: n.kind, label: `Aprobación: ${n.data.name}`, status: "done", detail: `${1 + n.data.conditions.length} regla${n.data.conditions.length ? "s" : ""} de aprobación` };
+    }
     if (n.kind === "note") {
       return {
         nodeId: n.id, kind: n.kind, label: "Nota de flujo",

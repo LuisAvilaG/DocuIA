@@ -25,10 +25,10 @@ type Mode = "suspend" | "restore" | "delete";
  * Two-step danger flow for a client: suspend (reversible, keeps data) or
  * delete (recoverable for 30 days, then purged). Delete asks for the slug.
  */
-export function ClientLifecycleDialog({ open, onClose, org, afterDelete = "/admin/clients" }: Props) {
+export function ClientLifecycleDialog({ open, onClose, org, afterDelete = "/admin/clients", initialMode }: Props & { initialMode?: "delete" }) {
   const router = useRouter();
   const suspended = org.status === "suspended";
-  const [mode, setMode] = useState<Mode>(suspended ? "restore" : "suspend");
+  const [mode, setMode] = useState<Mode>(initialMode ?? (suspended ? "restore" : "suspend"));
   const [reason, setReason] = useState(org.suspensionReason ?? "");
   const [confirm, setConfirm] = useState("");
   const [footprint, setFootprint] = useState<Footprint | null>(null);

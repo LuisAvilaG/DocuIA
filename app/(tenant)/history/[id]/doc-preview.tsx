@@ -9,15 +9,47 @@ import type { BBox } from "@/lib/workflow/types";
 // dependency (unpkg) as a single point of failure.
 pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 
+/** Número de línea dibujado sobre la página; se toca para elegir esa línea. */
+export interface LineMarker { n: number; bbox: BBox; warn: boolean; active: boolean }
+
 interface DocPreviewProps {
   docId: number;
   activeBbox: BBox | undefined;
   fileExt: string; // pdf | jpeg | png | webp | tiff | xml
+  markers?: LineMarker[];
+  onMarker?: (n: number) => void;
+}
+
+function Markers({ markers, page, onMarker }: { markers?: LineMarker[]; page?: number; onMarker?: (n: number) => void }) {
+  if (!markers?.length) return null;
+  return (
+    <>
+      {markers.filter((m) => page === undefined || !m.bbox.page || m.bbox.page === page).map((m) => (
+        <button
+          key={m.n}
+          type="button"
+          onClick={() => onMarker?.(m.n)}
+          aria-label={`Línea ${m.n}${m.warn ? ", sin ítem del ERP" : ""}`}
+          aria-pressed={m.active}
+          className="absolute flex size-[18px] -translate-x-[120%] items-center justify-center rounded-full text-[10px] font-bold text-white shadow-sm ring-2 ring-white transition-transform hover:scale-110"
+          style={{
+            left: `${Math.max(m.bbox.x1 * 100, 3)}%`,
+            top: `calc(${((m.bbox.y1 + m.bbox.y2) / 2) * 100}% - 9px)`,
+            backgroundColor: m.warn ? "#B07C0E" : "#0E7C70",
+            transform: m.active ? "scale(1.15)" : undefined,
+          }}
+        >
+          {m.n}
+        </button>
+      ))}
+    </>
+  );
 }
 
 function mimeFromExt(ext: string): "pdf" | "image" | "xml" | "unknown" {
   if (ext === "pdf") return "pdf";
-  if (["jpg", "jpeg", "png", "webp", "tiff", "tif"].includes(ext)) return "image";
+  // TIFF is left out: browsers cannot draw it, and a broken image is worse than no preview.
+  if (["jpg", "jpeg", "png", "webp"].includes(ext)) return "image";
   if (ext === "xml") return "xml";
   return "unknown";
 }
@@ -91,7 +123,25 @@ function BboxHighlight({ bbox, page }: { bbox: BBox | undefined; page?: number }
   );
 }
 
-export function DocPreview({ docId, activeBbox, fileExt }: DocPreviewProps) {
+// Every response forbids framing (X-Frame-Options: DENY), so an iframe of the
+// XML stays blank. The text is fetched and shown as it is.
+function XmlText({ url, maxHeight }: { url: string; maxHeight: number }) {
+  const [state, setState] = useState<{ url: string; text: string | null; failed: boolean }>({ url, text: null, failed: false });
+  useEffect(() => {
+    let cancelled = false;
+    fetch(url)
+      .then((res) => (res.ok ? res.text() : Promise.reject(new Error(String(res.status)))))
+      .then((text) => { if (!cancelled) setState({ url, text, failed: false }); })
+      .catch(() => { if (!cancelled) setState({ url, text: null, failed: true }); });
+    return () => { cancelled = true; };
+  }, [url]);
+  const current = state.url === url ? state : { text: null, failed: false };
+  if (current.failed) return <p className="text-sm text-muted-foreground">No se pudo cargar el XML.</p>;
+  if (current.text === null) return <p className="text-sm text-muted-foreground">Cargando…</p>;
+  return <pre className="overflow-auto whitespace-pre-wrap break-all font-mono text-[11.5px] leading-relaxed text-foreground" style={{ maxHeight }}>{current.text}</pre>;
+}
+
+export function DocPreview({ docId, activeBbox, fileExt, markers, onMarker }: DocPreviewProps) {
   const kind = mimeFromExt(fileExt.toLowerCase());
   const fileUrl = `/api/v1/documents/${docId}/file`;
 
@@ -162,6 +212,7 @@ export function DocPreview({ docId, activeBbox, fileExt }: DocPreviewProps) {
                 renderAnnotationLayer={false}
               />
               <BboxHighlight bbox={activeBbox} page={pageNum} />
+              <Markers markers={markers} page={pageNum} onMarker={onMarker} />
             </div>
           </Document>
         )}
@@ -183,18 +234,14 @@ export function DocPreview({ docId, activeBbox, fileExt }: DocPreviewProps) {
               style={{ width: "100%", height: "auto", display: "block" }}
             />
             <BboxHighlight bbox={activeBbox} />
+            <Markers markers={markers} onMarker={onMarker} />
           </div>
         )}
 
         {kind === "xml" && (
           <div className="w-full max-w-prose bg-card border border-border rounded-xl overflow-auto p-4">
             <p className="text-xs text-muted-foreground mb-2 font-mono">XML CFDI</p>
-            <iframe
-              src={fileUrl}
-              title="CFDI XML"
-              className="w-full border-0"
-              style={{ height: `${Math.round(renderWidth * 1.3)}px` }}
-            />
+            <XmlText url={fileUrl} maxHeight={Math.round(renderWidth * 1.3)} />
           </div>
         )}
 

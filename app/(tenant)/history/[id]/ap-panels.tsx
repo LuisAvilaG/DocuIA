@@ -3,6 +3,7 @@
 // Shared AP panels for the document screens: fiscal (SAT) validation, the
 // purchase-order picker and the invoice ↔ PO comparison.
 
+import { useInBrowser } from "@/lib/use-in-browser";
 import { useMemo, useState } from "react";
 import { CheckCircle2, XCircle, CircleHelp, Search, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -41,6 +42,7 @@ export function Card({ children, className }: { children: React.ReactNode; class
 // ── Fiscal validation ─────────────────────────────────────────────────────────
 
 export function FiscalPanel({ fiscal }: { fiscal: FiscalValidation }) {
+  const inBrowser = useInBrowser();
   const tone: Tone = fiscal.outcome === "ok" ? "ok" : fiscal.outcome === "blocked" ? "err" : "warn";
   return (
     <Card className="p-4">
@@ -48,7 +50,7 @@ export function FiscalPanel({ fiscal }: { fiscal: FiscalValidation }) {
         <h2 className="text-sm font-semibold text-foreground">Validación fiscal del CFDI</h2>
         <Badge tone={tone}>{fiscal.outcome === "ok" ? "Válido" : fiscal.outcome === "blocked" ? "Bloqueado" : "Revisar"}</Badge>
         <span className="ml-auto text-[0.6875rem] text-muted-foreground">
-          Consultado {new Date(fiscal.checkedAt).toLocaleString("es-MX", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+          {inBrowser ? `Consultado ${new Date(fiscal.checkedAt).toLocaleString("es-MX", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}` : ""}
         </span>
       </div>
       <ul className="grid gap-2 sm:grid-cols-2">

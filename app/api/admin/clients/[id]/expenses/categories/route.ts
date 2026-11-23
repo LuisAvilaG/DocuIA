@@ -20,7 +20,7 @@ async function handlePATCH(req: NextRequest, { params }: Params) {
     return NextResponse.json({ error: "categoryId requerido" }, { status: 400 });
   }
 
-  const body = await req.json() as { dailyCap?: string | null; monthlyCap?: string | null };
+  const body = (await req.json().catch(() => null) ?? {}) as { dailyCap?: unknown; monthlyCap?: unknown };
 
   const existing = await db.query.expenseCategories.findFirst({
     where: and(
@@ -34,8 +34,19 @@ async function handlePATCH(req: NextRequest, { params }: Params) {
     return NextResponse.json({ error: "Categoría no encontrada" }, { status: 404 });
   }
 
-  const dailyCap = body.dailyCap != null ? String(body.dailyCap) : null;
-  const monthlyCap = body.monthlyCap != null ? String(body.monthlyCap) : null;
+  // A cap that is not in the body keeps its value; null clears it. Amounts
+  // must be non-negative numbers that fit the column.
+  const cap = (value: unknown, stored: string | null): string | null | undefined => {
+    if (value === undefined) return stored;
+    if (value === null || value === "") return null;
+    const n = Number(value);
+    return Number.isFinite(n) && n >= 0 && n < 1e10 ? String(Math.round(n * 100) / 100) : undefined;
+  };
+  const dailyCap = cap(body.dailyCap, existing.dailyCap);
+  const monthlyCap = cap(body.monthlyCap, existing.monthlyCap);
+  if (dailyCap === undefined || monthlyCap === undefined) {
+    return NextResponse.json({ error: "Los topes deben ser números no negativos" }, { status: 400 });
+  }
   await db.update(expenseCategories)
     .set({ dailyCap, monthlyCap, updatedAt: new Date() })
     .where(eq(expenseCategories.id, categoryId));

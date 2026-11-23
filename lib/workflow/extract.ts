@@ -137,7 +137,7 @@ export function mapInvoice(parsed: Record<string, unknown>, sourceText: string):
     deliveryDate,
     dueDate:       toDDMMYYYY(parsed?.due_date || parsed?.dueDate),
     purchaseOrder: normalize(parsed?.purchase_order || parsed?.purchaseOrder),
-    currency:      normalize(parsed?.currency || "USD").toUpperCase() || "USD",
+    currency:      normalize(parsed?.currency).toUpperCase(),
     subtotal:      toNumber(parsed?.subtotal),
     tax:           toNumber(parsed?.tax),
     total:         toNumber(parsed?.total),
@@ -289,14 +289,18 @@ export function configuredModel(value: unknown, fallback: string): string {
 
 function outputTokenLimit(maxChars: unknown): number {
   const characters = Number(maxChars);
-  if (!Number.isFinite(characters)) return 8000;
+  // A line takes about 100 tokens of JSON: 8,000 cut invoices of some 70 lines.
+  // Unused output is not charged. 20,000 is the most a non-streaming request
+  // may ask for before the SDK requires streaming.
+  if (!Number.isFinite(characters)) return 16000;
   // Four characters per token is the usual conservative conversion for the JSON response.
-  return Math.max(1024, Math.min(16000, Math.round(characters / 4)));
+  return Math.max(1024, Math.min(20000, Math.round(characters / 4)));
 }
 
-async function callModel(model: string, fileName: string, mimeType: string, base64: string, options: ExtractOptions): Promise<{ invoice: ExtractedInvoice; rawJson: string; usage: AiUsage }> {
+async function callModel(model: string, fileName: string, mimeType: string, base64: string, options: ExtractOptions, fallback = false): Promise<{ invoice: ExtractedInvoice; rawJson: string; usage: AiUsage }> {
   const req: AiJsonRequest = {
     model,
+    fallback,
     instruction: getInstruction(),
     parts: [{ kind: "file", base64, mimeType }],
     note: `FILE_NAME: ${normalize(fileName) || "invoice"}`,
@@ -324,11 +328,22 @@ export async function extractFromFile(params: {
   const policy = options.policy ?? {};
 
   if (forceSecondary) {
-    const r = await callModel(secondaryModel, params.fileName, params.mimeType, params.base64Content, options);
+    const r = await callModel(secondaryModel, params.fileName, params.mimeType, params.base64Content, options, true);
     return { invoice: r.invoice, model: secondaryModel, fallbackUsed: true, fallbackReason: "forzado por configuración", rawJson: r.rawJson, promptTokens: r.usage.inputTokens, completionTokens: r.usage.outputTokens, cachedTokens: r.usage.cachedInputTokens };
   }
 
-  const first = await callModel(primaryModel, params.fileName, params.mimeType, params.base64Content, options);
+  let first: Awaited<ReturnType<typeof callModel>>;
+  try {
+    first = await callModel(primaryModel, params.fileName, params.mimeType, params.base64Content, options);
+  } catch (error) {
+    // The first model did not answer at all (provider down, timeout, cut-off or
+    // unreadable response): the second one gets the document instead of failing it.
+    if (!fallbackEnabled || secondaryModel === primaryModel) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[extract] ${primaryModel} failed, using ${secondaryModel}: ${message}`);
+    const r = await callModel(secondaryModel, params.fileName, params.mimeType, params.base64Content, options, true);
+    return { invoice: r.invoice, model: secondaryModel, fallbackUsed: true, fallbackReason: `el modelo primario falló: ${message.slice(0, 160)}`, rawJson: r.rawJson, promptTokens: r.usage.inputTokens, completionTokens: r.usage.outputTokens, cachedTokens: r.usage.cachedInputTokens };
+  }
   const reason = secondaryReason(first.invoice, validation, policy);
   const primaryResult: ExtractionResult = { invoice: first.invoice, model: primaryModel, fallbackUsed: false, fallbackReason: null, rawJson: first.rawJson, promptTokens: first.usage.inputTokens, completionTokens: first.usage.outputTokens, cachedTokens: first.usage.cachedInputTokens };
   if (!reason || !fallbackEnabled || secondaryModel === primaryModel) return primaryResult;
@@ -336,7 +351,7 @@ export async function extractFromFile(params: {
   console.warn(`[extract] ${primaryModel} → ${secondaryModel}: ${reason}`);
   let second: Awaited<ReturnType<typeof callModel>>;
   try {
-    second = await callModel(secondaryModel, params.fileName, params.mimeType, params.base64Content, options);
+    second = await callModel(secondaryModel, params.fileName, params.mimeType, params.base64Content, options, true);
   } catch (error) {
     // The first result still stands; the pipeline's own validation decides its fate.
     console.warn("[extract] secondary model failed, keeping primary:", error instanceof Error ? error.message : error);

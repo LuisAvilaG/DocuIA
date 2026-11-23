@@ -1,15 +1,15 @@
 "use client";
 
-import { TENANT_ROLES, TENANT_ROLE_LABELS, type TenantRole } from "@/lib/auth/permissions";
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
-  Building2, Users, Server, Shield, Sparkles,
-  Pencil, Check, X, UserPlus, Copy, CheckCircle2, Loader2,
+  Building2, Users, Server, Shield,
+  Pencil, Check, X, Copy, CheckCircle2, Loader2,
   Webhook, Plus, Trash2, ToggleLeft, ToggleRight, ExternalLink,
-  Key, ScrollText, FlaskConical, Receipt, AlertCircle, RefreshCw, KeyRound,
+  Key, ScrollText, Receipt, AlertCircle, RefreshCw, KeyRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { TeamTab } from "./team-tab";
 import { SubsidiariesTable } from "@/components/tenant/subsidiaries-table";
 import { NativeSelect } from "@/components/ui/form-select";
 import { useFeature } from "@/components/providers/feature-provider";
@@ -71,14 +71,15 @@ type ExpenseData = {
 } | null;
 
 interface Props {
+  /** Pestaña con la que abre (ej. «team» desde Contratos › Usuarios). */
+  initialTab?: string;
   org: OrgData;
   users: UserData[];
   subsidiaries: SubData[];
   plan: string;
   currentUserRole: string;
+  currentUserId: string;
   webhooks: WebhookData[];
-  dryRun: boolean;
-  dryRunGranted: boolean;
   expenseData: ExpenseData;
 }
 
@@ -94,13 +95,6 @@ const ALL_TABS: { id: Tab; label: string; icon: React.ElementType; feature?: str
   { id: "audit",        label: "Auditoría",     icon: ScrollText,  feature: "tenant_audit_log" },
 ];
 
-const ROLE_BADGE: Record<string, string> = {
-  admin:    "bg-primary/10 text-primary",
-  operator: "bg-secondary text-muted-foreground",
-  viewer:   "bg-secondary text-muted-foreground",
-};
-
-const ROLE_LABELS: Record<string, string> = TENANT_ROLE_LABELS;
 
 const STATUS_BADGE: Record<string, string> = {
   trial:     "bg-warning/10 text-warning",
@@ -152,7 +146,7 @@ type AuditEntry = {
   createdAt:    string;
 };
 
-export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, currentUserRole, webhooks: initialWebhooks, dryRun: initialDryRun, dryRunGranted: initialDryRunGranted, expenseData: initialExpenseData }: Props) {
+export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, currentUserRole, currentUserId, webhooks: initialWebhooks, expenseData: initialExpenseData, initialTab }: Props) {
   const router = useRouter();
   const webhookSystem   = useFeature("webhook_system");
   const apiKeysFeat     = useFeature("api_keys");
@@ -171,54 +165,11 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
     [webhookSystem, apiKeysFeat, auditFeat, expenseFeat]
   );
 
-  const [tab,     setTab]     = useState<Tab>("org");
+  const [tab,     setTab]     = useState<Tab>(() => (ALL_TABS.some((t) => t.id === initialTab) ? initialTab as Tab : "org"));
   const [users,   setUsers]   = useState(initialUsers);
+  const [usersFrom, setUsersFrom] = useState(initialUsers);
+  if (initialUsers !== usersFrom) { setUsersFrom(initialUsers); setUsers(initialUsers); }
   const isAdmin = currentUserRole === "admin";
-
-  // ── Dry run state ────────────────────────────────────────────────
-  const [dryRunGranted]                   = useState(initialDryRunGranted);
-  const [dryRun,        setDryRun]        = useState(initialDryRun);
-  const [dryRunSaving,  setDryRunSaving]  = useState(false);
-  const [dryRunError,   setDryRunError]   = useState("");
-  const [dryRunSaved,   setDryRunSaved]   = useState(false);
-
-  // Sync from server after router.refresh() — only when not in the middle of saving
-  const [prevInitialDryRun, setPrevInitialDryRun] = useState(initialDryRun);
-  if (initialDryRun !== prevInitialDryRun) {
-    setPrevInitialDryRun(initialDryRun);
-    if (!dryRunSaving) setDryRun(initialDryRun);
-  }
-
-  async function handleToggleDryRun() {
-    const next = !dryRun;
-    setDryRun(next);
-    setDryRunSaving(true);
-    setDryRunError("");
-    setDryRunSaved(false);
-    try {
-      const res  = await fetch("/api/v1/features/dry-run", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ isEnabled: next }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setDryRun(!next);
-        setDryRunError(data.error ?? "Error al guardar");
-      } else {
-        // Use the server-confirmed effective value (adminGranted && tenantEnabled)
-        setDryRun(data.isEnabled);
-        setDryRunSaved(true);
-        setTimeout(() => setDryRunSaved(false), 3000);
-        router.refresh();
-      }
-    } catch {
-      setDryRun(!next);
-      setDryRunError("No se pudo conectar al servidor");
-    } finally {
-      setDryRunSaving(false);
-    }
-  }
 
   // ── Org edit state ──────────────────────────────────────────────
   const [editing,      setEditing]      = useState(false);
@@ -242,6 +193,8 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
       if (!res.ok) { setOrgError(data.error ?? "Error al guardar"); return; }
       setOrgSaved(true);
       setEditing(false);
+      // The read-only view shows the page's data: without this it kept the old values.
+      router.refresh();
     } catch {
       setOrgError("No se pudo conectar al servidor");
     } finally {
@@ -249,74 +202,7 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
     }
   }
 
-  // ── Threshold state ─────────────────────────────────────────────
-  const [thresholdPct,    setThresholdPct]    = useState(Math.round(org.autoProcessThreshold * 100));
-  const [thresholdSaving, setThresholdSaving] = useState(false);
-  const [thresholdError,  setThresholdError]  = useState("");
-  const [thresholdSaved,  setThresholdSaved]  = useState(false);
-
-  async function handleSaveThreshold() {
-    setThresholdSaving(true);
-    setThresholdError("");
-    setThresholdSaved(false);
-    try {
-      const res  = await fetch("/api/v1/settings", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ autoProcessThreshold: thresholdPct / 100 }),
-      });
-      const data = await res.json();
-      if (!res.ok) { setThresholdError(data.error ?? "Error al guardar"); return; }
-      setThresholdSaved(true);
-    } catch {
-      setThresholdError("No se pudo conectar al servidor");
-    } finally {
-      setThresholdSaving(false);
-    }
-  }
-
   // ── Invite user state ───────────────────────────────────────────
-  const [showInvite,    setShowInvite]    = useState(false);
-  const [inviteEmail,   setInviteEmail]   = useState("");
-  const [inviteName,    setInviteName]    = useState("");
-  const [inviteRole,    setInviteRole]    = useState<TenantRole>("operator");
-  const [inviteSaving,  setInviteSaving]  = useState(false);
-  const [inviteError,   setInviteError]   = useState("");
-  const [tempPassword,  setTempPassword]  = useState<string | null>(null);
-  const [copied,        setCopied]        = useState(false);
-
-  async function handleInvite(e: React.FormEvent) {
-    e.preventDefault();
-    setInviteSaving(true);
-    setInviteError("");
-    try {
-      const res  = await fetch("/api/v1/team", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: inviteEmail, fullName: inviteName, role: inviteRole }),
-      });
-      const data = await res.json();
-      if (!res.ok) { setInviteError(data.error ?? "Error al invitar"); return; }
-      setTempPassword(data.tempPassword);
-      setUsers(prev => [...prev, {
-        id:          data.userId,
-        email:       inviteEmail.toLowerCase().trim(),
-        fullName:    inviteName || null,
-        role:        inviteRole,
-        isActive:    true,
-        lastLoginAt: null,
-        createdAt:   new Date().toISOString(),
-      }]);
-      setInviteEmail("");
-      setInviteName("");
-      setInviteRole("operator");
-    } catch {
-      setInviteError("No se pudo conectar al servidor");
-    } finally {
-      setInviteSaving(false);
-    }
-  }
-
   // ── Webhook state ───────────────────────────────────────────────
   const [hooks,            setHooks]            = useState<WebhookData[]>(initialWebhooks);
   const [pendingDeleteHook, setPendingDeleteHook] = useState<string | null>(null);
@@ -385,19 +271,6 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
     await navigator.clipboard.writeText(s);
     setSecretCopied(true);
     setTimeout(() => setSecretCopied(false), 2000);
-  }
-
-  async function copyPassword(pwd: string) {
-    await navigator.clipboard.writeText(pwd);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }
-
-  function closeInvite() {
-    setShowInvite(false);
-    setTempPassword(null);
-    setInviteError("");
-    setCopied(false);
   }
 
   // ── API Keys state ──────────────────────────────────────────────
@@ -506,6 +379,13 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
 
   // ── Expense catalog state ───────────────────────────────────────
   const [cats, setCats]           = useState<ExpenseCategoryRow[]>(initialExpenseData?.categories ?? []);
+  // Fresh data from the server (after a sync from the ERP) replaces the lists
+  // that were copied into state when the page loaded (adjusted during render).
+  const [catsFrom, setCatsFrom]   = useState(initialExpenseData?.categories);
+  if (initialExpenseData?.categories !== catsFrom) {
+    setCatsFrom(initialExpenseData?.categories);
+    setCats(initialExpenseData?.categories ?? []);
+  }
   const [catSearch, setCatSearch] = useState("");
   const [capModal, setCapModal]   = useState<ExpenseCategoryRow | null>(null);
   const [capDaily,   setCapDaily]   = useState("");
@@ -525,8 +405,9 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
 
   function openCapModal(cat: ExpenseCategoryRow) {
     setCapModal(cat);
-    setCapDaily(cat.dailyCap ? String(Math.round(Number(cat.dailyCap))) : "");
-    setCapMonthly(cat.monthlyCap ? String(Math.round(Number(cat.monthlyCap))) : "");
+    // As stored: rounded here, saving anything turned 150.50 into 151.
+    setCapDaily(cat.dailyCap ? String(Number(cat.dailyCap)) : "");
+    setCapMonthly(cat.monthlyCap ? String(Number(cat.monthlyCap)) : "");
     setCapError("");
     setCapSaved(false);
   }
@@ -640,13 +521,13 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
       </div>
 
       {/* Tabs */}
-      <div className="border-b border-border shrink-0 px-6 flex items-center">
+      <div className="border-b border-border shrink-0 px-3 sm:px-6 flex items-center overflow-x-auto">
         {tabs.map(t => (
           <button
             key={t.id}
             onClick={() => setTab(t.id)}
             className={cn(
-              "flex items-center gap-1.5 px-4 py-3 text-xs font-medium transition-all duration-[120ms] border-b-2",
+              "flex shrink-0 items-center gap-1.5 px-4 py-3 text-xs font-medium transition-all duration-[120ms] border-b-2",
               tab === t.id
                 ? "border-primary text-foreground"
                 : "border-transparent text-muted-foreground hover:text-foreground"
@@ -700,7 +581,9 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
                       value={timezone}
                       onChange={e => setTimezone(e.target.value)}
                     >
-                      {TIMEZONES.map(tz => (
+                      {/* The organization's own zone first when it is not in the short list:
+                          otherwise the select showed another one as if it were the current. */}
+                      {(TIMEZONES.includes(timezone) ? TIMEZONES : [timezone, ...TIMEZONES]).map(tz => (
                         <option key={tz} value={tz}>{tz}</option>
                       ))}
                     </NativeSelect>
@@ -779,104 +662,14 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
               </div>
             </div>
 
-            {/* Threshold (solo admins) */}
             {isAdmin && (
-              <div className="bg-card rounded-xl border border-border p-5 space-y-4">
-                <div className="flex items-center gap-2">
-                  <Sparkles className="w-3.5 h-3.5 text-primary" />
-                  <h2 className="text-sm font-semibold tracking-[-0.01em] text-foreground">Procesamiento automático</h2>
-                </div>
-                <div className="space-y-3">
-                  <div>
-                    <p className="text-[0.6875rem] font-medium text-muted-foreground uppercase tracking-[0.06em] mb-1">Umbral de confianza</p>
-                    <p className="text-xs text-muted-foreground mb-3">
-                      Los documentos con confianza igual o mayor se envían automáticamente al ERP.
-                      Por debajo, pasan a revisión manual.
-                    </p>
-                    <div className="flex items-center gap-4">
-                      <input
-                        type="range"
-                        min={50} max={100} step={5}
-                        value={thresholdPct}
-                        onChange={e => { setThresholdPct(Number(e.target.value)); setThresholdSaved(false); }}
-                        className="flex-1 accent-primary h-1.5 cursor-pointer"
-                      />
-                      <span className="text-sm font-semibold text-foreground tabular-nums w-12 text-right">{thresholdPct}%</span>
-                    </div>
-                    <div className="flex justify-between text-[0.6875rem] text-muted-foreground/60 mt-1 px-0.5">
-                      <span>50% — más automático</span>
-                      <span>100% — solo perfecto</span>
-                    </div>
-                  </div>
-                  {thresholdError && <p className="text-xs text-destructive">{thresholdError}</p>}
-                  {thresholdSaved && <p className="text-xs text-success">Umbral guardado correctamente</p>}
-                  <button
-                    onClick={handleSaveThreshold}
-                    disabled={thresholdSaving || thresholdPct === Math.round(org.autoProcessThreshold * 100)}
-                    className="text-xs font-medium px-4 py-2 bg-primary hover:bg-primary/90 disabled:opacity-40 text-primary-foreground rounded-lg transition-all"
-                  >
-                    {thresholdSaving ? "Guardando..." : "Guardar umbral"}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Dry run */}
-            {dryRunGranted && (
-            <div className="bg-card rounded-xl border overflow-hidden"
-              style={{ borderColor: dryRun ? "oklch(0.75 0.12 80 / 0.35)" : undefined }}>
-              <div className="px-5 py-4 flex items-start justify-between gap-4">
-                <div className="flex items-start gap-3 flex-1 min-w-0">
-                  <div className="mt-0.5 p-1.5 rounded-lg shrink-0"
-                    style={{ backgroundColor: dryRun ? "oklch(0.94 0.04 80)" : "oklch(0.96 0 0)" }}>
-                    <FlaskConical className="w-3.5 h-3.5" style={{ color: dryRun ? "oklch(0.55 0.14 80)" : "oklch(0.65 0 0)" }} />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2 mb-0.5">
-                      <p className="text-sm font-semibold text-foreground">Modo prueba (Dry Run)</p>
-                      {dryRun && (
-                        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded"
-                          style={{ backgroundColor: "oklch(0.94 0.04 80)", color: "oklch(0.50 0.14 80)" }}>
-                          Activo
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-xs text-muted-foreground leading-relaxed">
-                      Cuando está activo, los documentos se validan contra el ERP pero no se crean transacciones reales.
-                      Útil para probar integraciones sin afectar datos de producción.
-                    </p>
-                    {dryRunError && <p className="text-xs text-destructive mt-1">{dryRunError}</p>}
-                    {dryRunSaved && (
-                      <p className="text-xs text-success flex items-center gap-1 mt-1">
-                        <CheckCircle2 className="w-3 h-3" />
-                        {dryRun ? "Modo prueba activado" : "Modo prueba desactivado"}
-                      </p>
-                    )}
-                  </div>
-                </div>
-
-                {isAdmin && (
-                  <button
-                    onClick={handleToggleDryRun}
-                    disabled={dryRunSaving}
-                    className={cn(
-                      "shrink-0 flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border transition-all disabled:opacity-50",
-                      dryRun
-                        ? "text-warning border-warning/40 bg-warning/10 hover:bg-warning/20"
-                        : "text-foreground border-border hover:bg-secondary"
-                    )}
-                  >
-                    {dryRunSaving
-                      ? <Loader2 className="w-3 h-3 animate-spin" />
-                      : dryRun
-                        ? <X className="w-3 h-3" />
-                        : <FlaskConical className="w-3 h-3" />
-                    }
-                    {dryRun ? "Desactivar" : "Activar"}
-                  </button>
-                )}
-              </div>
-            </div>
+              <a href="/invoice-settings" className="flex items-center justify-between gap-4 rounded-xl border border-border bg-card px-5 py-4 hover:bg-secondary/40">
+                <span>
+                  <b className="block text-sm font-semibold">Ajustes de Facturas</b>
+                  <span className="text-xs text-muted-foreground">El umbral de confianza, el modo prueba y el resto de opciones de facturas están ahí, por tema.</span>
+                </span>
+                <span className="text-xs font-semibold text-link">Abrir →</span>
+              </a>
             )}
 
             {!isAdmin && (
@@ -902,169 +695,7 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
 
         {/* ── Equipo ─────────────────────────────────────────────── */}
         {tab === "team" && (
-          <div className="max-w-2xl space-y-4">
-
-            {/* Invite form / temp password */}
-            {isAdmin && (
-              <div className="bg-card rounded-xl border border-border overflow-hidden">
-                <div className="px-5 py-3.5 border-b border-border flex items-center justify-between">
-                  <h2 className="text-sm font-semibold tracking-[-0.01em] text-foreground">Invitar usuario</h2>
-                  {!showInvite ? (
-                    <button
-                      onClick={() => setShowInvite(true)}
-                      className="flex items-center gap-1.5 text-xs font-medium text-primary hover:text-primary/80 transition-colors"
-                    >
-                      <UserPlus className="w-3.5 h-3.5" /> Nuevo usuario
-                    </button>
-                  ) : (
-                    <button onClick={closeInvite} className="text-xs text-muted-foreground hover:text-foreground transition-colors">
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                </div>
-
-                {showInvite && (
-                  <div className="p-5">
-                    {tempPassword ? (
-                      <div className="space-y-3">
-                        <div className="flex items-center gap-2 text-success">
-                          <CheckCircle2 className="w-4 h-4 shrink-0" />
-                          <p className="text-sm font-medium">Usuario creado correctamente</p>
-                        </div>
-                        <p className="text-xs text-muted-foreground">
-                          Comparte esta contraseña temporal con el usuario. Deberá cambiarla en su primer inicio de sesión.
-                        </p>
-                        <div className="flex items-center gap-2 bg-secondary/60 border border-border rounded-lg px-3 py-2.5">
-                          <code className="flex-1 text-sm font-mono text-foreground tracking-widest">{tempPassword}</code>
-                          <button
-                            onClick={() => copyPassword(tempPassword)}
-                            className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
-                          >
-                            {copied ? <CheckCircle2 className="w-4 h-4 text-success" /> : <Copy className="w-4 h-4" />}
-                          </button>
-                        </div>
-                        <button
-                          onClick={closeInvite}
-                          className="text-xs font-medium px-4 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-lg transition-all"
-                        >
-                          Listo
-                        </button>
-                      </div>
-                    ) : (
-                      <form onSubmit={handleInvite} className="space-y-3">
-                        <div className="grid grid-cols-2 gap-3">
-                          <div>
-                            <label className="text-[0.6875rem] font-medium text-muted-foreground uppercase tracking-[0.06em] mb-1 block">
-                              Email <span className="text-destructive">*</span>
-                            </label>
-                            <input
-                              type="email"
-                              value={inviteEmail}
-                              onChange={e => setInviteEmail(e.target.value)}
-                              placeholder="usuario@empresa.com"
-                              required
-                              className="w-full bg-secondary/50 border border-border/60 rounded-lg px-3 py-2 text-xs text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:border-primary/60"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-[0.6875rem] font-medium text-muted-foreground uppercase tracking-[0.06em] mb-1 block">
-                              Nombre completo
-                            </label>
-                            <input
-                              type="text"
-                              value={inviteName}
-                              onChange={e => setInviteName(e.target.value)}
-                              placeholder="Nombre Apellido"
-                              className="w-full bg-secondary/50 border border-border/60 rounded-lg px-3 py-2 text-xs text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:border-primary/60"
-                            />
-                          </div>
-                        </div>
-
-                        <div>
-                          <label className="text-[0.6875rem] font-medium text-muted-foreground uppercase tracking-[0.06em] mb-1 block">Rol</label>
-                          <div className="grid grid-cols-3 gap-2">
-                            {TENANT_ROLES.map(r => (
-                              <button
-                                key={r}
-                                type="button"
-                                onClick={() => setInviteRole(r)}
-                                className={cn(
-                                  "flex-1 text-xs font-medium py-1.5 rounded-lg border transition-all",
-                                  inviteRole === r
-                                    ? "border-primary/60 bg-primary/10 text-primary"
-                                    : "border-border bg-secondary/30 text-muted-foreground hover:text-foreground"
-                                )}
-                              >
-                                {ROLE_LABELS[r]}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-
-                        {inviteError && <p className="text-xs text-destructive">{inviteError}</p>}
-
-                        <button
-                          type="submit"
-                          disabled={inviteSaving}
-                          className="flex items-center gap-2 text-xs font-medium px-4 py-2 bg-primary hover:bg-primary/90 disabled:opacity-50 text-primary-foreground rounded-lg transition-all"
-                        >
-                          {inviteSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <UserPlus className="w-3 h-3" />}
-                          {inviteSaving ? "Creando..." : "Crear usuario"}
-                        </button>
-                      </form>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Users table */}
-            <div className="bg-card rounded-xl border border-border overflow-hidden">
-              <div className="px-5 py-3.5 border-b border-border">
-                <h2 className="text-sm font-semibold tracking-[-0.01em] text-foreground">Miembros del equipo</h2>
-                <p className="text-xs text-muted-foreground mt-0.5">{users.length} usuario{users.length !== 1 ? "s" : ""}</p>
-              </div>
-
-              {users.length === 0 ? (
-                <div className="py-12 flex flex-col items-center justify-center text-center">
-                  <p className="text-sm font-medium text-foreground">Sin usuarios</p>
-                </div>
-              ) : (
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-border">
-                      {["Usuario", "Rol", "Último acceso", "Estado"].map(h => (
-                        <th key={h} className="px-5 py-2.5 text-left text-[0.6875rem] font-medium text-muted-foreground uppercase tracking-[0.06em]">{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border">
-                    {users.map(u => (
-                      <tr key={u.id} className="hover:bg-accent/40 transition-colors duration-[120ms]">
-                        <td className="px-5 py-3">
-                          <p className="text-xs font-medium text-foreground">{u.fullName ?? u.email}</p>
-                          {u.fullName && <p className="text-[0.6875rem] text-muted-foreground mt-0.5">{u.email}</p>}
-                        </td>
-                        <td className="px-5 py-3">
-                          <span className={cn("text-[0.6875rem] font-medium px-2 py-0.5 rounded-sm", ROLE_BADGE[u.role] ?? "bg-secondary text-muted-foreground")}>
-                            {ROLE_LABELS[u.role] ?? u.role}
-                          </span>
-                        </td>
-                        <td className="px-5 py-3 text-[0.6875rem] text-muted-foreground tabular-nums">
-                          {u.lastLoginAt ? relativeDate(u.lastLoginAt) : "Nunca"}
-                        </td>
-                        <td className="px-5 py-3">
-                          <span className={cn("text-[0.6875rem] font-medium px-2 py-0.5 rounded-sm", u.isActive ? "bg-success/10 text-success" : "bg-secondary text-muted-foreground")}>
-                            {u.isActive ? "Activo" : "Inactivo"}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          </div>
+          <TeamTab users={users} setUsers={setUsers} isAdmin={isAdmin} currentUserId={currentUserId} expenseEnabled={expenseFeat} />
         )}
 
         {/* ── Webhooks ───────────────────────────────────────────── */}
@@ -1100,7 +731,7 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
                       <Plus className="w-3.5 h-3.5" /> Nuevo webhook
                     </button>
                   ) : (
-                    <button onClick={() => { setShowHookForm(false); setHookError(""); setNewSecret(null); }}
+                    <button onClick={() => { setShowHookForm(false); setHookError(""); }}
                       className="text-xs text-muted-foreground hover:text-foreground transition-colors">
                       <X className="w-3.5 h-3.5" />
                     </button>
@@ -1717,7 +1348,7 @@ export function SettingsClient({ org, users: initialUsers, subsidiaries, plan, c
               </div>
 
               <p className="text-[0.6875rem] text-muted-foreground/60 leading-relaxed">
-                Deja en blanco para sin límite. Los valores en moneda local (COP).
+                Deja en blanco para sin límite. Los valores van en la moneda de tu organización.
               </p>
             </div>
           </div>

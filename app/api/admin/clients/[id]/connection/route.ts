@@ -101,6 +101,12 @@ async function handlePOST(req: NextRequest, { params }: Params) {
 
     const now = new Date();
 
+    // "Guardar y probar" with credentials that do not work: the connection that
+    // is stored (and may be the one in production) stays as it is.
+    if (existing && tested === false) {
+      return NextResponse.json({ ok: false, connectionId: existing.id, tested, error: `${testError}. No se guardaron los cambios.`, status: existing.connectionStatus }, { status: 422 });
+    }
+
     if (existing) {
       await db.update(nsConnections)
         .set({
@@ -185,12 +191,15 @@ async function handlePATCH(req: NextRequest, { params }: Params) {
       return NextResponse.json({ error: "Connection not found — save credentials first" }, { status: 404 });
     }
 
+    // Not sent keeps what is stored; sent empty (or null) clears it. With
+    // "value ?? stored", an id typed by mistake could never be removed.
+    const next = (value: unknown, stored: string | null) => (value === undefined ? stored : typeof value === "string" && value.trim() ? value.trim() : null);
     await db.update(nsConnections)
       .set({
-        catalogScriptId: catalogScriptId ?? existing.catalogScriptId,
-        catalogDeployId: catalogDeployId ?? existing.catalogDeployId,
-        processScriptId: processScriptId ?? existing.processScriptId,
-        processDeployId: processDeployId ?? existing.processDeployId,
+        catalogScriptId: next(catalogScriptId, existing.catalogScriptId),
+        catalogDeployId: next(catalogDeployId, existing.catalogDeployId),
+        processScriptId: next(processScriptId, existing.processScriptId),
+        processDeployId: next(processDeployId, existing.processDeployId),
         updatedAt: new Date(),
       })
       .where(eq(nsConnections.id, existing.id));

@@ -6,6 +6,10 @@ import { subsidiaries, catalogItems, catalogVendors, catalogLocations } from "@/
 import { asc, eq } from "drizzle-orm";
 import { CatalogsClient } from "./client";
 
+// What one screen loads of each catalog (the review screens search the whole catalog).
+const ITEM_LIMIT = 5000;
+const LOCATION_LIMIT = 2000;
+
 export type CatalogItem = {
   id: number;
   internalId: string;
@@ -41,6 +45,7 @@ export default async function CatalogsPage({ searchParams }: { searchParams: Pro
 
   let subs: { id: string; name: string }[] = [];
   let selectedSub = "";
+  let cut = { items: false, vendors: false, locations: false };
   const items: Record<string, CatalogItem[]>     = {};
   const vendors: Record<string, CatalogVendor[]> = {};
   const locations: Record<string, CatalogLocation[]> = {};
@@ -67,7 +72,7 @@ export default async function CatalogsPage({ searchParams }: { searchParams: Pro
           .from(catalogItems)
           .where(eq(catalogItems.subsidiaryId, selectedSub))
           .orderBy(asc(catalogItems.name))
-          .limit(5000),
+          .limit(ITEM_LIMIT),
 
         db
           .select({
@@ -79,7 +84,7 @@ export default async function CatalogsPage({ searchParams }: { searchParams: Pro
           .from(catalogVendors)
           .where(eq(catalogVendors.subsidiaryId, selectedSub))
           .orderBy(asc(catalogVendors.name))
-          .limit(5000),
+          .limit(ITEM_LIMIT),
 
         db
           .select({
@@ -90,8 +95,10 @@ export default async function CatalogsPage({ searchParams }: { searchParams: Pro
           .from(catalogLocations)
           .where(eq(catalogLocations.subsidiaryId, selectedSub))
           .orderBy(asc(catalogLocations.name))
-          .limit(2000),
+          .limit(LOCATION_LIMIT),
       ]);
+      // A list that reached its limit is not whole: the search only sees what was loaded.
+      cut = { items: itemRows.length >= ITEM_LIMIT, vendors: vendorRows.length >= ITEM_LIMIT, locations: locationRows.length >= LOCATION_LIMIT };
 
       items[selectedSub]     = itemRows.map(({ subsidiaryId: _s, ...r }) => r);
       vendors[selectedSub]   = vendorRows.map(({ subsidiaryId: _s, ...r }) => r);
@@ -108,6 +115,7 @@ export default async function CatalogsPage({ searchParams }: { searchParams: Pro
       items={items}
       vendors={vendors}
       locations={locations}
+      cut={cut}
       isAdmin={session.role === "admin"}
     />
   );

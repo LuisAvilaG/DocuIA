@@ -1,10 +1,12 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
+import { requireAdminSession } from "@/lib/auth/admin";
 import { asc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { orgUsers, organizations } from "@/db/schema";
 import { UsersView } from "./users-view";
 
 export default async function ClientUsersPage({ params }: { params: Promise<{ id: string }> }) {
+  if ((await requireAdminSession()).error) redirect("/admin/login");
   const { id } = await params;
   const org = await db.query.organizations.findFirst({ where: eq(organizations.id, id), columns: { id: true } });
   if (!org) notFound();

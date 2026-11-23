@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowRight, Check, FileSearch, FileText, Loader2, Search, Trash2, Upload, X } from "lucide-react";
+import { btn, Drawer, Notice, PageFrame } from "@/components/kit";
 import { uploadContractFile } from "@/lib/contracts/upload-client";
 
 type ArchiveDoc = { id: string; originalName: string; documentCode: string | null; documentType: string | null; title: string | null; status: string; pageCount: number | null; indexedPages: number; errorMessage: string | null; createdAt: string; references?: { total: number; missing: number; review: number } };
@@ -23,6 +24,7 @@ export function ArchiveClient({ canRemove }: { canRemove: boolean }) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const [adding, setAdding] = useState(false);
   const [code, setCode] = useState("");
   const [targetByRef, setTargetByRef] = useState<Record<string, string>>({});
   const [targetCodeByRef, setTargetCodeByRef] = useState<Record<string, string>>({});
@@ -40,6 +42,7 @@ export function ArchiveClient({ canRemove }: { canRemove: boolean }) {
     setDocuments(data.documents);
   }, [query, status]);
 
+  const codeFor = useRef<string | null>(null);
   const loadSelected = useCallback(async () => {
     if (!selectedId) return;
     const request = ++selectedRequest.current;
@@ -48,7 +51,12 @@ export function ArchiveClient({ canRemove }: { canRemove: boolean }) {
     if (!response.ok) throw new Error(data.error ?? "No se pudo abrir el documento");
     if (request !== selectedRequest.current) return;
     setSelected(data);
-    setCode(data.document.documentCode ?? "");
+    // Only when another document is opened: the 5-second poll runs this too,
+    // and would put back the saved code over what is being typed.
+    if (codeFor.current !== selectedId) {
+      codeFor.current = selectedId;
+      setCode(data.document.documentCode ?? "");
+    }
   }, [selectedId]);
 
   useEffect(() => { const timer = setTimeout(() => { loadList().catch((cause) => setError(cause.message)).finally(() => setLoading(false)); }, 250); return () => clearTimeout(timer); }, [loadList]);
@@ -121,25 +129,34 @@ export function ArchiveClient({ canRemove }: { canRemove: boolean }) {
     finally { setBusy(false); }
   }
 
-  return <div className="flex-1 overflow-y-auto bg-background p-6">
-    <div className="mx-auto max-w-6xl space-y-5">
+  return <PageFrame wide>
+    <div className="flex flex-col gap-5">
       <header className="flex flex-wrap items-end justify-between gap-4">
-        <div><h1 className="text-lg font-semibold tracking-tight">Archivo documental</h1><p className="mt-1 text-xs text-muted-foreground">Encuentra el origen de cada referencia y comprueba si habla del mismo asunto.</p></div>
-        <div className="text-right text-[11px] text-muted-foreground"><span className="block font-semibold text-foreground">{documents.length} documentos visibles</span><span>PDF y Word · extracción por páginas</span></div>
-      </header>
-      <section className="rounded-xl border border-border bg-card px-4 py-3">
-        <div className="flex flex-wrap items-center gap-3">
-          <Upload className="h-4 w-4 text-primary" />
-          <label className="min-w-0 flex-1 text-xs text-foreground">Agregar cartas, informes o transmittals
-            <input type="file" accept=".pdf,.docx,.txt,.xml,.png,.jpg,.jpeg,.tiff" onChange={(event) => setFile(event.target.files?.[0] ?? null)} className="mt-1.5 block w-full text-[11px] text-muted-foreground file:mr-3 file:rounded-md file:border-0 file:bg-secondary file:px-3 file:py-1.5" />
-          </label>
-          <button type="button" disabled={!file || busy} onClick={upload} className="rounded-md bg-primary px-3 py-2 text-xs font-medium text-primary-foreground disabled:opacity-50">{busy ? "Procesando…" : "Agregar al archivo"}</button>
+        <div className="max-w-3xl">
+          <p className="text-xs font-semibold uppercase tracking-[0.06em] text-link">Contratos</p>
+          <h1 className="mt-1 text-[26px] font-semibold leading-tight tracking-[-0.025em]">Archivo</h1>
+          <p className="mt-1.5 text-sm text-muted-foreground">Los documentos de la empresa que los flujos consultan cuando un contrato o una carta cita a otro. {documents.length.toLocaleString("es-MX")} visibles.</p>
         </div>
-        {progress && <p role="status" className="mt-2 text-[11px] text-primary">{progress}</p>}
-        <p className="mt-2 text-[11px] text-muted-foreground">Los documentos quedan disponibles para futuras cartas; una referencia pendiente se enlaza al cargar su origen.</p>
-      </section>
-      {error && <p role="alert" className="rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-xs text-destructive">{error}</p>}
-      {notice && <p role="status" className="rounded-md border border-border bg-card px-3 py-2 text-xs text-foreground">{notice}</p>}
+        <button type="button" className={btn("primary")} onClick={() => { setAdding(true); setFile(null); setError(""); }}><Upload />Agregar documentos</button>
+      </header>
+      {adding && (
+        <Drawer title="Agregar al Archivo" description="Cartas, informes o transmittals. DocuIA lee su código y las referencias que citan." onClose={() => !busy && setAdding(false)} locked={busy}
+          footer={<>
+            <button type="button" className={btn("secondary")} disabled={busy} onClick={() => setAdding(false)}>Cancelar</button>
+            <button type="button" className={btn("primary")} disabled={!file || busy} onClick={async () => { await upload(); setAdding(false); }}>{busy && <Loader2 className="animate-spin" />}Agregar al Archivo</button>
+          </>}>
+          <label className="flex flex-col items-center gap-1 rounded-xl border-[1.5px] border-dashed border-[#C9C5BC] bg-background px-5 py-7 text-center">
+            <Upload aria-hidden className="size-5 text-link" />
+            <b className="text-sm font-semibold">{file ? file.name : "Elige el documento"}</b>
+            <span className="text-[12.5px] text-muted-foreground">PDF, Word, imagen o texto</span>
+            <input type="file" accept=".pdf,.docx,.txt,.xml,.png,.jpg,.jpeg" onChange={(event) => setFile(event.target.files?.[0] ?? null)} className="mt-2 text-[12.5px]" />
+          </label>
+          {progress && <p role="status" className="text-[13px] text-link">{progress}</p>}
+          <p className="text-[12.5px] text-muted-foreground">Queda disponible para cartas futuras; si una referencia estaba pendiente, se enlaza al cargar su origen.</p>
+        </Drawer>
+      )}
+      {error && <Notice tone="err" title="No se pudo completar">{error}</Notice>}
+      {notice && <Notice tone="ok" title="Listo">{notice}</Notice>}
       <div className="grid min-h-[480px] gap-4 lg:grid-cols-[minmax(280px,0.85fr)_minmax(0,1.4fr)]">
         <section className="overflow-hidden rounded-xl border border-border bg-card">
           <div className="space-y-3 border-b border-border p-4">
@@ -171,5 +188,5 @@ export function ArchiveClient({ canRemove }: { canRemove: boolean }) {
         </>}</section>
       </div>
     </div>
-  </div>;
+  </PageFrame>;
 }

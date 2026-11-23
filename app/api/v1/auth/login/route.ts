@@ -15,6 +15,9 @@ import { getTenantHomePath } from "@/lib/products";
 import { isTenantIpAllowed } from "@/lib/security/ip-allowlist";
 import { SESSION_TTL_MS, setAuthCookies } from "@/lib/auth/cookies";
 
+// A bcrypt hash (cost 12) of a value nobody knows.
+const NO_ACCOUNT_HASH = "$2b$12$J3nnYPM3D/61r8ks0/BDB.a1gmXgVm.IH51uZv1Crd/8Lj0QBkgnO";
+
 async function handlePOST(req: NextRequest) {
   const ip = clientIp(req.headers);
 
@@ -32,7 +35,7 @@ async function handlePOST(req: NextRequest) {
       return NextResponse.json({ error: "Email y contraseña requeridos" }, { status: 400 });
     }
     const { email, password } = parsed.data;
-    const accountKey = accountRateKey("tenant-login", email);
+    const accountKey = accountRateKey("tenant-login", `${email}|${ip}`);
     const accountLimit = await rateLimit(accountKey, { max: 5, windowSec: 900 });
     if (!accountLimit.ok) return NextResponse.json({ error: "Demasiados intentos" }, { status: 429, headers: { "Retry-After": String(accountLimit.retryAfterSec ?? 900) } });
 
@@ -41,6 +44,9 @@ async function handlePOST(req: NextRequest) {
     });
 
     if (!user || !user.passwordHash || !user.isActive || !await isOrganizationActive(user.organizationId)) {
+      // The same hash work as a wrong password, so the response time does not
+      // tell which emails have an account.
+      await compare(password, NO_ACCOUNT_HASH);
       return NextResponse.json({ error: "Credenciales inválidas" }, { status: 401 });
     }
 

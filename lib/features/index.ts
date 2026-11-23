@@ -2,6 +2,10 @@ import { db } from "@/lib/db";
 import { features, orgFeatures } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import { productForFeature, getActiveProductKeys } from "@/lib/products";
+import { TENANT_OFF_KEY, tenantCanToggle } from "./tenant-editable";
+
+/** El cliente apagó por su cuenta una feature que puede encender y apagar. */
+const tenantOff = (featureId: string, config: FeatureConfig) => tenantCanToggle(featureId) && config[TENANT_OFF_KEY] === true;
 
 export type FeatureConfig = Record<string, unknown>;
 
@@ -35,7 +39,7 @@ export async function getFeature(organizationId: string, featureId: string): Pro
   // that product active. Platform features (null) are always allowed.
   const product = productForFeature(featureId);
   const productActive = product === null || activeProducts.has(product);
-  const base = TENANT_CONTROLLED.has(featureId) ? adminGranted && tenantEnabled : adminGranted;
+  const base = (TENANT_CONTROLLED.has(featureId) ? adminGranted && tenantEnabled : adminGranted) && !tenantOff(featureId, overrideConfig);
   const isEnabled = productActive && base;
 
   return {
@@ -65,7 +69,7 @@ export async function getAllFeatures(organizationId: string): Promise<ResolvedFe
     const tenantEnabled = override?.isEnabled ?? false;
     const product = productForFeature(f.id);
     const productActive = product === null || activeProducts.has(product);
-    const base = TENANT_CONTROLLED.has(f.id) ? adminGranted && tenantEnabled : adminGranted;
+    const base = (TENANT_CONTROLLED.has(f.id) ? adminGranted && tenantEnabled : adminGranted) && !tenantOff(f.id, overrideConfig);
     const isEnabled = productActive && base;
 
     return {

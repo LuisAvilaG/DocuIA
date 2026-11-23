@@ -3,8 +3,10 @@ import { logAdminAction } from "@/lib/audit/admin";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession } from "@/lib/auth/admin";
 import { db } from "@/lib/db";
-import { organizations } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { organizations, orgFeatures } from "@/db/schema";
+import { and, eq } from "drizzle-orm";
+import { setAdminGrant } from "@/lib/features";
+import { resyncCatalogsForEnvironment } from "@/lib/netsuite/sync-catalog";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -46,7 +48,28 @@ async function handlePATCH(req: NextRequest, { params }: Params) {
       action: "environment.switched", targetOrgId: organizationId, targetOrgName: org.name,
       before: { environment: org.activeNsEnvironment }, after: { environment },
     });
-    return NextResponse.json({ ok: true, activeNsEnvironment: environment });
+
+    // El modo QA nunca convive con producción: se apaga solo y queda auditado.
+    if (environment === "production") {
+      const qa = await db.query.orgFeatures.findFirst({
+        where: and(eq(orgFeatures.organizationId, organizationId), eq(orgFeatures.featureId, "qa_mode")),
+        columns: { adminGranted: true, configJson: true, notes: true },
+      });
+      if (qa?.adminGranted) {
+        await setAdminGrant(organizationId, "qa_mode", false, (qa.configJson ?? undefined) as Record<string, unknown> | undefined, session!.sub, qa.notes ?? undefined);
+        await logAdminAction(req, session!, {
+          action: "feature.auto_disabled", targetOrgId: organizationId, targetOrgName: org.name, targetFeature: "qa_mode",
+          before: { adminGranted: true }, after: { adminGranted: false, reason: "environment_production" },
+        });
+      }
+    }
+    // The stored catalogs belong to the environment just left: read them again
+    // from the new one. In the background, it takes minutes for a large catalog.
+    const changed = environment !== org.activeNsEnvironment;
+    if (changed) {
+      void resyncCatalogsForEnvironment(organizationId).catch((err) => console.error("[clients/environment] catalog resync", err));
+    }
+    return NextResponse.json({ ok: true, activeNsEnvironment: environment, catalogSync: changed ? "started" : "unchanged" });
   } catch (err) {
     console.error("[clients/environment PATCH]", err);
     return NextResponse.json({ error: "Internal error" }, { status: 500 });

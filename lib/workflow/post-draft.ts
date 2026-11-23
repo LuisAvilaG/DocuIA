@@ -8,11 +8,13 @@ import { and, eq } from "drizzle-orm";
 import { getFeature, isFeatureEnabled } from "@/lib/features";
 import { resolveCustomFormId } from "@/lib/netsuite/custom-forms";
 import { deliverWebhooks } from "@/lib/webhooks/deliver";
-import { processInNetSuite } from "./process-ns";
+import { erpWarningNote, processInNetSuite } from "./process-ns";
 import { buildNsPayload, type NsDraft, type PoConfig } from "./ns-payload";
 import { upsertItemMappings } from "./mappings";
 import { recordPostedAmount } from "./pipeline";
 import { erpExtras } from "./erp-extras";
+import { qaPlanFor, recordQaSend } from "./qa-send";
+import { mergeDocMetrics } from "./doc-metrics";
 
 type HistoryDocument = typeof historyDocuments.$inferSelect;
 
@@ -38,9 +40,11 @@ export async function postClaimedDocument(opts: {
     ]);
     if (!sub) throw new Error("Subsidiaria no encontrada");
     const customFormId = formsFeat.isEnabled ? resolveCustomFormId(formsFeat.config, doc.subsidiaryId, doc.documentType) : "";
+    // Modo QA: otro id externo y número de prueba para que el ERP lo cree aunque ya exista.
+    const qa = dryRun ? null : await qaPlanFor(orgId, doc, draft.invoiceNumber ?? doc.numDoc);
 
     const nsResult = await processInNetSuite(orgId, {
-      ...buildNsPayload(draft, {
+      ...buildNsPayload(qa ? { ...draft, invoiceNumber: qa.documentNumber } : draft, {
         organizationId: orgId,
         documentId:     doc.id,
         documentType:   doc.documentType,
@@ -50,9 +54,17 @@ export async function postClaimedDocument(opts: {
         poConfig:       poFeature.config as PoConfig,
       }),
       ...(await erpExtras(doc)),
+      ...(qa ? { external_id: qa.externalId, memo: qa.memo } : {}),
     });
+    if (qa) await recordQaSend(doc.id, qa, nsResult, opts.approvedBy);
 
     const vendorName = draft.vendorName ?? doc.vendor ?? null;
+    // products becomes the list of posted lines below; the metrics still need these.
+    const before = doc.products && typeof doc.products === "object" ? doc.products as { approval_requested_by?: unknown } : {};
+    await mergeDocMetrics(doc.id, { sent: {
+      vendorId:   draft.vendorId,
+      reviewedBy: typeof before.approval_requested_by === "string" ? before.approval_requested_by : null,
+    } }).catch(() => {});
     await db.update(historyDocuments).set({
       status:        "completed",
       vendor:        vendorName,
@@ -68,7 +80,7 @@ export async function postClaimedDocument(opts: {
         unit:        l.unit,
       })) as unknown,
       approvedBy:    opts.approvedBy,
-      errorMessage:  null,
+      errorMessage:  erpWarningNote(nsResult.warnings),
       nextReceiptCheckAt: null,
       updatedAt:     new Date(),
     }).where(and(eq(historyDocuments.id, doc.id), eq(historyDocuments.status, "processing")));

@@ -45,7 +45,7 @@ const jar = new CookieJar();
 const lr = await fetch(`${BASE}/api/admin/auth/login`, {
   method: "POST",
   headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ email: "admin@docuia.com", password: "CONTRASENA-ELIMINADA" }),
+  body: JSON.stringify({ email: process.env.E2E_ADMIN_EMAIL, password: process.env.E2E_ADMIN_PASSWORD }),
   redirect: "manual",
 });
 jar.update(lr.headers.get("set-cookie"));

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { contractCases, contractDocuments, contractLargeUploads } from "@/db/schema";
+import { contractArchiveDocuments, contractCases, contractDocuments, contractLargeUploads } from "@/db/schema";
 import { abortMultipartFile, completeMultipartFile, deleteFile, getFileBuffer, getFileRange, getFileSize, listFileParts, startMultipartFile, uploadFilePart } from "@/lib/storage/minio";
 import { matchesFileType } from "@/lib/security/files";
 import { validateDocx } from "@/lib/security/docx";
@@ -11,7 +11,8 @@ export const CONTRACT_CHUNK_BYTES = 8 * 1024 * 1024;
 export const CONTRACT_MAX_PDF_BYTES = 150 * 1024 * 1024;
 const MAX_OTHER_BYTES = 20 * 1024 * 1024;
 const WORD_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-const ALLOWED = new Set(["application/pdf", WORD_MIME, "image/jpeg", "image/png", "image/webp", "image/tiff", "text/plain", "text/xml", "application/xml"]);
+// No TIFF: neither model reads it, and the whole case failed after three paid attempts.
+const ALLOWED = new Set(["application/pdf", WORD_MIME, "image/jpeg", "image/png", "image/webp", "text/plain", "text/xml", "application/xml"]);
 
 export function validateContractUpload(name: string, mimeType: string, size: number): string | null {
   if (!name || name.length > 240 || /[\\/\x00-\x1f]/.test(name)) return "Nombre de archivo inválido";
@@ -84,7 +85,7 @@ export async function cancelUpload(id: string, orgId: string, userId: string) {
   else await deleteFile(upload.storageKey).catch(() => undefined);
 }
 
-export async function createCaseFromUploads(input: { organizationId: string; createdBy: string; title?: string; flowId?: string; uploadIds: string[] }) {
+export async function createCaseFromUploads(input: { organizationId: string; createdBy: string; title?: string; flowId?: string; uploadIds: string[]; /** Tipo fijado por la casilla del caso: uploadId → docTypeKey. */ slotTypes?: Record<string, string> }) {
   if (input.uploadIds.length < 1 || input.uploadIds.length > 10 || new Set(input.uploadIds).size !== input.uploadIds.length) throw new Error("Selecciona de 1 a 10 archivos distintos");
   const uploads = await Promise.all(input.uploadIds.map((id) => getOwnedUpload(id, input.organizationId, input.createdBy)));
   if (uploads.some((upload) => !upload || upload.status !== "completed")) throw new Error("Hay archivos que no terminaron de cargar");
@@ -95,13 +96,73 @@ export async function createCaseFromUploads(input: { organizationId: string; cre
   }
   if (files.reduce((total, upload) => total + upload.sizeBytes, 0) > 300 * 1024 * 1024) throw new Error("El caso supera 300 MB en total");
   const caseId = randomUUID();
+  const documents = files.map((upload) => ({ id: randomUUID(), caseId, storageKey: upload.storageKey, originalName: upload.originalName, mimeType: upload.mimeType, detectedType: input.slotTypes?.[upload.id]?.slice(0, 60) ?? null }));
+  // Las casillas se guardan aparte (resultJson.slots): detected_type también lo
+  // escribe la clasificación de la IA y en un reproceso no se distinguirían.
+  const slots = Object.fromEntries(documents.filter((d) => d.detectedType).map((d) => [d.id, d.detectedType as string]));
   await db.transaction(async (tx) => {
     for (const upload of files) {
       const claimed = await tx.update(contractLargeUploads).set({ status: "claimed", claimedBy: caseId }).where(and(eq(contractLargeUploads.id, upload.id), eq(contractLargeUploads.organizationId, input.organizationId), eq(contractLargeUploads.status, "completed"), isNull(contractLargeUploads.claimedBy))).returning({ id: contractLargeUploads.id });
       if (claimed.length !== 1) throw new Error("El archivo ya fue utilizado por otro caso");
     }
-    await tx.insert(contractCases).values({ id: caseId, organizationId: input.organizationId, flowId: input.flowId ?? null, title: input.title ?? null, status: "uploaded", createdBy: input.createdBy });
-    await tx.insert(contractDocuments).values(files.map((upload) => ({ id: randomUUID(), caseId, storageKey: upload.storageKey, originalName: upload.originalName, mimeType: upload.mimeType })));
+    await tx.insert(contractCases).values({ id: caseId, organizationId: input.organizationId, flowId: input.flowId ?? null, title: input.title ?? null, status: "uploaded", createdBy: input.createdBy, ...(Object.keys(slots).length ? { resultJson: { slots } } : {}) });
+    await tx.insert(contractDocuments).values(documents);
   });
   return caseId;
+}
+
+/**
+ * Reingreso de un caso que esperaba documentos: agrega las versiones corregidas.
+ * Cada archivo puede reemplazar a un documento del caso (conserva su tipo) o sumarse.
+ * El caso vuelve a «uploaded» para analizarse otra vez.
+ */
+export async function addCorrectedDocuments(input: { organizationId: string; userId: string; caseId: string; items: Array<{ uploadId: string; replaces?: string | null }> }) {
+  if (input.items.length < 1 || input.items.length > 10) throw new Error("Agrega de 1 a 10 archivos");
+  const uploads = await Promise.all(input.items.map((it) => getOwnedUpload(it.uploadId, input.organizationId, input.userId)));
+  if (uploads.some((u) => !u || u.status !== "completed")) throw new Error("Hay archivos que no terminaron de cargar");
+  const files = uploads as NonNullable<(typeof uploads)[number]>[];
+  if (files.some((u) => u.mimeType === WORD_MIME)) throw new Error("Los casos aceptan PDF, imágenes y texto");
+  if (files.some((u) => u.sizeBytes > MAX_OTHER_BYTES) && !await isFeatureEnabled(input.organizationId, "contract_large_documents")) throw new Error("Documentos extensos no habilitados");
+
+  const replacedIds: string[] = [];
+  await db.transaction(async (tx) => {
+    const [kase] = await tx.select({ status: contractCases.status, resultJson: contractCases.resultJson }).from(contractCases)
+      .where(and(eq(contractCases.id, input.caseId), eq(contractCases.organizationId, input.organizationId))).for("update");
+    if (!kase) throw new Error("Caso no encontrado");
+    if (kase.status !== "awaiting_documents") throw new Error("El caso no está esperando documentos");
+    const result = (kase.resultJson && typeof kase.resultJson === "object" && !Array.isArray(kase.resultJson) ? kase.resultJson : {}) as Record<string, unknown>;
+    const slots: Record<string, string> = { ...((result.slots && typeof result.slots === "object" ? result.slots : {}) as Record<string, string>) };
+    const existing = await tx.select({ id: contractDocuments.id, detectedType: contractDocuments.detectedType }).from(contractDocuments).where(eq(contractDocuments.caseId, input.caseId));
+    const byId = new Map(existing.map((d) => [d.id, d]));
+    for (const [i, upload] of files.entries()) {
+      const claimed = await tx.update(contractLargeUploads).set({ status: "claimed", claimedBy: input.caseId })
+        .where(and(eq(contractLargeUploads.id, upload.id), eq(contractLargeUploads.organizationId, input.organizationId), eq(contractLargeUploads.status, "completed"), isNull(contractLargeUploads.claimedBy)))
+        .returning({ id: contractLargeUploads.id });
+      if (claimed.length !== 1) throw new Error("El archivo ya fue utilizado por otro caso");
+      const replaced = input.items[i].replaces ? byId.get(input.items[i].replaces!) : undefined;
+      if (replaced) {
+        await tx.delete(contractDocuments).where(and(eq(contractDocuments.id, replaced.id), eq(contractDocuments.caseId, input.caseId)));
+        replacedIds.push(replaced.id);
+      }
+      const newId = randomUUID();
+      await tx.insert(contractDocuments).values({ id: newId, caseId: input.caseId, storageKey: upload.storageKey, originalName: upload.originalName, mimeType: upload.mimeType, detectedType: replaced?.detectedType ?? null });
+      // Quien reemplaza un documento le fija el tipo del que sustituye.
+      if (replaced) {
+        delete slots[replaced.id];
+        if (replaced.detectedType) slots[newId] = replaced.detectedType;
+      }
+    }
+    await tx.update(contractCases).set({ status: "uploaded", errorMessage: null, resultJson: { ...result, slots }, updatedAt: new Date() }).where(eq(contractCases.id, input.caseId));
+  });
+  // The version that was replaced leaves the Archive too. Left "ready" it kept
+  // answering references with the old text, next to the corrected one.
+  if (replacedIds.length) {
+    const copies = await db.query.contractArchiveDocuments.findMany({
+      where: and(eq(contractArchiveDocuments.organizationId, input.organizationId), inArray(contractArchiveDocuments.caseDocumentId, replacedIds)),
+      columns: { id: true },
+    });
+    for (const copy of copies) {
+      await (await import("./archive")).removeArchiveDocument(copy.id, input.organizationId).catch((error) => console.error("[contracts] no se pudo retirar del Archivo el documento reemplazado", copy.id, error instanceof Error ? error.message : error));
+    }
+  }
 }

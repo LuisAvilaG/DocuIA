@@ -1,4 +1,4 @@
-import { CheckCircle2, CircleDot, FileOutput, FilePenLine, FileSearch, FileUp, History, RotateCcw, ShieldCheck, ShieldX, TriangleAlert, UserRound } from "lucide-react";
+import { CheckCircle2, CircleDot, FileOutput, FilePenLine, FileSearch, FileUp, History, Link2, Mail, RotateCcw, ShieldCheck, ShieldX, TriangleAlert, UserRound } from "lucide-react";
 
 export type CaseActivityItem = {
   id: string;
@@ -21,10 +21,37 @@ const ACTIONS: Record<string, { title: string; Icon: typeof History; tone: strin
   "contract.approved": { title: "Caso aprobado", Icon: ShieldCheck, tone: "text-success" },
   "contract.rejected": { title: "Caso rechazado", Icon: ShieldX, tone: "text-destructive" },
   "contract.reopened": { title: "Caso reabierto", Icon: RotateCcw, tone: "text-warning" },
+  "contract.approval_step": { title: "Aprobación registrada", Icon: ShieldCheck, tone: "text-success" },
+  "contract.documents_requested": { title: "Documentos corregidos solicitados", Icon: Mail, tone: "text-warning" },
+  "contract.upload_link_created": { title: "Enlace de carga creado para el contratista", Icon: Link2, tone: "text-primary" },
+  "contract.documents_delivered": { title: "El contratista entregó documentos", Icon: FileUp, tone: "text-primary" },
+  "contract.documents_resubmitted": { title: "Documentos corregidos cargados", Icon: FileUp, tone: "text-primary" },
+  "contract.archive_revalidated": { title: "Validaciones recalculadas con el Archivo", Icon: RotateCcw, tone: "text-primary" },
+  "contract.documents_request_cancelled": { title: "Solicitud de documentos cancelada", Icon: RotateCcw, tone: "text-warning" },
+  "contract.reprocess_requested": { title: "Se pidió volver a analizar el caso", Icon: RotateCcw, tone: "text-primary" },
 };
 
-function detailsFor(item: CaseActivityItem) {
+const count = (n: unknown, one: string, many: string) => (typeof n === "number" ? `${n} ${n === 1 ? one : many}` : null);
+
+function detailsFor(item: CaseActivityItem, timeZone?: string) {
   const meta = item.metadata ?? {};
+  if (item.action === "contract.approval_step") {
+    return [typeof meta.pending === "string" ? `Falta todavía: ${meta.pending}.` : null, typeof meta.reason === "string" ? meta.reason : null].filter(Boolean).join(" ") || null;
+  }
+  if (item.action === "contract.documents_requested") {
+    const documents = Array.isArray(meta.documents) ? meta.documents.filter((d): d is string => typeof d === "string") : [];
+    return [typeof meta.reason === "string" ? meta.reason : null, documents.length ? `Se pidió: ${documents.join(", ")}.` : null, meta.emailSent === false ? "El correo no se pudo enviar." : null].filter(Boolean).join(" ") || null;
+  }
+  if (item.action === "contract.upload_link_created" && typeof meta.expiresAt === "string") {
+    return `Vigente hasta el ${new Date(meta.expiresAt).toLocaleDateString("es-MX", { day: "numeric", month: "long", timeZone })}.`;
+  }
+  if (item.action === "contract.documents_delivered") {
+    const files = Array.isArray(meta.files) ? meta.files.filter((f): f is string => typeof f === "string").join(", ") : count(meta.files, "archivo", "archivos");
+    return [files, typeof meta.note === "string" ? `Nota: ${meta.note}` : null].filter(Boolean).join(" · ") || null;
+  }
+  if (item.action === "contract.documents_resubmitted") {
+    return [count(meta.files, "archivo", "archivos"), typeof meta.replaced === "number" && meta.replaced > 0 ? count(meta.replaced, "reemplaza a uno anterior", "reemplazan a anteriores") : null].filter(Boolean).join(" · ") || null;
+  }
   if (item.action === "contract.documents_uploaded" && Array.isArray(meta.files)) {
     return meta.files.filter((file): file is string => typeof file === "string").join(", ");
   }
@@ -42,7 +69,7 @@ function detailsFor(item: CaseActivityItem) {
   return null;
 }
 
-export function CaseActivity({ items }: { items: CaseActivityItem[] }) {
+export function CaseActivity({ items, timeZone }: { items: CaseActivityItem[]; timeZone?: string }) {
   return (
     <section aria-labelledby="case-activity-heading" className="border-t border-border pt-5">
       <div className="mb-3 flex items-center gap-2">
@@ -58,7 +85,7 @@ export function CaseActivity({ items }: { items: CaseActivityItem[] }) {
         <ol className="space-y-0 rounded-xl border border-border bg-card px-4 py-1">
           {items.map((item, index) => {
             const config = ACTIONS[item.action] ?? { title: item.action.replace(/^contract\./, "").replace(/_/g, " "), Icon: History, tone: "text-muted-foreground" };
-            const detail = detailsFor(item);
+            const detail = detailsFor(item, timeZone);
             return (
               <li key={item.id} className="relative flex gap-3 py-3.5">
                 {index < items.length - 1 && <span className="absolute left-[13px] top-10 h-[calc(100%-18px)] w-px bg-border" />}
@@ -66,9 +93,9 @@ export function CaseActivity({ items }: { items: CaseActivityItem[] }) {
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
                     <p className="text-xs font-semibold text-foreground">{config.title}</p>
-                    <time className="text-[10px] tabular-nums text-muted-foreground" dateTime={item.createdAt}>{new Date(item.createdAt).toLocaleString("es-MX")}</time>
+                    <time className="text-[10px] tabular-nums text-muted-foreground" dateTime={item.createdAt}>{new Date(item.createdAt).toLocaleString("es-MX", { timeZone })}</time>
                   </div>
-                  <p className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-muted-foreground"><UserRound className="h-3 w-3" />{item.action === "contract.processing_started" ? `Iniciado por ${item.actor ?? "DocuIA"}` : item.actor ?? "DocuIA"}</p>
+                  <p className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-muted-foreground"><UserRound className="h-3 w-3" />{item.action === "contract.processing_started" ? `Iniciado por ${item.actor ?? "DocuIA"}` : item.actor ?? (item.action === "contract.documents_delivered" ? "Contratista" : "DocuIA")}</p>
                   {detail && <p className="mt-1 text-[11px] leading-relaxed text-foreground/80 break-words">{detail}</p>}
                 </div>
               </li>

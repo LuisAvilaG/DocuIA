@@ -1,0 +1,1 @@
+ALTER TABLE "history_documents" ADD COLUMN "metrics_json" jsonb;

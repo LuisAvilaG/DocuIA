@@ -1,11 +1,12 @@
 import { redirect } from "next/navigation";
 import { getTenantSession } from "@/lib/auth/jwt";
+import { canAccessTenantArea } from "@/lib/auth/permissions";
 import { requireApAutomation } from "@/lib/products";
 import { isFeatureEnabled } from "@/lib/features";
 import { db } from "@/lib/db";
-import { exceptionQueue } from "@/db/schema";
-import { eq, desc } from "drizzle-orm";
-import { ExceptionsClient } from "./client";
+import { exceptionQueue, historyDocuments } from "@/db/schema";
+import { and, eq, desc, inArray, sql } from "drizzle-orm";
+import { ExceptionsClient, type ExRow } from "./client";
 
 export default async function ExceptionsPage() {
   const session = await getTenantSession({ area: "documents" });
@@ -13,32 +14,45 @@ export default async function ExceptionsPage() {
   await requireApAutomation(session.orgId);
   if (!await isFeatureEnabled(session.orgId, "exception_queue")) redirect("/dashboard");
 
-  let exceptions: {
-    id: number; documentType: string | null; originalFilename: string | null;
-    failureStage: string; failureReason: string | null; errorCode: string | null;
-    status: string; retryCount: number; createdAt: string;
-  }[] = [];
-
+  let exceptions: ExRow[] = [];
   try {
     const rows = await db.query.exceptionQueue.findMany({
       where: eq(exceptionQueue.organizationId, session.orgId),
-      orderBy: [desc(exceptionQueue.createdAt)],
-      limit: 100,
+      // Open ones first: with only the newest 200 of any status, old pending
+      // exceptions dropped off the list while the dashboard still counted them.
+      orderBy: [sql`(${exceptionQueue.status} in ('pending', 'in_progress')) desc`, desc(exceptionQueue.createdAt)],
+      limit: 200,
     });
-    exceptions = rows.map(r => ({
-      id:               r.id,
-      documentType:     r.documentType,
-      originalFilename: r.originalFilename,
-      failureStage:     r.failureStage,
-      failureReason:    r.failureReason,
-      errorCode:        r.errorCode,
-      status:           r.status,
-      retryCount:       r.retryCount,
-      createdAt:        r.createdAt.toISOString(),
-    }));
+    const docIds = [...new Set(rows.map((r) => r.documentId).filter((x): x is number => x != null))];
+    const docs = docIds.length
+      ? await db.select({ id: historyDocuments.id, numDoc: historyDocuments.numDoc, vendor: historyDocuments.vendor, total: historyDocuments.total, status: historyDocuments.status })
+        .from(historyDocuments).where(and(eq(historyDocuments.organizationId, session.orgId), inArray(historyDocuments.id, docIds)))
+      : [];
+    const docBy = new Map(docs.map((d) => [d.id, d]));
+    exceptions = rows.map((r) => {
+      const d = r.documentId != null ? docBy.get(r.documentId) : undefined;
+      return {
+        id: r.id,
+        documentId: d ? d.id : null,
+        numDoc: d?.numDoc ?? null,
+        vendor: d?.vendor ?? null,
+        total: d?.total != null ? Number(d.total) : null,
+        documentType: r.documentType,
+        originalFilename: r.originalFilename,
+        failureStage: r.failureStage,
+        failureReason: r.failureReason,
+        errorCode: r.errorCode,
+        status: r.status,
+        retryCount: r.retryCount,
+        lastRetryAt: r.lastRetryAt?.toISOString() ?? null,
+        canRetry: Boolean(r.storageKey && r.subsidiaryId),
+        createdAt: r.createdAt.toISOString(),
+      };
+    });
   } catch (err) {
     console.error("[exceptions]", err);
   }
 
-  return <ExceptionsClient exceptions={exceptions} />;
+  const canAct = canAccessTenantArea(session.role, { area: "documents", permission: "write" });
+  return <ExceptionsClient exceptions={exceptions} canAct={canAct} />;
 }

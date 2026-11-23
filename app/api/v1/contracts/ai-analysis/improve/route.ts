@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { isProductActive } from "@/lib/products";
 import { improveAiAnalysisPrompt } from "@/lib/contracts/ai-analysis";
+import { withAiUsage } from "@/lib/ai/usage";
 
 async function handlePOST(req: NextRequest) {
   const session = await getTenantSession({ area: "contracts", permission: "write" });
@@ -13,7 +14,7 @@ async function handlePOST(req: NextRequest) {
   const prompt = typeof body?.prompt === "string" ? body.prompt.trim() : "";
   if (prompt.length < 12 || prompt.length > 10000) return NextResponse.json({ error: "Escribe una instrucción entre 12 y 10,000 caracteres." }, { status: 400 });
   try {
-    return NextResponse.json({ prompt: await improveAiAnalysisPrompt(prompt) });
+    return NextResponse.json({ prompt: await withAiUsage({ orgId: session.orgId, source: "contratos" }, () => improveAiAnalysisPrompt(prompt)) });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "No se pudo mejorar el prompt." }, { status: 502 });
   }

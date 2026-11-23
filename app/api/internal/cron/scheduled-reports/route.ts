@@ -1,9 +1,11 @@
+import { dayIn, safeTimeZone, startOfMonthIn, startOfWeekIn } from "@/lib/time-zone";
 import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { historyDocuments, orgFeatures } from "@/db/schema";
-import { and, eq, gte, count, inArray, sql } from "drizzle-orm";
+import { and, eq, gte, lt, count, inArray, sql } from "drizzle-orm";
 import { getFeature } from "@/lib/features";
+import { operatingOrganization } from "@/lib/auth/jwt";
 import { sendEmail } from "@/lib/email/send";
 
 function cronAuth(req: NextRequest): boolean {
@@ -12,17 +14,22 @@ function cronAuth(req: NextRequest): boolean {
   return req.headers.get("x-cron-secret") === secret;
 }
 
-function periodStart(frequency: string): Date {
+/**
+ * The period a report covers: the week or month that just ended. `until` is the
+ * start of the current one, which also identifies the report already sent.
+ */
+function reportWindow(frequency: string, timeZone: string, now = new Date()): { from: Date; until: Date } {
+  // Midnights of the client's zone. With the server's (UTC) the week ran from
+  // Sunday 6 pm to Sunday 6 pm in Mexico, and the month likewise.
   if (frequency === "monthly") {
-    const now = new Date();
-    return new Date(now.getFullYear(), now.getMonth(), 1);
+    const until = startOfMonthIn(timeZone, now);
+    return { from: startOfMonthIn(timeZone, new Date(until.getTime() - 86_400_000)), until };
   }
-  const now = new Date();
-  const day = now.getDay() || 7;
-  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day + 1);
-  monday.setHours(0, 0, 0, 0);
-  return monday;
+  const until = startOfWeekIn(timeZone, now);
+  return { from: startOfWeekIn(timeZone, new Date(until.getTime() - 3 * 86_400_000)), until };
 }
+
+const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[c]!));
 
 function reportTypes(scope: string): Array<"invoice" | "purchase_order"> {
   if (scope === "invoice") return ["invoice"];
@@ -37,7 +44,8 @@ async function handleGET(req: NextRequest) {
 
   try {
     const orgs = await db.query.organizations.findMany({
-      columns: { id: true, name: true, billingEmail: true },
+      where: operatingOrganization(),
+      columns: { id: true, name: true, billingEmail: true, timezone: true },
     });
 
     const summary: Record<string, unknown> = {};
@@ -51,13 +59,14 @@ async function handleGET(req: NextRequest) {
 
       const config = feat.config as { frequency?: string; recipients?: string; report_scope?: string; last_sent_period?: string };
       const frequency     = config.frequency ?? "weekly";
-      const recipientsRaw = config.recipients ?? org.billingEmail ?? "";
+      // "" is the default of the setting, so ?? never reached the billing email.
+      const recipientsRaw = config.recipients?.trim() || org.billingEmail || "";
       if (!recipientsRaw) { summary[org.id] = { skipped: "no recipients" }; continue; }
 
-      const since        = periodStart(frequency);
-      const periodKey    = frequency === "monthly"
-        ? `${since.getFullYear()}-${String(since.getMonth() + 1).padStart(2, "0")}`
-        : since.toISOString().slice(0, 10);
+      const timeZone = safeTimeZone(org.timezone);
+      const { from: since, until } = reportWindow(frequency, timeZone);
+      // The day the current period starts, in the client's zone (the same keys as before).
+      const periodKey    = frequency === "monthly" ? dayIn(timeZone, until).slice(0, 7) : dayIn(timeZone, until);
       if (config.last_sent_period === periodKey) {
         summary[org.id] = { skipped: "already sent for current period" };
         continue;
@@ -65,8 +74,8 @@ async function handleGET(req: NextRequest) {
       const documentTypes = reportTypes(config.report_scope ?? "all");
       const periodLabel  = frequency === "monthly" ? "mensual" : "semanal";
       const periodRange  = frequency === "monthly"
-        ? since.toLocaleDateString("es-MX", { month: "long", year: "numeric" })
-        : "últimos 7 días";
+        ? since.toLocaleDateString("es-MX", { month: "long", year: "numeric", timeZone })
+        : `${since.toLocaleDateString("es-MX", { day: "numeric", month: "long", timeZone })} al ${new Date(until.getTime() - 43_200_000).toLocaleDateString("es-MX", { day: "numeric", month: "long", year: "numeric", timeZone })}`;
 
       const byStatus = await db
         .select({ status: historyDocuments.status, cnt: count() })
@@ -74,6 +83,7 @@ async function handleGET(req: NextRequest) {
         .where(and(
           eq(historyDocuments.organizationId, org.id),
           gte(historyDocuments.createdAt, since),
+          lt(historyDocuments.createdAt, until),
           inArray(historyDocuments.documentType, documentTypes),
         ))
         .groupBy(historyDocuments.status);
@@ -88,6 +98,7 @@ async function handleGET(req: NextRequest) {
         .where(and(
           eq(historyDocuments.organizationId, org.id),
           gte(historyDocuments.createdAt, since),
+          lt(historyDocuments.createdAt, until),
           inArray(historyDocuments.documentType, documentTypes),
           eq(historyDocuments.status, "completed"),
         ))
@@ -99,13 +110,13 @@ async function handleGET(req: NextRequest) {
 
       const vendorRows = topVendors
         .map(v => `<tr>
-          <td style="padding:6px 8px;border-bottom:1px solid #eee">${v.vendor ?? "—"}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #eee">${esc(v.vendor ?? "—")}</td>
           <td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right">${v.cnt}</td>
         </tr>`)
         .join("");
 
       const html = `<div style="font-family:sans-serif;max-width:540px;margin:0 auto;padding:24px;color:#111">
-        <h2 style="margin:0 0 4px">Reporte ${periodLabel} — ${org.name}</h2>
+        <h2 style="margin:0 0 4px">Reporte ${periodLabel} — ${esc(org.name)}</h2>
         <p style="color:#888;font-size:13px;margin:0 0 24px">${periodRange}</p>
         <div style="display:flex;gap:16px;margin:0 0 24px">
           <div style="flex:1;background:#f5f5f5;border-radius:8px;padding:16px;text-align:center">
@@ -137,13 +148,17 @@ async function handleGET(req: NextRequest) {
       </div>`;
 
       const recipients = recipientsRaw.split(",").map((s: string) => s.trim()).filter(Boolean);
+      let delivered = 0;
       for (const to of recipients) {
-        await sendEmail({
+        const r = await sendEmail({
           to,
           subject: `Reporte ${periodLabel} — ${org.name}`,
           html,
         });
+        if (r.ok) delivered++;
       }
+      // Nothing went out: leave the period open so tomorrow's run tries again.
+      if (delivered === 0) { summary[org.id] = { sent: false, error: "no se pudo enviar el correo" }; continue; }
 
       const [override] = await db.select({ configJson: orgFeatures.configJson })
         .from(orgFeatures)

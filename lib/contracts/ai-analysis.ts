@@ -1,3 +1,4 @@
+import { generateJson, isKnownModel, type JsonSchema } from "@/lib/ai/provider";
 import type { DocsByType, ValidationRule } from "./validate";
 
 export type AiAnalysisRule = Extract<ValidationRule, { kind: "ai_analysis" }>;
@@ -15,45 +16,23 @@ export interface AiAnalysisResponse {
   citations: string[];
 }
 
-const MODEL = "gemini-2.5-flash";
-const TIMEOUT_MS = Number(process.env.GEMINI_TIMEOUT_MS) || 90_000;
+/** Modelo del análisis con IA cuando el cliente no eligió otro. */
+export const DEFAULT_ANALYSIS_MODEL = "claude-sonnet-5-5";
 
-function getApiKey(): string {
-  const key = (process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || "").trim();
-  if (!key) throw new Error("Falta GOOGLE_API_KEY/GEMINI_API_KEY para el análisis con IA.");
-  return key;
-}
-
-function jsonObject(raw: string): Record<string, unknown> {
-  const clean = raw.trim();
-  try { return JSON.parse(clean) as Record<string, unknown>; }
-  catch {
-    const match = clean.match(/\{[\s\S]*\}/);
-    if (!match) throw new Error("La IA no devolvió una respuesta estructurada.");
-    return JSON.parse(match[0]) as Record<string, unknown>;
-  }
-}
-
-async function requestJson(instruction: string): Promise<Record<string, unknown>> {
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
-    {
-      method: "POST",
-      // Key in a header, not the URL, so it never lands in proxy or access logs.
-      headers: { "Content-Type": "application/json", "x-goog-api-key": getApiKey() },
-      cache: "no-store",
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-      body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: instruction }] }],
-        generationConfig: { temperature: 0, responseMimeType: "application/json" },
-      }),
-    },
-  );
-  if (!response.ok) throw new Error(`La IA no pudo completar el análisis (${response.status}).`);
-  const payload = await response.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
-  const text = payload.candidates?.flatMap((candidate) => candidate.content?.parts ?? []).find((part) => part.text)?.text;
-  if (!text) throw new Error("La IA no devolvió contenido para el análisis.");
-  return jsonObject(text);
+/**
+ * Una llamada al modelo por la capa común de proveedores (Claude o Gemini).
+ * La instrucción fija va como sistema (se cachea); los datos del caso, aparte.
+ */
+async function requestJson(instruction: string, content: string, model: string, schema?: JsonSchema): Promise<Record<string, unknown>> {
+  const { json } = await generateJson({
+    model: isKnownModel(model) ? model : DEFAULT_ANALYSIS_MODEL,
+    instruction,
+    parts: [{ kind: "text", text: content }],
+    schema,
+    maxOutputTokens: 8000,
+    timeoutMs: 120_000,
+  });
+  return json;
 }
 
 function cleanText(value: unknown, max = 1800): string {
@@ -96,7 +75,24 @@ function parseItems(value: unknown, outputFields: NonNullable<AiAnalysisRule["ou
   });
 }
 
-export async function runAiAnalysis(rule: AiAnalysisRule, docsByType: DocsByType): Promise<AiAnalysisResponse> {
+/** Forma exacta de la respuesta: los hallazgos llevan las columnas que definió el cliente. */
+export function analysisSchema(outputFields: NonNullable<AiAnalysisRule["outputFields"]>): JsonSchema {
+  const itemProps: Record<string, JsonSchema> = Object.fromEntries(outputFields.map((f) => [f.key, { type: "string", description: f.label }]));
+  itemProps.evidence = { type: "string", description: "Cita literal que sustenta el hallazgo, o vacío si no hay" };
+  return {
+    type: "object",
+    properties: {
+      outcome: { type: "string", enum: ["pass", "review", "block"] },
+      summary: { type: "string", description: "Resumen; vacío si el formato es solo estructurado" },
+      items: { type: "array", items: { type: "object", properties: itemProps, required: Object.keys(itemProps), additionalProperties: false } },
+      citations: { type: "array", items: { type: "string" } },
+    },
+    required: ["outcome", "summary", "items", "citations"],
+    additionalProperties: false,
+  };
+}
+
+export async function runAiAnalysis(rule: AiAnalysisRule, docsByType: DocsByType, model: string = DEFAULT_ANALYSIS_MODEL): Promise<AiAnalysisResponse> {
   const outputMode = rule.outputMode ?? "free";
   const outputFields = rule.outputFields ?? [];
   const prompt = rule.improvedPrompt?.trim() || rule.prompt.trim();
@@ -106,16 +102,19 @@ export async function runAiAnalysis(rule: AiAnalysisRule, docsByType: DocsByType
   const result = await requestJson(
     "Actúas como analista contractual. Trabaja exclusivamente con la evidencia proporcionada. " +
     "No inventes obligaciones, coberturas, cifras ni hechos. Cuando no exista evidencia suficiente, indícalo claramente. " +
-    "Una recomendación debe explicar por qué aplica y citar el texto disponible que la sustenta.\n\n" +
+    "Una recomendación debe explicar por qué aplica y citar el texto disponible que la sustenta. " +
+    "Compara fechas, valores y nombres con cuidado: un valor actualizado por un otrosí o una modificación reemplaza al anterior, " +
+    "y una cobertura que empieza después de lo exigido no cubre ese tramo.\n\n" +
+    "Responde en JSON con outcome, summary, items (un objeto por hallazgo, con exactamente las columnas pedidas y evidence) y citations.\n\n" +
+    "outcome significa: pass si no se requiere acción, review si una persona debe revisar o decidir, block si las reglas internas impiden continuar. " +
+    "Si el formato es libre, usa summary y deja items vacío. Si es estructurado, prioriza items y deja summary breve. Si es ambos, completa ambos.",
     `OBJETIVO DEL USUARIO:\n${prompt}\n\n` +
     `REGLAS INTERNAS DEL CLIENTE:\n${rule.internalRules?.trim() || "No se definieron reglas internas adicionales."}\n\n` +
     `FORMATO SOLICITADO: ${outputMode}\n` +
     `CAMPOS PARA CADA HALLAZGO ESTRUCTURADO:\n${schema}\n\n` +
-    "Responde SOLO este JSON:\n" +
-    '{"outcome":"pass|review|block","summary":"texto o null","items":[{"campo":"valor","evidence":"cita literal o null"}],"citations":["cita literal"]}\n\n' +
-    "outcome significa: pass si no se requiere acción, review si una persona debe revisar o decidir, block si las reglas internas impiden continuar. " +
-    "Si el formato es libre, usa summary y deja items vacío. Si es estructurado, prioriza items y deja summary breve. Si es ambos, completa ambos.\n\n" +
     `EXPEDIENTE:\n${buildAiAnalysisContext(docsByType, rule.sourceDocTypes) || "No hay datos extraídos de los documentos seleccionados."}`,
+    model,
+    analysisSchema(outputFields),
   );
   const citations = Array.isArray(result.citations)
     ? result.citations.map((citation) => cleanText(citation, 800)).filter(Boolean).slice(0, 20)
@@ -129,12 +128,13 @@ export async function runAiAnalysis(rule: AiAnalysisRule, docsByType: DocsByType
 }
 
 /** Turns a short user goal into a cautious prompt that the tenant can still edit. */
-export async function improveAiAnalysisPrompt(draft: string): Promise<string> {
+export async function improveAiAnalysisPrompt(draft: string, model: string = DEFAULT_ANALYSIS_MODEL): Promise<string> {
   const result = await requestJson(
     "Mejora la siguiente instrucción para un análisis contractual. Conserva exactamente su objetivo, usa español claro, " +
     "exige evidencia textual, prohíbe inventar datos y señala incertidumbre. No agregues requisitos no solicitados. " +
-    'Devuelve SOLO JSON: {"prompt":"..."}.\n\n' +
+    'Devuelve SOLO JSON: {"prompt":"..."}.',
     `INSTRUCCIÓN ORIGINAL:\n${draft.slice(0, 10000)}`,
+    model,
   );
   const improved = cleanText(result.prompt, 12000);
   if (!improved) throw new Error("La IA no devolvió una mejora del prompt.");

@@ -1,12 +1,10 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, Fragment } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
-  CheckCircle2, AlertTriangle, Loader2, ChevronLeft,
-  Building2, Sparkles,
-  ChevronDown, ChevronUp, Search, X, Eye, EyeOff,
+  CheckCircle2, Loader2, Building2, Search, X,
   Trash2, Plus, ExternalLink, AlertCircle,
 } from "lucide-react";
 import type { BBox } from "@/lib/workflow/types";
@@ -15,7 +13,11 @@ import type { PoComparison, PoOutcome, PoSuggestion } from "@/lib/workflow/po-ma
 import type { EffectiveVendorRule } from "@/lib/workflow/vendor-rules";
 import { DocPreview } from "./doc-preview-lazy";
 import { SelectMenu } from "@/components/ui/select-menu";
-import { Badge, Card, FiscalPanel, PoComparisonCard, PoPicker } from "./ap-panels";
+import { FiscalPanel, PoComparisonCard, PoPicker } from "./ap-panels";
+import type { LineMarker } from "./doc-preview";
+import { InvoiceHead, invoiceStages, type InvoiceTab } from "./invoice-head";
+import { btn, Notice, type Stage } from "@/components/kit";
+import { friendlyError } from "@/lib/ap/friendly-error";
 import { SandboxTestSend } from "@/components/tenant/sandbox-test-send";
 import type { TestSend } from "@/lib/workflow/test-send";
 
@@ -80,6 +82,8 @@ interface ReviewLine extends MatchedLine {
   catalog_itemid?: string;
   catalog_unit_id?: string | null;
   catalog_unit_name?: string | null;
+  /** Added by the reviewer: its description, quantity and price are typed in. */
+  manual?: boolean;
 }
 
 interface CatalogSearchItem {
@@ -102,6 +106,8 @@ interface PurchaseOrderOption {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+const lineInput = "min-h-9 w-full rounded-lg border border-[#D6D2C8] bg-white px-2.5 text-[13.5px] text-foreground outline-none focus:border-primary read-only:bg-secondary/40";
+
 function fmt(n: number) {
   return n.toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
@@ -122,6 +128,12 @@ export function ReviewClient({
   sandboxTest = false,
   testSends = [],
   payload,
+  initialTab = "lines",
+  subsidiaryName = null,
+  isCfdi = false,
+  initialPoId,
+  initialLocationId = null,
+  canWrite = true,
 }: {
   docId: number;
   subsidiaryId: string;
@@ -138,6 +150,14 @@ export function ReviewClient({
   sandboxTest?: boolean;
   testSends?: TestSend[];
   payload: ReviewPayload;
+  initialTab?: InvoiceTab;
+  subsidiaryName?: string | null;
+  isCfdi?: boolean;
+  /** PO and location of a draft already reviewed (a document that came back to review). */
+  initialPoId?: string | null;
+  initialLocationId?: string | null;
+  /** false for read-only roles: the document is shown but cannot be sent. */
+  canWrite?: boolean;
 }) {
   const router = useRouter();
   const doc = payload.document;
@@ -147,10 +167,11 @@ export function ReviewClient({
     const found = doc.vendor.options.find(v => v.internal_id === (doc.vendor.selected_internal_id ?? ""));
     return found?.name ?? doc.vendor.name ?? "";
   });
-  const [locationId, setLocationId] = useState("");
+  const [locationId, setLocationId] = useState(initialLocationId ?? "");
   const initialPo = apChecks?.po ?? null;
   const poEnabled = poMatchingEnabled || poProcessingEnabled;
-  const [poId, setPoId] = useState(initialPo?.selectedPoId ?? "");
+  // No PO when the PO features are off: it could not be changed and the server would refuse it.
+  const [poId, setPoId] = useState(!poEnabled ? "" : initialPoId !== undefined ? initialPoId ?? "" : initialPo?.selectedPoId ?? "");
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrderOption[]>(initialPo?.openPurchaseOrders ?? []);
   const [poSuggestions, setPoSuggestions] = useState<PoSuggestion[]>(initialPo?.suggestions ?? []);
   const [vendorRule, setVendorRule] = useState<EffectiveVendorRule | null>(apChecks?.vendorRule ?? null);
@@ -176,52 +197,26 @@ export function ReviewClient({
   const [vendorSearchLoading, setVendorSearchLoading] = useState(false);
   const vendorSearchInputRef = useRef<HTMLInputElement>(null);
 
-  // Initialize lines — pre-select first candidate when available
+  // Only what the matching selected is confirmed. A line it left open (several
+  // candidates) shows the first one as a suggestion to accept, not as done:
+  // sent unseen, a guess would also be learned as a mapping a person confirmed.
   const [lines, setLines] = useState<ReviewLine[]>(() =>
-    doc.lines.map((l) => {
-      const first = l.candidates[0] ?? null;
-      return {
-        ...l,
-        confirmed_item_id: l.selected_item_id ?? first?.internal_id ?? null,
-        confirmed_unit_id: l.selected_unit_id ?? first?.unit_id ?? first?.unit_ids?.[0] ?? null,
-      };
-    })
+    doc.lines.map((l) => ({
+      ...l,
+      confirmed_item_id: l.selected_item_id ?? null,
+      confirmed_unit_id: l.selected_unit_id ?? null,
+    }))
   );
 
-  const [openDropdown, setOpenDropdown] = useState<number | null>(null);
-
-  // Active line for document preview
+  // Línea elegida (se resalta en el documento y se edita en el detalle)
   const [activeLine, setActiveLine] = useState<number | null>(null);
-  const [previewOpen, setPreviewOpen] = useState(false);
-
-  // Resizable preview panel
-  const [previewWidth, setPreviewWidth] = useState(560);
-  const isDragging    = useRef(false);
-  const dragStartX    = useRef(0);
-  const dragStartWidth = useRef(0);
-
-  const handleDragStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    isDragging.current    = true;
-    dragStartX.current    = e.clientX;
-    dragStartWidth.current = previewWidth;
-  }, [previewWidth]);
-
-  useEffect(() => {
-    function onMouseMove(e: MouseEvent) {
-      if (!isDragging.current) return;
-      const delta = e.clientX - dragStartX.current;
-      const next  = Math.min(1200, Math.max(240, dragStartWidth.current + delta));
-      setPreviewWidth(next);
-    }
-    function onMouseUp() { isDragging.current = false; }
-    document.addEventListener("mousemove", onMouseMove);
-    document.addEventListener("mouseup",   onMouseUp);
-    return () => {
-      document.removeEventListener("mousemove", onMouseMove);
-      document.removeEventListener("mouseup",   onMouseUp);
-    };
-  }, []);
+  const [tab, setTab] = useState<InvoiceTab>(initialTab);
+  function selectTab(t: InvoiceTab) {
+    setTab(t);
+    const url = new URL(window.location.href);
+    url.searchParams.set("tab", t);
+    window.history.replaceState(null, "", url);
+  }
 
   // Catalog search dialog
   const [searchIdx, setSearchIdx]         = useState<number | null>(null);
@@ -265,20 +260,22 @@ export function ReviewClient({
 
   useEffect(() => {
     if (!vendorSearchOpen || vendorQuery.length < 1) return;
+    // An answer to an earlier query must not replace the results of this one.
+    let cancelled = false;
     const t = setTimeout(async () => {
       try {
         const res = await fetch(
           `/api/v1/catalog/vendors?q=${encodeURIComponent(vendorQuery)}&subsidiaryId=${subsidiaryId}`
         );
-        if (res.ok) {
+        if (res.ok && !cancelled) {
           const data = await res.json();
-          setVendorResults(data.vendors ?? []);
+          if (!cancelled) setVendorResults(data.vendors ?? []);
         }
       } finally {
-        setVendorSearchLoading(false);
+        if (!cancelled) setVendorSearchLoading(false);
       }
     }, 250);
-    return () => clearTimeout(t);
+    return () => { cancelled = true; clearTimeout(t); };
   }, [vendorQuery, vendorSearchOpen, subsidiaryId]);
 
   function selectVendor(id: string, name: string) {
@@ -364,20 +361,21 @@ export function ReviewClient({
 
   useEffect(() => {
     if (searchIdx === null || !searchQuery.trim() || searchQuery.length < 2) return;
+    let cancelled = false;
     const t = setTimeout(async () => {
       try {
         const res = await fetch(
           `/api/v1/catalog/items?q=${encodeURIComponent(searchQuery)}&subsidiaryId=${subsidiaryId}`
         );
-        if (res.ok) {
+        if (res.ok && !cancelled) {
           const data = await res.json();
-          setSearchResults(data.items ?? []);
+          if (!cancelled) setSearchResults(data.items ?? []);
         }
       } finally {
-        setSearchLoading(false);
+        if (!cancelled) setSearchLoading(false);
       }
     }, 300);
-    return () => clearTimeout(t);
+    return () => { cancelled = true; clearTimeout(t); };
   }, [searchQuery, searchIdx, subsidiaryId]);
 
   // ── Line helpers ──────────────────────────────────────────────────────────
@@ -412,7 +410,6 @@ export function ReviewClient({
         catalog_unit_id: undefined, catalog_unit_name: undefined,
       };
     }));
-    setOpenDropdown(null);
   }
 
   function selectFromSearch(idx: number, item: CatalogSearchItem) {
@@ -445,7 +442,17 @@ export function ReviewClient({
     });
   }
 
+  // Description, quantity and price of a line added by hand (or read without a price).
+  function editLine(idx: number, patch: Partial<Pick<ReviewLine, "description" | "quantity" | "rate">>) {
+    setLines(prev => prev.map((l, i) => {
+      if (i !== idx) return l;
+      const next = { ...l, ...patch };
+      return { ...next, amount: next.rate !== null ? Math.round(next.quantity * next.rate * 100) / 100 : null };
+    }));
+  }
+
   function addLine() {
+    setActiveLine(lines.length);
     setLines(prev => [
       ...prev,
       {
@@ -464,6 +471,7 @@ export function ReviewClient({
         confidence: 0,
         confirmed_item_id: null,
         confirmed_unit_id: null,
+        manual: true,
       },
     ]);
   }
@@ -480,10 +488,15 @@ export function ReviewClient({
     unit:               l.confirmed_unit_id,
   })), [validLines]);
   const compareKey = poMatchingEnabled && poId ? JSON.stringify([poId, vendorId, lineItems]) : "";
-  const lastCompareKey = useRef(initialPo?.comparison && initialPo.selectedPoId === poId ? JSON.stringify([poId, vendorId, lineItems]) : "");
+  // The comparison that came with the document is indexed over every line read;
+  // the one used here is always made over the lines on screen, so it is asked
+  // again on load and after every change. Until it answers, nothing is sent.
+  const [comparedKey, setComparedKey] = useState("");
+  const [compareAttempt, setCompareAttempt] = useState(0);
+  const compareStale = Boolean(compareKey) && compareKey !== comparedKey;
 
   useEffect(() => {
-    if (!compareKey || compareKey === lastCompareKey.current) return;
+    if (!compareKey || compareKey === comparedKey) return;
     let cancelled = false;
     const t = setTimeout(async () => {
       setCompareLoading(true);
@@ -497,7 +510,7 @@ export function ReviewClient({
         const data = await res.json();
         if (cancelled) return;
         if (!res.ok) { setCompareError(data.error ?? "No se pudo comparar con la OC"); setComparison(null); setOutcome(null); return; }
-        lastCompareKey.current = compareKey;
+        setComparedKey(compareKey);
         setComparison(data.comparison ?? null);
         setOutcome(data.outcome ?? null);
       } catch {
@@ -507,7 +520,7 @@ export function ReviewClient({
       }
     }, 500);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [compareKey, docId, poId, vendorId, lineItems]);
+  }, [compareKey, comparedKey, compareAttempt, docId, poId, vendorId, lineItems]);
 
   function choosePo(id: string) {
     setPoId(id);
@@ -519,7 +532,7 @@ export function ReviewClient({
   // The draft as the reviewer sees it: what approval posts and what a sandbox
   // test send uses, so both go to the ERP with the same lines.
   function reviewBody(): Record<string, unknown> {
-    const current = comparison && comparison.poInternalId === poId ? comparison : null;
+    const current = !compareStale && comparison && comparison.poInternalId === poId ? comparison : null;
     return {
       vendor_internal_id:   vendorId,
       vendor_name:          vendorName || null,
@@ -540,6 +553,8 @@ export function ReviewClient({
     setSubmitError("");
     if (!vendorId) { setSubmitError("Selecciona un proveedor del ERP antes de aprobar."); return; }
     if (!validLines.length) { setSubmitError("Asigna al menos un ítem del ERP para poder aprobar."); return; }
+    if (validLines.some(l => l.rate === null && l.amount === null)) { setSubmitError("Hay líneas sin precio. Captura cantidad y precio, o quítalas."); return; }
+    if (validLines.some(l => l.manual && (!l.description.trim() || l.quantity <= 0))) { setSubmitError("Completa la descripción y la cantidad de la línea agregada."); return; }
     setSubmitting(true);
     try {
       const res = await fetch(`/api/v1/workflow/${docId}/approve`, {
@@ -560,13 +575,13 @@ export function ReviewClient({
   }
 
   const assignedCount = lines.filter(l => l.confirmed_item_id).length;
+  const unpricedCount = validLines.filter(l => l.rate === null && l.amount === null).length;
   const missingCount  = lines.length - assignedCount;
   const overallPct    = Math.round(payload.confidence.overall * 100);
-  const activeBbox    = activeLine !== null ? lines[activeLine]?.bbox : undefined;
 
   // ── Action bar: what happens when the reviewer sends the document ─────────
   type ActionButton = { label: string; run: () => void; disabled?: boolean };
-  const liveOutcome = poMatchingEnabled && poId && comparison?.poInternalId === poId ? outcome : null;
+  const liveOutcome = poMatchingEnabled && poId && !compareStale && comparison?.poInternalId === poId ? outcome : null;
   const parksForApproval = approvalWorkflow && !canApprove;
   const sendLabel = parksForApproval ? "Enviar a aprobación" : "Aprobar y enviar al ERP";
   const ruleName = vendorRule?.ruleId ? vendorRule.ruleLabel.replace(/^(Categoría|Proveedor): /, "") : null;
@@ -576,7 +591,10 @@ export function ReviewClient({
     if (poMatchingEnabled && vendorRule?.poRequirement === "required" && !poId) {
       return { tone: "err", message: "Este proveedor exige orden de compra: elige una para continuar.", primary: { label: sendLabel, run: send, disabled: true } };
     }
-    if (poMatchingEnabled && poId && compareLoading) {
+    if (poMatchingEnabled && poId && compareError) {
+      return { tone: "err", message: <>No se pudo comparar con la OC: {compareError}</>, primary: { label: "Reintentar comparación", run: () => setCompareAttempt(n => n + 1) } };
+    }
+    if (poMatchingEnabled && poId && (compareLoading || compareStale)) {
       return { tone: "none", message: "Comparando con la OC…", primary: { label: sendLabel, run: send, disabled: true } };
     }
     switch (liveOutcome?.kind) {
@@ -605,6 +623,49 @@ export function ReviewClient({
     }
   })();
 
+  // ── Vista ─────────────────────────────────────────────────────────────────
+  const firstMissing = lines.findIndex((l) => !l.confirmed_item_id);
+  const selIdx = activeLine !== null && activeLine >= 0 && activeLine < lines.length ? activeLine : Math.max(0, firstMissing);
+  const sel = lines[selIdx] ?? null;
+  const selCandidate = sel ? getCandidateItem(sel) : null;
+  const selOthers = sel ? sel.candidates.filter((c) => c.internal_id !== sel.confirmed_item_id) : [];
+  const otherVendors = doc.vendor.options.filter((v) => v.internal_id !== vendorId);
+  const activeBbox = sel?.bbox;
+  const markers: LineMarker[] = lines.flatMap((l, i) => (l.bbox ? [{ n: l.line_no, bbox: l.bbox, warn: !l.confirmed_item_id, active: i === selIdx }] : []));
+  const unitName = (l: ReviewLine) => {
+    const c = getCandidateItem(l);
+    if (c) {
+      const k = c.unit_ids.indexOf(l.confirmed_unit_id ?? "");
+      return (k >= 0 ? c.unit_names[k] : c.unit_names[0]) || c.unit || null;
+    }
+    return l.catalog_unit_name ?? null;
+  };
+  // Cuadre: la suma de las líneas contra el subtotal (o el total si no hay subtotal).
+  const balance = (() => {
+    const amounts = lines.map((l) => l.amount).filter((x): x is number => x !== null);
+    if (amounts.length === 0) return null;
+    const sum = amounts.reduce((x, y) => x + y, 0);
+    const expected = Number(doc.totals.subtotal ?? doc.totals.total);
+    if (!Number.isFinite(expected) || expected === 0) return null;
+    return { sum, expected, ok: Math.abs(sum - expected) < 0.5 };
+  })();
+  const stages: Stage[] = invoiceStages({
+    lines: { total: lines.length, missing: missingCount },
+    vendorMissing: !vendorId,
+    po: {
+      enabled: poEnabled,
+      required: poMatchingEnabled && vendorRule?.poRequirement === "required",
+      selected: poId || null,
+      comparison: !compareStale && comparison?.poInternalId === poId ? comparison : null,
+      outcome: liveOutcome,
+      suggestions: poSuggestions.length,
+      loading: compareLoading,
+    },
+    fiscal: apChecks?.fiscal ?? null,
+    isCfdi,
+    erp: { state: "off", detail: parksForApproval ? "Al pedir aprobación" : "Al aprobar" },
+  }).map(({ navigable, ...st }) => ({ ...st, onSelect: navigable ? () => selectTab(st.key) : undefined }));
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
@@ -625,8 +686,8 @@ export function ReviewClient({
                 <CheckCircle2 className="w-4 h-4 text-emerald-500" />
               </div>
               <div className="flex-1">
-                <p className="text-sm font-semibold text-foreground">Documento enviado al ERP</p>
-                <p className="text-xs text-muted-foreground mt-0.5">La transacción fue creada exitosamente</p>
+                <p className="text-sm font-semibold text-foreground">{submitResult.netsuiteId ? "Documento enviado al ERP" : "Validado en modo prueba"}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">{submitResult.netsuiteId ? "La transacción fue creada exitosamente" : "El ERP aceptó los datos; no se creó ninguna transacción."}</p>
               </div>
             </div>
 
@@ -849,470 +910,262 @@ export function ReviewClient({
         </div>
       )}
 
-      {/* Backdrop for candidates dropdown */}
-      {openDropdown !== null && (
-        <div className="fixed inset-0 z-20" onClick={() => setOpenDropdown(null)} />
-      )}
-
       {/* ── Main layout ──────────────────────────────────────────────────── */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex flex-1 flex-col overflow-hidden">
+        <InvoiceHead
+          title={[doc.invoice_number ? `Factura ${doc.invoice_number}` : "Factura sin número", vendorName || doc.vendor.name].filter(Boolean).join(" · ")}
+          status="review"
+          statusDetail={!vendorId ? "falta el proveedor" : missingCount > 0 ? `${missingCount} línea${missingCount === 1 ? "" : "s"} sin ítem` : null}
+          meta={[isCfdi ? "CFDI" : "Factura en PDF", subsidiaryName && `subsidiaria ${subsidiaryName}`, ruleName && `regla «${ruleName}»`, `confianza de lectura ${overallPct} %`]}
+          stages={stages}
+          current={tab}
+        />
 
-        {/* Page header */}
-        <div className="h-14 border-b border-border px-6 flex items-center gap-3 shrink-0 bg-card">
-          <button
-            onClick={() => router.back()}
-            aria-label="Volver"
-            className="w-7 h-7 flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-          >
-            <ChevronLeft className="w-4 h-4" />
-          </button>
-          <div className="min-w-0">
-            <h1 className="text-sm font-semibold text-foreground leading-tight truncate">
-              {doc.invoice_number ? `Factura ${doc.invoice_number}` : "Revisión de extracción"}
-            </h1>
-            <p className="text-[11px] text-muted-foreground">Documento #{docId} · Verifica antes de enviar al ERP</p>
-          </div>
-          <Badge tone="warn">En revisión</Badge>
-          {vendorRule && <Badge tone="info" className="hidden md:inline-flex">Regla: {vendorRule.ruleLabel.replace(/^(Categoría|Proveedor): /, "")}</Badge>}
-          <span className="ml-auto hidden sm:flex items-center gap-1.5 text-xs text-muted-foreground">
-            <Sparkles className="w-3 h-3" />
-            Confianza de extracción
-            <strong className={cn("tabular-nums", overallPct >= 80 ? "text-success" : overallPct >= 60 ? "text-warning" : "text-destructive")}>{overallPct}%</strong>
-          </span>
-          <button
-            onClick={() => storageKey ? setPreviewOpen(p => !p) : undefined}
-            disabled={!storageKey}
-            title={!storageKey ? "El archivo no fue guardado. Activa la función de almacenamiento de documentos." : undefined}
-            className={cn(
-              "flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border transition-all shrink-0",
-              previewOpen && storageKey
-                ? "bg-primary text-primary-foreground border-primary/50"
-                : storageKey
-                ? "text-muted-foreground border-border hover:text-foreground hover:bg-secondary"
-                : "text-muted-foreground/40 border-border/40 cursor-not-allowed"
+        {tab === "lines" ? (
+          <div className={cn("mt-4.5 grid min-h-0 flex-1 border-t border-border", storageKey && "lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]")}>
+            {storageKey && (
+              <div className="hidden min-h-0 flex-col overflow-hidden bg-[#E9E6E0] lg:flex">
+                <DocPreview docId={docId} activeBbox={activeBbox} fileExt={fileExt} markers={markers} onMarker={(n) => setActiveLine(lines.findIndex((l) => l.line_no === n))} />
+              </div>
             )}
-          >
-            {previewOpen && storageKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-            Ver documento
-          </button>
-        </div>
+            <div className="min-h-0 overflow-y-auto">
+              <div className="flex flex-col gap-4 px-6 py-5.5 md:px-7">
+                {statusReason && <Notice tone="warn" title="Motivo de la revisión">{friendlyError(statusReason)}</Notice>}
 
-        {/* Body */}
-        <div className="flex-1 flex overflow-hidden">
-
-          {/* ── Document preview panel (left) ─────────────────────────────── */}
-          {previewOpen && storageKey && (
-            <div className="shrink-0 flex flex-col overflow-hidden border-r border-border" style={{ width: previewWidth }}>
-              <DocPreview docId={docId} activeBbox={activeBbox} fileExt={fileExt} />
-            </div>
-          )}
-          {previewOpen && storageKey && (
-            <div
-              onMouseDown={handleDragStart}
-              className="shrink-0 w-1 bg-border hover:bg-primary/40 cursor-col-resize transition-colors active:bg-primary/60"
-              style={{ touchAction: "none" }}
-            />
-          )}
-
-          {/* ── Review column ─────────────────────────────────────────────── */}
-          <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
-            <div className="flex-1 overflow-y-auto">
-              <div className="p-5 flex flex-col gap-3.5 max-w-[1180px]">
-
-                {statusReason && (
-                  <div className="flex items-start gap-2 rounded-lg border border-warning/25 bg-warning/5 px-3.5 py-2.5 text-xs text-foreground">
-                    <AlertTriangle className="w-3.5 h-3.5 mt-px shrink-0 text-warning" />
-                    <span><span className="font-semibold">Motivo de la revisión:</span> {statusReason}</span>
-                  </div>
-                )}
-
-                {/* Summary strip */}
-                <Card className="px-4 py-3.5 flex flex-wrap items-start gap-x-7 gap-y-3">
-                  <div className="relative min-w-[200px] flex-1">
-                    <span className="block text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-muted-foreground mb-1">Proveedor</span>
-                    <div className="flex items-center gap-2">
-                      {vendorId ? (
-                        <span className="flex items-center gap-1.5 min-w-0 text-[0.8125rem] font-semibold text-foreground">
-                          <CheckCircle2 className="w-3.5 h-3.5 text-primary shrink-0" />
-                          <span className="truncate">{vendorName || vendorId}</span>
-                        </span>
-                      ) : (
-                        <span className="flex items-center gap-1.5 text-[0.8125rem] text-warning">
-                          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                          {doc.vendor.name ? `Sin coincidencia para “${doc.vendor.name}”` : "Sin proveedor seleccionado"}
-                        </span>
-                      )}
-                      {doc.vendor.options.filter(v => v.internal_id !== vendorId).length > 0 && (
-                        <button
-                          onClick={() => setVendorCandidatesOpen(o => !o)}
-                          className="flex items-center gap-0.5 text-[11px] font-semibold text-primary hover:text-primary/75 shrink-0"
-                          aria-label="Otras sugerencias de proveedor"
-                        >
-                          {vendorCandidatesOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                          {doc.vendor.options.filter(v => v.internal_id !== vendorId).length}
+                <section aria-labelledby="inv-data">
+                  <h2 id="inv-data" className="sr-only">Datos de la factura</h2>
+                  <dl className="grid grid-cols-[110px_minmax(0,1fr)] gap-x-3.5 gap-y-2 text-[13.5px]">
+                    <dt className="text-muted-foreground">Proveedor</dt>
+                    <dd className="relative flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                      {vendorId
+                        ? <span className="truncate font-semibold">{vendorName || vendorId}</span>
+                        : <span className="text-tone-warn">{doc.vendor.name ? `Sin coincidencia para «${doc.vendor.name}»` : "Sin proveedor"}</span>}
+                      {otherVendors.length > 0 && (
+                        <button type="button" onClick={() => setVendorCandidatesOpen((o) => !o)} className="text-[13px] text-link hover:underline" aria-expanded={vendorCandidatesOpen}>
+                          {otherVendors.length} sugerencia{otherVendors.length === 1 ? "" : "s"}
                         </button>
                       )}
-                      <button onClick={() => setVendorSearchOpen(true)} className="flex items-center gap-1 text-[11px] font-semibold text-primary hover:underline shrink-0">
-                        <Search className="w-3 h-3" />{vendorId ? "Cambiar" : "Buscar"}
-                      </button>
-                    </div>
-                    {vendorCandidatesOpen && doc.vendor.options.filter(v => v.internal_id !== vendorId).length > 0 && (
-                      <div
-                        className="absolute top-full left-0 w-72 mt-1 z-30 bg-card border border-border rounded-xl overflow-hidden"
-                        style={{ boxShadow: "0 8px 32px oklch(0.18 0.015 258 / 0.12), 0 2px 8px oklch(0.18 0.015 258 / 0.06)" }}
-                      >
-                        <div className="px-3 py-1.5 border-b border-border/60 bg-secondary/40">
-                          <p className="text-[10px] font-semibold uppercase tracking-[0.07em] text-muted-foreground">Otras sugerencias</p>
+                      <button type="button" onClick={() => setVendorSearchOpen(true)} className="text-[13px] text-link hover:underline">{vendorId ? "Cambiar" : "Buscar"}</button>
+                      {vendorCandidatesOpen && otherVendors.length > 0 && (
+                        <div className="absolute left-0 top-full z-30 mt-1 w-72 overflow-hidden rounded-xl border border-border bg-card shadow-[0_8px_32px_rgba(30,32,41,0.12)]">
+                          {otherVendors.map((v) => (
+                            <button key={v.internal_id} type="button" onClick={() => selectVendor(v.internal_id, v.name)} className="block w-full border-b border-line-soft px-3 py-2 text-left last:border-0 hover:bg-secondary/50">
+                              <span className="block truncate text-[13px] font-medium">{v.name}</span>
+                              {v.entityid && v.entityid !== v.name && <span className="font-mono text-[11px] text-muted-foreground">{v.entityid}</span>}
+                            </button>
+                          ))}
                         </div>
-                        {doc.vendor.options.filter(v => v.internal_id !== vendorId).map(v => (
-                          <button
-                            key={v.internal_id}
-                            onClick={() => selectVendor(v.internal_id, v.name)}
-                            className="w-full flex items-start gap-2 px-3 py-2 hover:bg-secondary/50 transition-colors text-left border-b border-border/40 last:border-0"
-                          >
-                            <div className="flex-1 min-w-0">
-                              <p className="text-xs font-medium text-foreground truncate">{v.name}</p>
-                              {v.entityid && v.entityid !== v.name && <p className="text-[10px] font-mono text-muted-foreground">{v.entityid}</p>}
-                            </div>
+                      )}
+                    </dd>
+                    {([["Fecha", doc.invoice_date], ["Vence", doc.due_date], ["OC en la factura", doc.purchase_order]] as const).filter(([, v]) => v).map(([k, v]) => (
+                      <Fragment key={k}><dt className="text-muted-foreground">{k}</dt><dd className="tabular-nums">{v}</dd></Fragment>
+                    ))}
+                    {payload.catalogs.locations.length > 0 && (
+                      <>
+                        <dt className="self-center text-muted-foreground">Ubicación</dt>
+                        <dd className="max-w-64">
+                          <SelectMenu value={locationId} onChange={setLocationId} ariaLabel="Ubicación" placeholder="Sin ubicación"
+                            options={[{ value: "", label: "Sin ubicación" }, ...payload.catalogs.locations.map((loc) => ({ value: loc.internal_id, label: loc.name }))]} />
+                        </dd>
+                      </>
+                    )}
+                  </dl>
+                </section>
+
+                <section aria-labelledby="inv-lines">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <h2 id="inv-lines" className="text-[15px] font-semibold">Líneas</h2>
+                    <span className="text-[12.5px] text-muted-foreground">{assignedCount} de {lines.length} listas{storageKey && markers.length > 0 ? " · toca un número en el documento" : ""}</span>
+                  </div>
+                  <ul className="mt-2">
+                    {lines.map((line, idx) => {
+                      const hasItem = Boolean(line.confirmed_item_id);
+                      const on = idx === selIdx;
+                      const code = getDisplayCode(line);
+                      const unit = unitName(line);
+                      return (
+                        <li key={line.line_no}>
+                          <button type="button" onClick={() => setActiveLine(idx)} aria-current={on || undefined}
+                            className={cn("grid w-full grid-cols-[24px_minmax(0,1fr)_auto] items-center gap-2.5 rounded-[10px] border px-3 py-2.5 text-left text-[13.5px]",
+                              on ? "border-[#EBD9AE] bg-[#FFFBF2]" : "border-transparent hover:bg-secondary/40")}>
+                            <LineNo n={line.line_no} warn={!hasItem} />
+                            <span className="min-w-0">
+                              <span className={cn("block truncate", on && "font-semibold")}>{line.description || "Línea sin descripción"}</span>
+                              <small className={cn("block truncate text-[12.5px]", hasItem ? "text-muted-foreground" : "text-tone-warn")}>
+                                {hasItem ? [code ?? getDisplayName(line), unit].filter(Boolean).join(" · ") : "Sin ítem del ERP"}
+                              </small>
+                            </span>
+                            <span className="tabular-nums text-muted-foreground">{line.amount !== null ? `$${fmt(line.amount)}` : "—"}</span>
                           </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                  {[
-                    { label: "Fecha", value: doc.invoice_date },
-                    { label: "Vence", value: doc.due_date },
-                    { label: "Total", value: `$${fmt(Number(doc.totals.total))} ${doc.currency}` },
-                    { label: "OC en la factura", value: doc.purchase_order },
-                  ].filter(r => r.value).map(({ label, value }) => (
-                    <div key={label}>
-                      <span className="block text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-muted-foreground mb-1">{label}</span>
-                      <span className="text-[0.8125rem] font-semibold text-foreground tabular-nums">{value}</span>
-                    </div>
-                  ))}
-                  {payload.catalogs.locations.length > 0 && (
-                    <div className="w-52">
-                      <span className="block text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-muted-foreground mb-1">Ubicación</span>
-                      <SelectMenu
-                        value={locationId}
-                        onChange={setLocationId}
-                        ariaLabel="Ubicación"
-                        placeholder="— Sin ubicación —"
-                        options={[
-                          { value: "", label: "— Sin ubicación —" },
-                          ...payload.catalogs.locations.map(loc => ({ value: loc.internal_id, label: loc.name })),
-                        ]}
-                      />
-                    </div>
-                  )}
-                </Card>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  <button type="button" onClick={addLine} className={btn("text", "sm", "mt-1 px-3 text-link")}><Plus />Agregar línea</button>
+                </section>
 
-                {apChecks?.fiscal && <FiscalPanel fiscal={apChecks.fiscal} />}
-
-                {poEnabled && (
-                  vendorId ? (
-                    <PoPicker
-                      requirement={poMatchingEnabled ? vendorRule?.poRequirement ?? null : null}
-                      vendorName={vendorName}
-                      openPOs={purchaseOrders}
-                      suggestions={poMatchingEnabled ? poSuggestions : []}
-                      selectedId={poId}
-                      onSelect={choosePo}
-                      loading={purchaseOrdersLoading}
-                      error={purchaseOrdersError || null}
-                      invoiceTotal={Number(doc.totals.total) || 0}
-                      toleranceLabel={tolerance ? (tolerance.totalType === "percent" ? `${tolerance.total}%` : tolerance.totalType === "amount" ? `$${fmt(tolerance.total)}` : "0") : null}
-                      disabled={submitting}
-                    />
-                  ) : (
-                    <Card className="p-4 text-xs text-muted-foreground">Selecciona el proveedor para consultar sus órdenes de compra abiertas.</Card>
-                  )
-                )}
-
-                {poMatchingEnabled && poId && compareError && (
-                  <p className="rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{compareError}</p>
-                )}
-                {poMatchingEnabled && poId && comparison && comparison.poInternalId === poId && (
-                  <PoComparisonCard
-                    comparison={comparison}
-                    itemCodes={Object.fromEntries(validLines.map((l, i) => [i, getDisplayCode(l) ?? getDisplayName(l)]))}
-                    tolerance={tolerance}
-                    requireReceipt={requireReceipt}
-                    loading={compareLoading}
-                  />
-                )}
-                {poMatchingEnabled && poId && !comparison && compareLoading && (
-                  <Card className="p-4 flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="w-3.5 h-3.5 animate-spin" />Comparando la factura con la OC…</Card>
-                )}
-
-                {/* Lines */}
-                <Card className="overflow-hidden">
-                  <div className="px-4 py-3 border-b border-border flex flex-wrap items-center gap-3 text-xs">
-                    <h2 className="text-sm font-semibold text-foreground mr-1">Líneas del documento</h2>
-                    <span className="text-muted-foreground"><span className="font-medium text-foreground">{lines.length}</span> línea{lines.length !== 1 ? "s" : ""}</span>
-                    <span className="flex items-center gap-1 font-medium text-success"><CheckCircle2 className="w-3 h-3" />{assignedCount} con ítem del ERP</span>
-                    {missingCount > 0 && <span className="flex items-center gap-1 font-medium text-warning"><AlertTriangle className="w-3 h-3" />{missingCount} sin ítem</span>}
-                  </div>
-                  <div className="divide-y divide-border/60">
-              {lines.map((line, idx) => {
-                const candidateItem   = getCandidateItem(line);
-                const displayName     = getDisplayName(line);
-                const displayCode     = getDisplayCode(line);
-                const hasItem         = Boolean(line.confirmed_item_id);
-                const fromSearch      = hasItem && !candidateItem;
-                const otherCandidates = line.candidates.filter(c => c.internal_id !== line.confirmed_item_id);
-                const showUnitSelect  = candidateItem && candidateItem.unit_ids.length > 1;
-                const isActive        = activeLine === idx;
-
-                return (
-                  <div
-                    key={line.line_no}
-                    className={cn(
-                      "group px-5 py-2 transition-colors cursor-pointer",
-                      isActive
-                        ? "bg-primary/5"
-                        : hasItem ? "hover:bg-secondary/20" : "hover:bg-secondary/30",
-                      !hasItem && !isActive && "bg-amber-50/30"
-                    )}
-                    style={!hasItem && !isActive ? { backgroundColor: "oklch(0.97 0.012 85)" } : undefined}
-                    onClick={() => {
-                      setActiveLine(idx);
-                      if (storageKey && !previewOpen) setPreviewOpen(true);
-                    }}
-                  >
-                    {/* Row 1: line number + description + meta + status */}
-                    <div className="flex items-center gap-2.5">
-                      <span className="text-[10px] font-mono font-medium text-muted-foreground/60 bg-secondary px-1.5 py-0.5 rounded min-w-[22px] inline-block text-center tabular-nums shrink-0">
-                        {line.line_no}
-                      </span>
-
-                      <div className="flex-1 min-w-0 flex items-baseline gap-2.5 overflow-hidden">
-                        <p className="text-sm font-medium text-foreground truncate leading-none">
-                          {line.description}
-                        </p>
-                        <span className="text-[11px] text-muted-foreground shrink-0 tabular-nums">
-                          ×{line.quantity}
-                          {line.amount !== null && ` · $${fmt(line.amount)}`}
-                        </span>
-                        {line.recommendation_source === "memory" && (
-                          <span
-                            className="text-[10px] font-medium flex items-center gap-0.5 px-1 py-0.5 rounded shrink-0"
-                            style={{ backgroundColor: "oklch(0.93 0.05 182)", color: "oklch(0.35 0.15 182)" }}
-                          >
-                            <Sparkles className="w-2.5 h-2.5" />
+                {sel && (
+                  <section aria-label={`Línea ${sel.line_no}`} className="flex flex-col gap-2.5 rounded-xl border border-border bg-white p-4">
+                    <span className="text-xs font-semibold uppercase tracking-[0.05em] text-foreground/75">
+                      Línea {sel.line_no} · {sel.quantity} × {sel.rate !== null ? `$${fmt(sel.rate)}` : "sin precio"}
+                    </span>
+                    {sel.confirmed_item_id ? (
+                      <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-[10px] border border-[#CFE7E3] bg-[#F1F8F7] px-3 py-2.5 text-[13.5px]">
+                        <span className="min-w-0">
+                          <b className="block truncate font-semibold">{[getDisplayCode(sel), getDisplayName(sel)].filter(Boolean).join(" · ")}</b>
+                          <span className="text-[12.5px] text-muted-foreground">
+                            {sel.recommendation_source === "memory" && selCandidate ? "Aprendido de facturas anteriores" : selCandidate ? "Sugerido" : "Elegido del catálogo"}
                           </span>
-                        )}
+                        </span>
+                        {selCandidate && selCandidate.unit_ids.length > 1 ? (
+                          <SelectMenu value={sel.confirmed_unit_id ?? ""} onChange={(v) => setLineUnit(selIdx, v)} leadingLabel="Unidad" ariaLabel="Unidad de medida" align="right" className="w-52 shrink-0"
+                            options={selCandidate.unit_ids.map((uid, i) => ({ value: uid, label: selCandidate.unit_names[i] || uid }))} />
+                        ) : unitName(sel) ? <span className="text-[12.5px] text-muted-foreground">Unidad {unitName(sel)}</span> : null}
                       </div>
-
-                      <div className={cn(
-                        "w-4 h-4 rounded-full flex items-center justify-center shrink-0",
-                        hasItem ? "bg-emerald-500/15" : "bg-amber-500/15"
-                      )}>
-                        {hasItem
-                          ? <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
-                          : <AlertTriangle className="w-2.5 h-2.5" style={{ color: "oklch(0.58 0.16 85)" }} />
-                        }
+                    ) : sel.candidates.length === 0 ? (
+                      <p className="text-[13.5px] text-muted-foreground">Sin coincidencias en el catálogo del ERP. Búscalo a mano.</p>
+                    ) : null}
+                    {selOthers.length > 0 && (
+                      <ul className="flex flex-col gap-1.5">
+                        {selOthers.slice(0, 4).map((c, i) => (
+                          <li key={c.internal_id} className={cn("flex items-center justify-between gap-2.5 rounded-[10px] px-3 py-2 text-[13.5px]", !sel.confirmed_item_id && i === 0 ? "border border-[#CFE7E3] bg-[#F1F8F7]" : "border border-border")}>
+                            <span className="min-w-0">
+                              <b className="block truncate font-semibold">{[c.itemid && c.itemid !== c.name ? c.itemid : null, c.name || c.itemid].filter(Boolean).join(" · ")}</b>
+                              <span className="text-[12.5px] text-muted-foreground">{c.memory_source ? "Aprendido" : !sel.confirmed_item_id && i === 0 ? "Sugerido" : "Otra opción"}{c.unit ? ` · unidad ${c.unit}` : ""}</span>
+                            </span>
+                            <button type="button" onClick={() => selectFromCandidate(selIdx, c.internal_id)} className={btn(!sel.confirmed_item_id && i === 0 ? "primary" : "secondary", "sm")}>Usar</button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {(sel.manual || (sel.rate === null && sel.amount === null)) && (
+                      <div className="grid grid-cols-[minmax(0,1fr)_88px_112px] gap-2.5 text-[12.5px] text-muted-foreground">
+                        <label className="flex flex-col gap-1">Descripción
+                          <input type="text" value={sel.description} onChange={(e) => editLine(selIdx, { description: e.target.value })} readOnly={!sel.manual} className={lineInput} />
+                        </label>
+                        <label className="flex flex-col gap-1">Cantidad
+                          <input type="number" min="0" step="any" value={sel.quantity} onChange={(e) => editLine(selIdx, { quantity: e.target.value === "" ? 0 : Number(e.target.value) })} className={lineInput} />
+                        </label>
+                        <label className="flex flex-col gap-1">Precio unitario
+                          <input type="number" min="0" step="any" value={sel.rate ?? ""} onChange={(e) => editLine(selIdx, { rate: e.target.value === "" ? null : Number(e.target.value) })} className={lineInput} />
+                        </label>
                       </div>
+                    )}
+                    <div className="flex flex-wrap gap-2">
+                      <button type="button" onClick={() => setSearchIdx(selIdx)} className={btn("text", "sm", "px-0 text-link")}><Search />Buscar otro ítem</button>
+                      <button type="button" onClick={() => deleteLine(selIdx)} className={btn("text", "sm", "ml-auto px-0 hover:text-tone-err")}><Trash2 />Quitar línea</button>
                     </div>
+                  </section>
+                )}
 
-                    {/* Row 2: item assignment */}
-                    <div className="flex items-center gap-1.5 mt-1.5 ml-7" onClick={e => e.stopPropagation()}>
-                      {/* Item chip or empty state */}
-                      <div className="flex-1 min-w-0 relative">
-                        {hasItem ? (
-                          <>
-                            <div
-                              className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-xs"
-                              style={{ backgroundColor: "oklch(0.97 0.02 182)", borderColor: "oklch(0.48 0.15 182 / 0.25)" }}
-                            >
-                              <CheckCircle2 className="w-3 h-3 text-primary shrink-0" />
-                              <div className="flex-1 min-w-0">
-                                <span className="font-semibold text-foreground block truncate leading-tight">
-                                  {displayName}
-                                </span>
-                                {displayCode && (
-                                  <span className="font-mono text-[10px] text-muted-foreground">[{displayCode}]</span>
-                                )}
-                              </div>
-                              {fromSearch && (
-                                <span className="text-[10px] text-muted-foreground shrink-0 flex items-center gap-0.5">
-                                  <Search className="w-2.5 h-2.5" />
-                                </span>
-                              )}
-                              {otherCandidates.length > 0 && (
-                                <button
-                                  onClick={e => { e.stopPropagation(); setOpenDropdown(openDropdown === idx ? null : idx); }}
-                                  className="flex items-center gap-0.5 text-[11px] font-semibold text-primary hover:text-primary/75 transition-colors shrink-0"
-                                >
-                                  {openDropdown === idx ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                                  {otherCandidates.length}
-                                </button>
-                              )}
-                            </div>
-
-                            {/* Candidates dropdown */}
-                            {openDropdown === idx && otherCandidates.length > 0 && (
-                              <div
-                                className="absolute top-full left-0 right-0 mt-1 z-30 bg-card border border-border rounded-xl overflow-hidden"
-                                style={{ boxShadow: "0 8px 32px oklch(0.18 0.015 258 / 0.12), 0 2px 8px oklch(0.18 0.015 258 / 0.06)" }}
-                              >
-                                <div className="px-3 py-1.5 border-b border-border/60 bg-secondary/40">
-                                  <p className="text-[10px] font-semibold uppercase tracking-[0.07em] text-muted-foreground">
-                                    Otras sugerencias
-                                  </p>
-                                </div>
-                                {otherCandidates.slice(0, 6).map(c => (
-                                  <button
-                                    key={c.internal_id}
-                                    onClick={() => selectFromCandidate(idx, c.internal_id)}
-                                    className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-secondary/50 transition-colors text-left border-b border-border/40 last:border-0"
-                                  >
-                                    <div className="flex-1 min-w-0">
-                                      <p className="text-xs font-medium text-foreground truncate">{c.name || c.itemid}</p>
-                                      {c.itemid && c.itemid !== c.name && (
-                                        <p className="text-[10px] font-mono text-muted-foreground mt-0.5">[{c.itemid}]</p>
-                                      )}
-                                    </div>
-                                    {c.memory_source && (
-                                      <span className="text-[10px] font-medium shrink-0" style={{ color: "oklch(0.35 0.15 182)" }}>★</span>
-                                    )}
-                                  </button>
-                                ))}
-                              </div>
-                            )}
-                          </>
-                        ) : (
-                          <div
-                            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-dashed text-xs"
-                            style={{ borderColor: "oklch(0.62 0.16 85 / 0.4)", backgroundColor: "oklch(0.97 0.015 85 / 0.6)" }}
-                          >
-                            <AlertTriangle className="w-3 h-3 shrink-0" style={{ color: "oklch(0.58 0.16 85)" }} />
-                            {line.candidates.length > 0
-                              ? <button onClick={() => selectFromCandidate(idx, line.candidates[0].internal_id)} className="text-primary hover:underline font-medium">Usar sugerencia</button>
-                              : <span className="text-muted-foreground">Sin coincidencias en catálogo</span>
-                            }
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Unit selector */}
-                      {showUnitSelect && candidateItem && (
-                        <SelectMenu
-                          value={line.confirmed_unit_id ?? ""}
-                          onChange={(v) => setLineUnit(idx, v)}
-                          leadingLabel="Unidad"
-                          ariaLabel="Unidad de medida"
-                          align="right"
-                          className="shrink-0 w-52"
-                          options={candidateItem.unit_ids.map((uid, i) => ({
-                            value: uid,
-                            label: candidateItem.unit_names[i] || uid,
-                          }))}
-                        />
-                      )}
-
-                      {/* Single fixed unit from a candidate (only one option) */}
-                      {candidateItem && candidateItem.unit_ids.length === 1 && candidateItem.unit_names[0] && (
-                        <div className="shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 bg-secondary/50 border border-border rounded-lg text-xs text-foreground">
-                          <span className="text-[10px] font-semibold uppercase tracking-[0.06em] text-muted-foreground/70">Unidad</span>
-                          {candidateItem.unit_names[0]}
-                        </div>
-                      )}
-
-                      {/* Catalog unit display (single fixed unit — not selectable) */}
-                      {fromSearch && line.catalog_unit_name && (
-                        <div className="shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 bg-secondary/50 border border-border rounded-lg text-xs text-foreground">
-                          <span className="text-[10px] font-semibold uppercase tracking-[0.06em] text-muted-foreground/70">Unidad</span>
-                          {line.catalog_unit_name}
-                        </div>
-                      )}
-
-                      {/* Search button */}
-                      <button
-                        onClick={() => { setSearchIdx(idx); setOpenDropdown(null); }}
-                        className="shrink-0 flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-secondary hover:border-border/80 transition-all"
-                      >
-                        <Search className="w-3 h-3" />
-                        Buscar
-                      </button>
-
-                      {/* Delete line button */}
-                      <button
-                        onClick={e => { e.stopPropagation(); deleteLine(idx); }}
-                        className="shrink-0 p-1.5 rounded-lg border border-transparent text-muted-foreground/40 hover:text-destructive hover:border-destructive/20 hover:bg-destructive/5 opacity-0 group-hover:opacity-100 transition-all"
-                        title="Eliminar línea"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-
-              {/* Add line */}
-              <div className="px-5 py-3 border-t border-border/40">
-                <button
-                  onClick={addLine}
-                  className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-primary hover:bg-primary/5 px-2.5 py-1.5 rounded-lg border border-dashed border-border/60 hover:border-primary/30 transition-all w-full justify-center"
-                >
-                  <Plus className="w-3 h-3" />
-                  Agregar línea
-                </button>
+                <p className="flex flex-wrap justify-between gap-2 border-t border-border pt-2.5 text-[13.5px] tabular-nums">
+                  <span>Total ${fmt(Number(doc.totals.total))} {doc.currency}</span>
+                  {balance === null ? null : balance.ok
+                    ? <span className="font-semibold text-tone-ok">✓ Las líneas cuadran con el documento</span>
+                    : <span className="font-semibold text-tone-warn">Las líneas suman ${fmt(balance.sum)}; el subtotal es ${fmt(balance.expected)}</span>}
+                </p>
+                {unpricedCount > 0 && (
+                  <p className="text-[12.5px] text-tone-warn">{unpricedCount} línea{unpricedCount === 1 ? "" : "s"} sin precio: captúralo para poder enviar.</p>
+                )}
+                {missingCount > 0 && (
+                  <p className="text-[12.5px] text-tone-warn">{missingCount} línea{missingCount === 1 ? "" : "s"} sin ítem se omitirá{missingCount === 1 ? "" : "n"} al enviar. Asígnales un ítem o quítalas.</p>
+                )}
               </div>
-                  </div>
-                  {missingCount > 0 && (
-                    <div className="mx-4 mb-4 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/5 px-3.5 py-2.5 text-xs font-medium text-warning">
-                      <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                      {missingCount} línea{missingCount !== 1 ? "s" : ""} sin ítem asignado: se omitirán al enviar al ERP. Asigna los ítems o elimina esas líneas antes de aprobar.
-                    </div>
-                  )}
-                </Card>
-                <div className="h-2" />
-              </div>
-            </div>
-
-            {/* ── Action bar ──────────────────────────────────────────────── */}
-            <div className={cn(
-              "shrink-0 border-t px-5 py-3 flex flex-wrap items-center gap-3",
-              action.tone === "err" ? "bg-destructive/5 border-destructive/20" : action.tone === "warn" ? "bg-warning/5 border-warning/25" : "bg-card border-border",
-            )}>
-              {action.tone !== "none" && (
-                <AlertCircle className={cn("w-4 h-4 shrink-0", action.tone === "err" ? "text-destructive" : "text-warning")} aria-hidden="true" />
-              )}
-              <p className="flex-1 min-w-[240px] text-[0.8125rem] text-foreground">
-                {submitError ? <span className="text-destructive">{submitError}</span> : action.message}
-              </p>
-              {sandboxTest && (
-                <SandboxTestSend
-                  docId={docId}
-                  compact
-                  history={testSends}
-                  disabled={submitting}
-                  buildBody={() => (vendorId && validLines.length ? reviewBody() : null)}
-                />
-              )}
-              <button onClick={() => router.back()} disabled={submitting} className="text-xs text-muted-foreground hover:text-foreground px-2">Cancelar</button>
-              {action.secondary && (
-                <button
-                  onClick={action.secondary.run}
-                  disabled={submitting || !vendorId}
-                  className="h-10 px-4 rounded-lg border border-border bg-card text-[0.8125rem] font-semibold text-foreground hover:bg-secondary disabled:opacity-50"
-                >
-                  {action.secondary.label}
-                </button>
-              )}
-              <button
-                onClick={action.primary.run}
-                disabled={submitting || !vendorId || action.primary.disabled}
-                className="h-10 px-4 inline-flex items-center gap-2 rounded-lg bg-primary text-primary-foreground text-[0.8125rem] font-semibold hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                {submitting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
-                {submitting ? "Enviando…" : action.primary.label}
-              </button>
             </div>
           </div>
+        ) : (
+          <div className="mt-4.5 min-h-0 flex-1 overflow-y-auto border-t border-border">
+            <div className="flex max-w-[980px] flex-col gap-4 px-6 py-5.5 md:px-8">
+              {tab === "po" && (
+                poEnabled ? (
+                  <>
+                    {vendorId ? (
+                      <PoPicker
+                        requirement={poMatchingEnabled ? vendorRule?.poRequirement ?? null : null}
+                        vendorName={vendorName}
+                        openPOs={purchaseOrders}
+                        suggestions={poMatchingEnabled ? poSuggestions : []}
+                        selectedId={poId}
+                        onSelect={choosePo}
+                        loading={purchaseOrdersLoading}
+                        error={purchaseOrdersError || null}
+                        invoiceTotal={Number(doc.totals.total) || 0}
+                        toleranceLabel={tolerance ? (tolerance.totalType === "percent" ? `${tolerance.total}%` : tolerance.totalType === "amount" ? `$${fmt(tolerance.total)}` : "0") : null}
+                        disabled={submitting}
+                      />
+                    ) : (
+                      <p className="text-sm text-muted-foreground">Elige primero el proveedor en <button type="button" className="text-link hover:underline" onClick={() => selectTab("lines")}>Datos y líneas</button> para ver sus órdenes abiertas.</p>
+                    )}
+                    {poMatchingEnabled && poId && compareError && <Notice tone="err" title="No se pudo comparar con la OC">{compareError}</Notice>}
+                    {poMatchingEnabled && poId && comparison && comparison.poInternalId === poId && (
+                      <PoComparisonCard
+                        comparison={comparison}
+                        itemCodes={Object.fromEntries(validLines.map((l, i) => [i, getDisplayCode(l) ?? getDisplayName(l)]))}
+                        tolerance={tolerance}
+                        requireReceipt={requireReceipt}
+                        loading={compareLoading}
+                      />
+                    )}
+                    {poMatchingEnabled && poId && !comparison && compareLoading && (
+                      <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />Comparando la factura con la OC…</p>
+                    )}
+                  </>
+                ) : <p className="text-sm text-muted-foreground">La relación con órdenes de compra no está activa para tu empresa.</p>
+              )}
+
+              {tab === "fiscal" && (
+                apChecks?.fiscal
+                  ? <FiscalPanel fiscal={apChecks.fiscal} />
+                  : <p className="text-sm text-muted-foreground">{isCfdi ? "El CFDI todavía no se ha consultado ante el SAT." : "Las facturas en PDF no llevan validación fiscal."}</p>
+              )}
+
+              {tab === "erp" && (
+                <section className="flex flex-col gap-3">
+                  <h2 className="text-[15px] font-semibold">Lo que se va a crear en el ERP</h2>
+                  <dl className="grid grid-cols-[150px_minmax(0,1fr)] gap-x-3.5 gap-y-2 text-[13.5px]">
+                    <dt className="text-muted-foreground">Proveedor</dt><dd>{vendorName || <span className="text-tone-warn">Sin elegir</span>}</dd>
+                    <dt className="text-muted-foreground">Factura</dt><dd>{doc.invoice_number ?? "Sin número"} · {doc.invoice_date}</dd>
+                    <dt className="text-muted-foreground">Orden de compra</dt><dd>{poId ? (comparison?.poInternalId === poId ? comparison.poTranid : purchaseOrders.find((p) => p.internal_id === poId)?.tranid ?? poId) : "Sin OC"}</dd>
+                    <dt className="text-muted-foreground">Ubicación</dt><dd>{payload.catalogs.locations.find((l) => l.internal_id === locationId)?.name ?? "Sin ubicación"}</dd>
+                    <dt className="text-muted-foreground">Líneas</dt><dd>{assignedCount} con ítem{missingCount > 0 ? ` · ${missingCount} se omiten` : ""}</dd>
+                    <dt className="text-muted-foreground">Total</dt><dd className="tabular-nums">${fmt(Number(doc.totals.total))} {doc.currency}</dd>
+                  </dl>
+                  {sandboxTest && (
+                    <SandboxTestSend docId={docId} history={testSends} disabled={submitting} buildBody={() => (vendorId && validLines.length ? reviewBody() : null)} />
+                  )}
+                </section>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── Barra de acción: qué pasa al enviar ─────────────────────────── */}
+        <div className={cn(
+          "flex shrink-0 flex-wrap items-center gap-3 border-t px-6 py-3 md:px-8",
+          action.tone === "err" ? "border-tone-err/20 bg-tone-err-bg" : action.tone === "warn" ? "border-tone-warn/20 bg-tone-warn-bg" : "border-border bg-card",
+        )}>
+          {action.tone !== "none" && <AlertCircle className={cn("size-4 shrink-0", action.tone === "err" ? "text-tone-err" : "text-tone-warn")} aria-hidden="true" />}
+          <p className="min-w-[240px] flex-1 text-[13.5px]">{!canWrite ? "Tu rol es de solo consulta: puedes ver el documento, no enviarlo." : submitError ? <span className="text-tone-err">{submitError}</span> : action.message}</p>
+          {sandboxTest && tab !== "erp" && (
+            <SandboxTestSend docId={docId} compact history={testSends} disabled={submitting} buildBody={() => (vendorId && validLines.length ? reviewBody() : null)} />
+          )}
+          {action.secondary && (
+            <button type="button" onClick={action.secondary.run} disabled={submitting || !vendorId || !canWrite} className={btn("secondary")}>{action.secondary.label}</button>
+          )}
+          <button type="button" onClick={action.primary.run} disabled={submitting || !vendorId || action.primary.disabled || !canWrite} className={btn("primary")}>
+            {submitting && <Loader2 className="animate-spin" />}
+            {submitting ? "Enviando…" : action.primary.label}
+          </button>
         </div>
       </div>
     </>
+  );
+}
+
+function LineNo({ n, warn }: { n: number; warn: boolean }) {
+  return (
+    <span className={cn("inline-flex size-[18px] items-center justify-center rounded-full text-[10px] font-bold text-white", warn ? "bg-[#B07C0E]" : "bg-primary")}>
+      {n}<span className="sr-only">{warn ? ", sin ítem" : ""}</span>
+    </span>
   );
 }

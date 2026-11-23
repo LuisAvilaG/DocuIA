@@ -42,7 +42,7 @@ async function handlePOST(req: NextRequest) {
   if (!enabled) return NextResponse.json({ error: "Feature not enabled" }, { status: 403 });
 
   const body = await req.json().catch(() => ({}));
-  const name = String(body.name ?? "").trim();
+  const name = String(body.name ?? "").trim().slice(0, 100);
   if (!name) return NextResponse.json({ error: "Name required" }, { status: 400 });
 
   const rawKey    = `dk_${randomBytes(32).toString("hex")}`;

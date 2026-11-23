@@ -1,20 +1,24 @@
+import { isOrganizationActive } from "@/lib/auth/jwt";
+import { orgTimeZone } from "@/lib/org-time-zone";
+import { wallClockIn } from "@/lib/time-zone";
+import { withAiUsage } from "@/lib/ai/usage";
 import { randomUUID } from "crypto";
 import { db } from "@/lib/db";
-import { contractCases, contractDocuments, contractExtractionLearnings, contractValidations, contractObligations, contractVisualTrainingVariants, contractAiAnalysisResults } from "@/db/schema";
+import { contractCases, contractDocuments, contractExtractionLearnings, contractValidations, contractVisualTrainingVariants, contractAiAnalysisResults } from "@/db/schema";
 import { and, desc, eq } from "drizzle-orm";
 import { uploadFile, getFileBuffer, getFileSize } from "@/lib/storage/minio";
 import { createExtractDeps, DEFAULT_CONTRACT_MODEL, type ContractExtractDeps, type ExtractSource } from "./extract";
 import { AI_MODELS } from "@/lib/ai/provider";
 import { countPdfPages, extractPdfPages } from "./document-pages";
 import type { DocsByType } from "./validate";
-import { flowSnapshot, loadContractPlan } from "./plan";
+import { validationRows } from "./validation-rows";
+import { flowSnapshot, loadPlanForProcessing } from "./plan";
 import { assembleResults, isAiRule, type AnalysisOutcome } from "./assemble";
 import { buildFlowTrace } from "./trace";
 import { getFeature, isFeatureEnabled } from "@/lib/features";
-import { normalizeContractDate } from "./normalization";
 import { logAudit } from "@/lib/audit/log";
 import type { VisualTrainingVariant } from "./visual-training";
-import { runAiAnalysis } from "./ai-analysis";
+import { DEFAULT_ANALYSIS_MODEL, runAiAnalysis } from "./ai-analysis";
 import { indexArchiveDocument, registerArchiveDocument } from "./archive";
 import { contractArchivePages } from "@/db/schema";
 import { fieldBatches, locatePages, pagesText, widenPages } from "./page-selection";
@@ -23,22 +27,25 @@ import { caseVerdict } from "./validate";
 
 export interface CaseFileInput { buffer: Buffer; fileName: string; mimeType: string }
 
-// Dates read from documents are normalized before obligation alerts are created.
-function parseDateLoose(v: unknown): Date | null {
-  const normalized = normalizeContractDate(v);
-  if (!normalized) return null;
-  const [year, month, day] = normalized.split("-").map(Number);
-  return new Date(year, month - 1, day);
-}
-
-// Fields whose value is a key date worth alerting on (renewal / expiry).
-const DATE_FIELD_RE = /(fecha|date|vigencia|termino|término|renov|corte|vencim)/i;
-
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.round(value)));
 }
 
 /** A value the extraction did not find (null, empty string, empty list). */
+/**
+ * Aviso cuando el documento subido en una casilla no parece de ese tipo: la IA
+ * lo clasifica como otro tipo del flujo, o casi no tiene los datos esperados.
+ * El tipo de la casilla se respeta; solo se avisa (decisión 6 del plan).
+ */
+export function slotTypeWarning(input: { expected: string; detected: string | null | undefined; docTypes: Array<{ key: string; name: string }>; filled: number; total: number }): string | null {
+  const other = input.detected ? input.docTypes.find((t) => t.key === input.detected && t.name !== input.expected) : null;
+  if (other) return `Se subió como ${input.expected}, pero parece ${other.name}.`;
+  if (input.total >= 3 && input.filled / input.total < 0.25) {
+    return `Se subió como ${input.expected}, pero la IA encontró solo ${input.filled} de ${input.total} datos esperados.`;
+  }
+  return null;
+}
+
 function isBlank(value: unknown): boolean {
   return value === null || value === undefined || value === "" || (Array.isArray(value) && value.length === 0);
 }
@@ -80,8 +87,16 @@ export async function createContractCase(input: {
   });
 
   for (const f of input.files) {
-    const storageKey = `contracts/${input.organizationId}/${caseId}/${Date.now()}-${f.fileName}`;
-    await uploadFile(f.buffer, storageKey, f.mimeType);
+    const safeName = f.fileName.replace(/[^\w.\- ]+/g, "_").slice(-150) || "documento";
+    const storageKey = `contracts/${input.organizationId}/${caseId}/${Date.now()}-${safeName}`;
+    try {
+      await uploadFile(f.buffer, storageKey, f.mimeType);
+    } catch (error) {
+      // Without its files the case would sit in "Analizando" with nothing to analyse.
+      await db.delete(contractDocuments).where(eq(contractDocuments.caseId, caseId)).catch(() => undefined);
+      await db.delete(contractCases).where(eq(contractCases.id, caseId)).catch(() => undefined);
+      throw error;
+    }
     await db.insert(contractDocuments).values({
       id: randomUUID(),
       caseId,
@@ -107,9 +122,23 @@ function toSource(buffer: Buffer, mimeType: string | null): { source: ExtractSou
 // Process a case off-thread: classify each doc, extract configured fields with
 // citations, persist, and move the case to "review". Extractor is injectable
 // so the orchestration can be tested without an AI key.
+/** Cada llamada a la IA del caso se carga al cliente (usage_events). */
 export async function processContractCase(caseId: string, injectedDeps?: ContractExtractDeps): Promise<void> {
+  const owner = await db.query.contractCases.findFirst({ where: eq(contractCases.id, caseId), columns: { organizationId: true } });
+  if (!owner) throw new Error(`Contract case ${caseId} not found`);
+  return withAiUsage({ orgId: owner.organizationId, source: "contratos" }, () => processContractCaseInner(caseId, injectedDeps));
+}
+
+async function processContractCaseInner(caseId: string, injectedDeps?: ContractExtractDeps): Promise<void> {
   const kase = await db.query.contractCases.findFirst({ where: eq(contractCases.id, caseId) });
   if (!kase) throw new Error(`Contract case ${caseId} not found`);
+
+  // Suspended or deleted since the case was queued: no analysis is spent on it.
+  if (!await isOrganizationActive(kase.organizationId)) {
+    const message = "La organización está suspendida: el caso no se analizó.";
+    await db.update(contractCases).set({ status: "failed", errorMessage: message, updatedAt: new Date() }).where(eq(contractCases.id, caseId));
+    return;
+  }
 
   const extractionFeature = await getFeature(kase.organizationId, "contract_ai_extraction");
   if (!extractionFeature.isEnabled) {
@@ -121,8 +150,9 @@ export async function processContractCase(caseId: string, injectedDeps?: Contrac
   }
 
   // Model and long-document handling are per organization (feature config).
-  const cfg = extractionFeature.config as { model?: unknown; locator_min_pages?: unknown; max_pages_per_call?: unknown; selected_pages_mode?: unknown };
+  const cfg = extractionFeature.config as { model?: unknown; analysis_model?: unknown; locator_min_pages?: unknown; max_pages_per_call?: unknown; selected_pages_mode?: unknown };
   const model = AI_MODELS.some((m) => m.id === cfg.model) ? String(cfg.model) : DEFAULT_CONTRACT_MODEL;
+  const analysisModel = AI_MODELS.some((m) => m.id === cfg.analysis_model) ? String(cfg.analysis_model) : DEFAULT_ANALYSIS_MODEL;
   const locatorMinPages = clamp(Number(cfg.locator_min_pages) || 25, 5, 500);
   const maxPagesPerCall = clamp(Number(cfg.max_pages_per_call) || 20, 4, 40);
   const pagesMode: "auto" | "pdf" | "text" = cfg.selected_pages_mode === "pdf" || cfg.selected_pages_mode === "text" ? cfg.selected_pages_mode : "auto";
@@ -132,11 +162,10 @@ export async function processContractCase(caseId: string, injectedDeps?: Contrac
   await logAudit({ orgId: kase.organizationId, action: "contract.processing_started", resourceType: "contract_case", resourceId: caseId, metadata: { model } });
 
   try {
-    const [docs, plan, validationsFeature, obligationsFeature, learnings] = await Promise.all([
+    const [docs, plan, validationsFeature, learnings] = await Promise.all([
       db.query.contractDocuments.findMany({ where: eq(contractDocuments.caseId, caseId) }),
-      loadContractPlan(kase.organizationId, kase.flowId),
+      loadPlanForProcessing(kase),
       isFeatureEnabled(kase.organizationId, "contract_advanced_validations"),
-      getFeature(kase.organizationId, "contract_obligation_tracking"),
       db.query.contractExtractionLearnings.findMany({
         where: and(eq(contractExtractionLearnings.organizationId, kase.organizationId), eq(contractExtractionLearnings.isActive, true)),
         orderBy: [desc(contractExtractionLearnings.createdAt)],
@@ -170,7 +199,9 @@ export async function processContractCase(caseId: string, injectedDeps?: Contrac
     const learningsByType = new Map<string, typeof learnings>();
     for (const learning of learnings) (learningsByType.get(learning.documentType) ?? learningsByType.set(learning.documentType, []).get(learning.documentType)!).push(learning);
 
-    const summary: Array<{ documentId: string; type: string; typeName: string; fields: number; pages?: number[]; pageCount?: number }> = [];
+    const summary: Array<{ documentId: string; type: string; typeName: string; fields: number; pages?: number[]; pageCount?: number; typeWarning?: string }> = [];
+    const previousResult = (kase.resultJson && typeof kase.resultJson === "object" && !Array.isArray(kase.resultJson) ? kase.resultJson : {}) as Record<string, unknown>;
+    const slots = (previousResult.slots && typeof previousResult.slots === "object" ? previousResult.slots : {}) as Record<string, string>;
     const docsByType: DocsByType = {};
     const referenceNode = plan.flow?.nodes.find((node) => node.kind === "reference_lookup");
     if (referenceNode) {
@@ -219,7 +250,16 @@ export async function processContractCase(caseId: string, injectedDeps?: Contrac
         : toSource(await getFileBuffer(doc.storageKey), doc.mimeType);
       const { source, mode, text } = prepared;
 
-      const classifiedTypeKey = await deps.classify(source, plan.docTypes, undefined, doc.originalName ?? undefined);
+      // La casilla del caso fija el tipo; sin casilla, la IA lo clasifica.
+      // Solo cuenta la casilla elegida al subir (resultJson.slots): detected_type
+      // también guarda lo que la IA clasificó en un análisis anterior.
+      const slotType = slots[doc.id];
+      const presetType = slotType && plan.docTypes.some((type) => type.key === slotType) ? slotType : null;
+      const classifiedTypeKey = presetType ?? await deps.classify(source, plan.docTypes, undefined, doc.originalName ?? undefined);
+      // Con casilla, la IA igual clasifica (en paralelo a la extracción) solo para avisar si no coincide.
+      const typeCheck = presetType && plan.docTypes.length > 1
+        ? deps.classify(source, plan.docTypes, undefined, doc.originalName ?? undefined).catch(() => null)
+        : null;
       const typeKey = plan.docTypes.some((type) => type.key === classifiedTypeKey)
         ? classifiedTypeKey
         : inferTypeFromFileName(doc.originalName, plan.docTypes) ?? (plan.docTypes.length === 1 ? plan.docTypes[0].key : "unknown");
@@ -257,9 +297,18 @@ export async function processContractCase(caseId: string, injectedDeps?: Contrac
             for (const page of more) pagesUsed.add(page);
           }
         }
+      } else if (fields.length === 0) {
+        // No fields to read (a document of no known type): sending the whole
+        // file to the model would be a paid call that can return nothing.
+        values = {};
+        citations = {};
       } else {
         ({ values, citations } = await deps.extract(source, typeName, fields, undefined, learningsByType.get(typeKey) ?? [], visualByType.get(typeKey) ?? []));
       }
+
+      const typeWarning = presetType
+        ? slotTypeWarning({ expected: typeName, detected: await typeCheck, docTypes: plan.docTypes, filled: fields.filter((f) => !isBlank(values[f.fieldKey])).length, total: fields.length })
+        : null;
 
       await db.update(contractDocuments).set({
         detectedType:  typeKey,
@@ -269,10 +318,11 @@ export async function processContractCase(caseId: string, injectedDeps?: Contrac
         citationsJson: citations,
       }).where(eq(contractDocuments.id, doc.id));
 
-      (docsByType[typeKey] ??= []).push({ values, citations });
+      (docsByType[typeKey] ??= []).push({ values, citations, documentId: doc.id });
       summary.push({
         documentId: doc.id, type: typeKey, typeName, fields: Object.keys(values).length,
         ...(useLocator ? { pages: [...pagesUsed].sort((a, b) => a - b), pageCount: pageCount ?? pages.length } : {}),
+        ...(typeWarning ? { typeWarning } : {}),
       });
     }
 
@@ -289,7 +339,7 @@ export async function processContractCase(caseId: string, injectedDeps?: Contrac
             ruleName: configured.name,
             severity: configured.severity ?? "warn",
             outputMode: configured.conditionsJson.outputMode ?? "free",
-            response: await runAiAnalysis(configured.conditionsJson, docsByType),
+            response: await runAiAnalysis(configured.conditionsJson, docsByType, analysisModel),
           };
         } catch (error) {
           // A transient model/provider failure must not discard an otherwise
@@ -311,49 +361,24 @@ export async function processContractCase(caseId: string, injectedDeps?: Contrac
       : [];
 
     // Calculations are always deterministic and use the AI items as inputs.
-    const assembled = assembleResults(plan, docsByType, analyses, { validationsEnabled: validationsFeature });
+    // "Not expired" is judged on the client's calendar day, not the server's (UTC).
+    const assembled = assembleResults(plan, docsByType, analyses, { validationsEnabled: validationsFeature, now: wallClockIn(await orgTimeZone(kase.organizationId)) });
     const { calculations, calculationValues } = assembled;
     const validations = referenceNode
       ? [...assembled.validations, ...await archiveValidationsForCase({ organizationId: kase.organizationId, caseDocumentIds: docs.map((doc) => doc.id), name: referenceNode.data.name, severity: referenceNode.data.severity })]
       : assembled.validations;
     const verdict = caseVerdict(validations);
 
-    // Derive key-date obligations (renewal/expiry) using the tenant-configured alert lead time.
-    const obligations: Array<{ type: string; description: string; dueDate: Date; alertAt: Date }> = [];
-    if (obligationsFeature.isEnabled) {
-      const days = Math.min(365, Math.max(1, Math.round(Number(obligationsFeature.config.alert_days_before ?? 30))));
-      for (const list of Object.values(docsByType)) {
-        for (const d of list) {
-          for (const [k, val] of Object.entries(d.values)) {
-            if (!DATE_FIELD_RE.test(k)) continue;
-            const due = parseDateLoose(Array.isArray(val) ? val[0] : val);
-            if (!due) continue;
-            obligations.push({ type: k, description: `${k}: ${Array.isArray(val) ? val[0] : val}`, dueDate: due, alertAt: new Date(due.getTime() - days * 86400_000) });
-          }
-        }
-      }
-    }
-
     // Per-stage trace of the flow run (only when a visual flow is active).
     const stages = plan.flow ? buildFlowTrace(plan.flow, docsByType, summary, !!plan.template, calculations) : null;
+
+    const rows = await validationRows(caseId, validations, docs.map((doc) => doc.id));
 
     // Replace prior results and publish the verdict as one unit: a retry that
     // overlaps (or a crash midway) must not leave duplicated or partial rows.
     await db.transaction(async (tx) => {
       await tx.delete(contractValidations).where(eq(contractValidations.caseId, caseId));
-      if (validations.length > 0) {
-        await tx.insert(contractValidations).values(validations.map((v) => ({
-          caseId,
-          ruleName:   v.ruleName,
-          severity:   v.severity,
-          subject:    v.subject,
-          status:     v.status,
-          ok:         v.ok,
-          reason:     v.reason,
-          checksJson: v.checks,
-          citation:   v.citation,
-        })));
-      }
+      if (rows.length > 0) await tx.insert(contractValidations).values(rows);
 
       await tx.delete(contractAiAnalysisResults).where(eq(contractAiAnalysisResults.caseId, caseId));
       if (analyses.length > 0) {
@@ -370,17 +395,19 @@ export async function processContractCase(caseId: string, injectedDeps?: Contrac
         })));
       }
 
-      await tx.delete(contractObligations).where(eq(contractObligations.caseId, caseId));
-      if (obligations.length > 0) {
-        await tx.insert(contractObligations).values(obligations.map((o) => ({ caseId, type: o.type, description: o.description, dueDate: o.dueDate, alertAt: o.alertAt, status: "open" })));
-      }
-
+      // El análisis reemplaza el resultado, pero no lo que no le pertenece: las
+      // casillas del caso, el historial de documentos pedidos al contratista y
+      // el de decisiones y documentos generados antes de reabrirlo.
+      const [current] = await tx.select({ resultJson: contractCases.resultJson }).from(contractCases).where(eq(contractCases.id, caseId)).for("update");
+      const stored = (current?.resultJson && typeof current.resultJson === "object" && !Array.isArray(current.resultJson) ? current.resultJson : {}) as Record<string, unknown>;
+      const kept = Object.fromEntries(["slots", "documentRequest", "documentRequests", "decisionHistory", "outputHistory"].filter((key) => stored[key] !== undefined).map((key) => [key, stored[key]]));
       await tx.update(contractCases).set({
         status: "validated",
         // Pin the flow actually used; generation and corrections replay this
         // snapshot even if the live flow changes or disappears.
         flowId: plan.flowId,
         resultJson: {
+          ...kept,
           documents: summary,
           validations: validations.length,
           analyses: analyses.length,

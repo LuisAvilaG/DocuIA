@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { Loader2, RefreshCw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Pill, SectionTitle, fmtDate, num, type Tone } from "@/components/admin/ui";
+import { INVOICE_FORMATS, INVOICE_FORMAT_LABEL, type InvoiceFormat } from "@/lib/subsidiaries/invoice-format";
 import { Select, control } from "@/components/admin/form";
 
 export interface ConnectionRow {
@@ -13,7 +14,7 @@ export interface ConnectionRow {
   scriptsInstalled: boolean; catalogScriptId: string | null; catalogDeployId: string | null; processScriptId: string | null; processDeployId: string | null; updatedAt: string;
 }
 export interface SubsidiaryRow {
-  id: string; name: string; nsSubsidiaryId: string; currency: string; locale: string; taxId: string | null; isActive: boolean;
+  id: string; name: string; nsSubsidiaryId: string; currency: string; locale: string; taxId: string | null; invoiceFormat: InvoiceFormat; isActive: boolean;
   items: number; vendors: number; locations: number;
 }
 type Env = "sandbox" | "production";
@@ -39,7 +40,7 @@ export function ErpView({ orgId, activeEnvironment, connections, subsidiaries, h
   const [creds, setCreds] = useState(EMPTY_CREDS);
   const [scripts, setScripts] = useState({ catalogScriptId: "", catalogDeployId: "", processScriptId: "", processDeployId: "" });
   const [subEdit, setSubEdit] = useState<string | null>(null);
-  const [subForm, setSubForm] = useState({ name: "", nsSubsidiaryId: "", currency: "MXN", locale: "es-MX", taxId: "", isActive: true });
+  const [subForm, setSubForm] = useState<SubFormState>({ name: "", nsSubsidiaryId: "", currency: "MXN", locale: "es-MX", taxId: "", invoiceFormat: "cfdi", isActive: true });
   const [addingSub, setAddingSub] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
@@ -52,7 +53,8 @@ export function ErpView({ orgId, activeEnvironment, connections, subsidiaries, h
     try {
       const res = await fn();
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) { setMsg({ tone: "err", text: (data.error as string) ?? "No se pudo completar la acción" }); return false; }
+      // Refreshed on failure too: the cards must show what is stored, not what was typed.
+      if (!res.ok) { setMsg({ tone: "err", text: (data.error as string) ?? "No se pudo completar la acción" }); router.refresh(); return false; }
       setMsg({ tone: "ok", text: okText(data) });
       router.refresh();
       return true;
@@ -166,7 +168,7 @@ export function ErpView({ orgId, activeEnvironment, connections, subsidiaries, h
 
       {hasAp && (
         <section>
-          <SectionTitle aside={<button type="button" className="text-primary" onClick={() => { setAddingSub(true); setSubForm({ name: "", nsSubsidiaryId: "", currency: "MXN", locale: "es-MX", taxId: "", isActive: true }); }}>Agregar subsidiaria</button>}>
+          <SectionTitle aside={<button type="button" className="text-primary" onClick={() => { setAddingSub(true); setSubForm({ name: "", nsSubsidiaryId: "", currency: "MXN", locale: "es-MX", taxId: "", invoiceFormat: "cfdi", isActive: true }); }}>Agregar subsidiaria</button>}>
             Subsidiarias y catálogo
           </SectionTitle>
           {subsidiaries.length === 0 && !addingSub && <p className="text-sm text-muted-foreground mt-4">Sin subsidiarias. Agrega las que DocuIA debe gestionar en el ERP.</p>}
@@ -182,12 +184,12 @@ export function ErpView({ orgId, activeEnvironment, connections, subsidiaries, h
                   <div className="flex items-center gap-4">
                     <div className="flex-1 min-w-0">
                       <div className="font-medium">{s.name} {!s.isActive && <Pill tone="mute" className="ml-1">Inactiva</Pill>}</div>
-                      <div className="text-xs text-muted-foreground tabular-nums">ID ERP {s.nsSubsidiaryId} · {s.currency}{s.taxId ? ` · RFC ${s.taxId}` : ""} · {num(s.items)} ítems · {num(s.vendors)} proveedores · {num(s.locations)} ubicaciones</div>
+                      <div className="text-xs text-muted-foreground tabular-nums">ID ERP {s.nsSubsidiaryId} · {s.currency}{s.taxId ? ` · RFC ${s.taxId}` : ""} · facturas {INVOICE_FORMAT_LABEL[s.invoiceFormat] ?? s.invoiceFormat} · {num(s.items)} ítems · {num(s.vendors)} proveedores · {num(s.locations)} ubicaciones</div>
                     </div>
                     <Button size="sm" variant="outline" disabled={busy !== null || activeConn?.status !== "connected"} onClick={() => syncSub(s.id)} title={activeConn?.status !== "connected" ? "El entorno activo no está conectado" : ""}>
                       {busy === `sync:${s.id}` ? <Loader2 className="animate-spin" /> : <RefreshCw />} Sincronizar
                     </Button>
-                    <button type="button" className="text-xs text-primary" onClick={() => { setSubEdit(s.id); setSubForm({ name: s.name, nsSubsidiaryId: s.nsSubsidiaryId, currency: s.currency, locale: s.locale, taxId: s.taxId ?? "", isActive: s.isActive }); }}>Editar</button>
+                    <button type="button" className="text-xs text-primary" onClick={() => { setSubEdit(s.id); setSubForm({ name: s.name, nsSubsidiaryId: s.nsSubsidiaryId, currency: s.currency, locale: s.locale, taxId: s.taxId ?? "", invoiceFormat: s.invoiceFormat, isActive: s.isActive }); }}>Editar</button>
                     {confirmDelete === s.id ? (
                       <span className="flex items-center gap-1.5 text-xs"><button type="button" className="text-destructive font-medium" onClick={() => deleteSub(s.id)} disabled={busy !== null}>Confirmar</button><button type="button" className="text-muted-foreground" onClick={() => setConfirmDelete(null)}>Cancelar</button></span>
                     ) : (
@@ -227,9 +229,11 @@ function Step({ ok, now, children }: { ok: boolean; now?: boolean; children: Rea
   );
 }
 
+type SubFormState = { name: string; nsSubsidiaryId: string; currency: string; locale: string; taxId: string; invoiceFormat: InvoiceFormat; isActive: boolean };
+
 function SubForm({ form, setForm, isNew = false, busy, onSave, onCancel }: {
-  form: { name: string; nsSubsidiaryId: string; currency: string; locale: string; taxId: string; isActive: boolean };
-  setForm: (f: typeof form) => void; isNew?: boolean; busy: boolean; onSave: () => void; onCancel: () => void;
+  form: SubFormState;
+  setForm: (f: SubFormState) => void; isNew?: boolean; busy: boolean; onSave: () => void; onCancel: () => void;
 }) {
   return (
     <div className="rounded-xl border border-border bg-card p-4 flex flex-col gap-3">
@@ -239,6 +243,11 @@ function SubForm({ form, setForm, isNew = false, busy, onSave, onCancel }: {
         <label className="text-xs text-muted-foreground flex flex-col gap-1">Moneda<input className={field} maxLength={3} value={form.currency} onChange={(e) => setForm({ ...form, currency: e.target.value.toUpperCase() })} /></label>
         <label className="text-xs text-muted-foreground flex flex-col gap-1">RFC / Tax ID<input className={field} maxLength={20} value={form.taxId} onChange={(e) => setForm({ ...form, taxId: e.target.value.toUpperCase() })} /></label>
         <label className="text-xs text-muted-foreground flex flex-col gap-1">Locale<input className={field} value={form.locale} onChange={(e) => setForm({ ...form, locale: e.target.value })} /></label>
+        <label className="text-xs text-muted-foreground flex flex-col gap-1">Facturas de proveedores
+          <Select value={form.invoiceFormat} onChange={(e) => setForm({ ...form, invoiceFormat: e.target.value as InvoiceFormat })}>
+            {INVOICE_FORMATS.map((f) => <option key={f} value={f}>{INVOICE_FORMAT_LABEL[f]}</option>)}
+          </Select>
+        </label>
         {!isNew && (
           <label className="text-xs text-muted-foreground flex flex-col gap-1">Estado
             <Select value={form.isActive ? "1" : "0"} onChange={(e) => setForm({ ...form, isActive: e.target.value === "1" })}><option value="1">Activa</option><option value="0">Inactiva</option></Select>

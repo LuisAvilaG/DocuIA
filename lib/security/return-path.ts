@@ -1,4 +1,4 @@
-const TENANT_RETURN = /^\/(dashboard|workflow|history|exceptions|mappings|catalogs|statistics|settings|expenses|accounting|contracts|cases)(\/|$)/;
+const TENANT_RETURN = /^\/(dashboard|workflow|history|documents|exceptions|mappings|vendor-rules|catalogs|invoice-settings|statistics|metrics|settings|expenses|accounting|contracts|cases)(\/|$)/;
 const ADMIN_RETURN = /^\/admin(\/(?!login(\/|$))|$)/;
 
 function safePath(value: string | null, allowed: RegExp): string | null {

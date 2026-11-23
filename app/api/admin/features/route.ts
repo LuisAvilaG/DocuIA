@@ -18,6 +18,12 @@ async function handleGET() {
         overrides: sql<number>`count(*)::int`,
         granted: sql<number>`count(*) filter (where ${orgFeatures.adminGranted})::int`,
       }).from(orgFeatures).innerJoin(organizations, and(eq(organizations.id, orgFeatures.organizationId), isNull(organizations.deletedAt)))
+        .innerJoin(features, eq(features.id, orgFeatures.featureId))
+        // Settings left by a client that no longer has the product are not part
+        // of who can use the feature, and must not move its count either way.
+        .where(sql`${features.productKey} is null or exists (
+          select 1 from org_products p
+          where p.organization_id = ${orgFeatures.organizationId} and p.product_key = ${features.productKey} and p.status <> 'disabled')`)
         .groupBy(orgFeatures.featureId),
       db.select({ productKey: orgProducts.productKey, n: sql<number>`count(distinct ${orgProducts.organizationId})::int` })
         .from(orgProducts).innerJoin(organizations, and(eq(organizations.id, orgProducts.organizationId), isNull(organizations.deletedAt)))

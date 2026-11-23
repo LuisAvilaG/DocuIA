@@ -6,7 +6,7 @@ import {
 // ── Enums ─────────────────────────────────────────────────────────────
 export const contractCaseStatusEnum = pgEnum("contract_case_status", [
   "uploaded", "processing", "review", "validated", "generated", "failed",
-  "approved", "rejected",
+  "approved", "rejected", "awaiting_documents",
 ]);
 
 // How a document's text was obtained.
@@ -101,10 +101,30 @@ export const contractFlows = pgTable("contract_flows", {
   graphJson:      json("graph_json").notNull(), // { nodes: FlowNode[], edges: FlowEdge[] }
   isActive:       boolean("is_active").notNull().default(true),
   version:        integer("version").notNull().default(1),
+  // Con Versiones de flujo: lo que se edita sin afectar los casos hasta publicar.
+  draftJson:      json("draft_json"),
+  draftUpdatedAt: timestamp("draft_updated_at"),
   createdAt:      timestamp("created_at").notNull().defaultNow(),
   updatedAt:      timestamp("updated_at").notNull().defaultNow(),
 }, (t) => [
   index("contract_flows_org_idx").on(t.organizationId),
+]);
+
+// Cada versión publicada de un flujo (feature contract_flow_versions).
+export const contractFlowVersions = pgTable("contract_flow_versions", {
+  id:             bigserial("id", { mode: "number" }).primaryKey(),
+  organizationId: varchar("organization_id", { length: 36 }).notNull(),
+  flowId:         varchar("flow_id", { length: 36 }).notNull(),
+  version:        integer("version").notNull(),
+  name:           varchar("name", { length: 150 }).notNull(),
+  graphJson:      json("graph_json").notNull(),
+  note:           text("note"),
+  changesJson:    json("changes_json"),
+  publishedBy:    varchar("published_by", { length: 36 }),
+  publishedAt:    timestamp("published_at").notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex("contract_flow_versions_flow_version_idx").on(t.flowId, t.version),
+  index("contract_flow_versions_org_idx").on(t.organizationId),
 ]);
 
 // Representative document layouts trained from the visual flow editor. A
@@ -136,6 +156,8 @@ export const contractCases = pgTable("contract_cases", {
   organizationId: varchar("organization_id", { length: 36 }).notNull(),
   flowId:         varchar("flow_id", { length: 36 }), // which flow the client chose (null → fallback)
   title:          varchar("title", { length: 255 }),
+  // A quién se piden documentos corregidos (feature contract_document_requests).
+  contractorEmail: varchar("contractor_email", { length: 191 }),
   status:         contractCaseStatusEnum("status").notNull().default("uploaded"),
   createdBy:      varchar("created_by", { length: 36 }),
   resultJson:     json("result_json"),   // summary of extraction + validation
@@ -174,7 +196,9 @@ export const contractExtractionLearnings = pgTable("contract_extraction_learning
   correctedValue: text("corrected_value").notNull(),
   citation:       text("citation"),
   createdBy:      varchar("created_by", { length: 36 }),
+  // Activo = se usa; en pausa = isActive false sin retiredAt; retirado = retiredAt.
   isActive:       boolean("is_active").notNull().default(true),
+  retiredAt:      timestamp("retired_at"),
   createdAt:      timestamp("created_at").notNull().defaultNow(),
 }, (t) => [
   index("contract_learning_org_type_idx").on(t.organizationId, t.documentType, t.fieldKey),
@@ -192,6 +216,8 @@ export const contractValidations = pgTable("contract_validations", {
   reason:      text("reason"),
   checksJson:  json("checks_json"),
   citation:    text("citation"),
+  // Citas que respaldan el hallazgo: [{documentId, docType, field, quote, page}].
+  evidenceJson: json("evidence_json"),
 }, (t) => [
   index("contract_validations_case_idx").on(t.caseId),
 ]);
@@ -214,15 +240,23 @@ export const contractAiAnalysisResults = pgTable("contract_ai_analysis_results",
   index("contract_ai_results_case_idx").on(t.caseId),
 ]);
 
-export const contractObligations = pgTable("contract_obligations", {
-  id:          bigserial("id", { mode: "number" }).primaryKey(),
-  caseId:      varchar("case_id", { length: 36 }).notNull(),
-  type:        varchar("type", { length: 60 }),
-  description: text("description"),
-  dueDate:     timestamp("due_date"),
-  alertAt:     timestamp("alert_at"),
-  status:      varchar("status", { length: 30 }).notNull().default("open"),
+
+// Enlace para que el contratista suba los documentos pedidos sin cuenta.
+// Solo se guarda el hash del token; vence y sirve para una sola entrega.
+export const contractUploadLinks = pgTable("contract_upload_links", {
+  id:             varchar("id", { length: 36 }).primaryKey(),
+  organizationId: varchar("organization_id", { length: 36 }).notNull(),
+  caseId:         varchar("case_id", { length: 36 }).notNull(),
+  tokenHash:      varchar("token_hash", { length: 64 }).notNull(),
+  documentsJson:  json("documents_json"),
+  reason:         text("reason"),
+  expiresAt:      timestamp("expires_at").notNull(),
+  usedAt:         timestamp("used_at"),
+  revokedAt:      timestamp("revoked_at"),
+  filesJson:      json("files_json"),
+  createdBy:      varchar("created_by", { length: 36 }),
+  createdAt:      timestamp("created_at").notNull().defaultNow(),
 }, (t) => [
-  index("contract_obligations_case_idx").on(t.caseId),
-  index("contract_obligations_alert_idx").on(t.alertAt),
+  uniqueIndex("contract_upload_links_token_idx").on(t.tokenHash),
+  index("contract_upload_links_case_idx").on(t.caseId),
 ]);

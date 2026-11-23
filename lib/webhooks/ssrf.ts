@@ -7,7 +7,7 @@ import { request } from "node:https";
 export function isPrivateIpv4(ip: string): boolean {
   const p = ip.split(".").map(Number);
   if (p.length !== 4 || p.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return true;
-  const [a, b] = p;
+  const [a, b, c] = p;
   if (a === 0)   return true;               // 0.0.0.0/8
   if (a === 10)  return true;               // 10.0.0.0/8
   if (a === 127) return true;               // loopback
@@ -16,7 +16,8 @@ export function isPrivateIpv4(ip: string): boolean {
   if (a === 192 && b === 168) return true;
   if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT 100.64/10
   if (a >= 224 || (a === 198 && (b === 18 || b === 19))) return true;
-  if ((a === 192 && b === 0) || (a === 198 && b === 51) || (a === 203 && b === 0)) return true;
+  // Protocol assignments and the three documentation ranges are /24s.
+  if ((a === 192 && b === 0 && (c === 0 || c === 2)) || (a === 198 && b === 51 && c === 100) || (a === 203 && b === 0 && c === 113)) return true;
   return false;
 }
 

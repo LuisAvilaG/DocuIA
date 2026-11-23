@@ -8,6 +8,7 @@ import {
   historyDocuments, exceptionQueue,
 } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
+import { isInvoiceFormat } from "@/lib/subsidiaries/invoice-format";
 
 type Params = { params: Promise<{ id: string; subId: string }> };
 
@@ -27,14 +28,27 @@ async function handlePATCH(req: NextRequest, { params }: Params) {
     const updates: Record<string, unknown> = { updatedAt: new Date() };
 
     if (typeof body.name === "string" && body.name.trim()) updates.name = body.name.trim();
-    if (typeof body.nsSubsidiaryId === "string" && body.nsSubsidiaryId.trim()) updates.nsSubsidiaryId = body.nsSubsidiaryId.trim();
+    if (typeof body.nsSubsidiaryId === "string" && body.nsSubsidiaryId.trim() && body.nsSubsidiaryId.trim() !== sub.nsSubsidiaryId) {
+      const nsId = body.nsSubsidiaryId.trim();
+      const taken = await db.query.subsidiaries.findFirst({
+        where: and(eq(subsidiaries.organizationId, organizationId), eq(subsidiaries.nsSubsidiaryId, nsId)),
+        columns: { id: true, name: true },
+      });
+      if (taken && taken.id !== subId) return NextResponse.json({ error: `Ese ID del ERP ya lo usa la subsidiaria «${taken.name}».` }, { status: 409 });
+      updates.nsSubsidiaryId = nsId;
+    }
     if (typeof body.currency === "string" && body.currency.trim()) updates.currency = body.currency.trim().toUpperCase();
     if (typeof body.taxId === "string") {
       const taxId = body.taxId.toUpperCase().replace(/[^A-Z0-9&Ñ]/g, "").slice(0, 20);
       updates.taxId = taxId || null;
     }
-    if (typeof body.locale === "string") updates.locale = body.locale.trim() || null;
+    // The column does not accept null: an emptied field keeps the stored locale.
+    if (typeof body.locale === "string" && body.locale.trim()) updates.locale = body.locale.trim();
     if (typeof body.isActive === "boolean") updates.isActive = body.isActive;
+    if (body.invoiceFormat !== undefined) {
+      if (!isInvoiceFormat(body.invoiceFormat)) return NextResponse.json({ error: "Formato de factura inválido" }, { status: 400 });
+      updates.invoiceFormat = body.invoiceFormat;
+    }
 
     await db.update(subsidiaries).set(updates).where(eq(subsidiaries.id, subId));
     await logAdminAction(req, session!, { action: "subsidiary.updated", targetOrgId: organizationId, after: { name: (updates.name as string) ?? sub.name, ...updates } });

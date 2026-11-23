@@ -214,14 +214,27 @@ export function fillWordTemplate(source: Buffer, template: WordTemplateConfig, d
       if (replaced !== xml) zip.file(path, replaced);
     }
   }
-  for (const mapping of template.mappings) {
-    const value = printableMapping(data[mapping.fieldKey], mapping.format);
-    for (const path of parts) {
-      const file = zip.file(path);
-      if (!file) continue;
-      const xml = file.asText();
-      const replaced = replaceTextInXml(xml, mapping.anchorText, value);
-      if (replaced !== xml) zip.file(path, replaced);
+  // Two passes: every anchor first becomes a private marker and only then its
+  // value. Filling values directly let a later mapping match text that came
+  // from an earlier value (a contractor named after another field's label).
+  const marker = (index: number) => `${index}`;
+  const passes: Array<(mapping: WordTemplateMapping, index: number) => [string, string]> = [
+    (mapping, index) => [mapping.anchorText, marker(index)],
+    (mapping, index) => [marker(index), printableMapping(data[mapping.fieldKey], mapping.format).replace(/[]/g, "")],
+  ];
+  // Longest anchor first: "FECHA" replaced before "FECHA FIN" would leave the
+  // longer one with nothing to match.
+  const ordered = [...template.mappings.entries()].sort(([, a], [, b]) => b.anchorText.length - a.anchorText.length);
+  for (const pass of passes) {
+    for (const [index, mapping] of ordered) {
+      const [anchor, replacement] = pass(mapping, index);
+      for (const path of parts) {
+        const file = zip.file(path);
+        if (!file) continue;
+        const xml = file.asText();
+        const replaced = replaceTextInXml(xml, anchor, replacement);
+        if (replaced !== xml) zip.file(path, replaced);
+      }
     }
   }
   return Buffer.from(zip.generate({ type: "nodebuffer", compression: "DEFLATE" }));

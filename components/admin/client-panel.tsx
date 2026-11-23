@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Loader2, X, Trash2, Eye, EyeOff } from "lucide-react";
@@ -76,7 +76,8 @@ function EditClientDialog({ org, onClose }: { org: ClientSummary; onClose: () =>
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const dataSaved = useRef(false);
+  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => { dataSaved.current = false; setForm((f) => ({ ...f, [k]: e.target.value })); };
 
   async function save(activate = false) {
     setBusy(true);
@@ -89,12 +90,17 @@ function EditClientDialog({ org, onClose }: { org: ClientSummary; onClose: () =>
       if ((form.billingEmail || null) !== org.billingEmail) body.billingEmail = form.billingEmail || null;
       if (form.planId !== org.planId) body.planId = form.planId;
       const trialIso = form.trialEndsAt ? new Date(form.trialEndsAt + "T23:59:59Z").toISOString() : null;
-      if (org.status === "trial" && !activate && trialIso !== org.trialEndsAt) body.trialEndsAt = trialIso;
+      // Compared by day: the stored time of day never equals 23:59:59, and every
+      // save moved the end of the trial and left an audit entry for nothing.
+      if (org.status === "trial" && !activate && form.trialEndsAt !== (org.trialEndsAt ? org.trialEndsAt.slice(0, 10) : "")) body.trialEndsAt = trialIso;
       if (activate) body.status = "active";
-      if (Object.keys(body).length) {
+      // Not again once it went through: if only the AI key failed, a retry
+      // would resend the same data, get "Sin cambios" and never reach the key.
+      if (Object.keys(body).length && !dataSaved.current) {
         const res = await fetch(`/api/admin/clients/${org.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) { setError(data.error ?? "No se pudo guardar"); return; }
+        dataSaved.current = true;
       }
       if (aiKey.trim()) {
         const res = await fetch(`/api/admin/clients/${org.id}/ai-config`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ apiKey: aiKey.trim() }) });

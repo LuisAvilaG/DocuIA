@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { Loader2 } from "lucide-react";
@@ -30,7 +30,11 @@ export function AuditFeed({ filters, showOrg = true, onMeta }: { filters: AuditF
   const [error, setError] = useState("");
   const key = JSON.stringify(filters);
 
+  // Filters change faster than answers arrive: an older answer must not land
+  // on top of the newer one.
+  const latest = useRef(0);
   async function load(before?: number) {
+    const mine = ++latest.current;
     setLoading(true);
     setError("");
     try {
@@ -40,13 +44,14 @@ export function AuditFeed({ filters, showOrg = true, onMeta }: { filters: AuditF
       const res = await fetch(`/api/admin/audit?${qs.toString()}`, { cache: "no-store" });
       if (!res.ok) throw new Error();
       const data = await res.json();
+      if (mine !== latest.current) return;
       setEvents((prev) => (before ? [...prev, ...data.events] : data.events));
       setNext(data.nextBefore ?? null);
       onMeta?.({ total: data.total, admins: data.admins });
     } catch {
-      setError("No se pudo cargar la auditoría.");
+      if (mine === latest.current) setError("No se pudo cargar la auditoría.");
     } finally {
-      setLoading(false);
+      if (mine === latest.current) setLoading(false);
     }
   }
 

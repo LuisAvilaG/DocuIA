@@ -1,14 +1,11 @@
 import { withApiSecurity } from "@/lib/security/http";
-import { getActiveNsConnection } from "@/lib/netsuite/connection";
+import { getErp } from "@/lib/erp";
 import { NextRequest, NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
 import { subsidiaries } from "@/db/schema";
 import { isFeatureEnabled } from "@/lib/features";
-import { decryptField } from "@/lib/crypto/encrypt";
-import { fetchOpenPurchaseOrders } from "@/lib/netsuite/client";
-import type { NSCredentials } from "@/lib/netsuite/oauth";
 
 async function handleGET(req: NextRequest) {
   const session = await getTenantSession({ area: "documents" });
@@ -27,19 +24,14 @@ async function handleGET(req: NextRequest) {
     db.query.subsidiaries.findFirst({
       where: and(eq(subsidiaries.id, subsidiaryId), eq(subsidiaries.organizationId, session.orgId)),
     }),
-    getActiveNsConnection(session.orgId),
+    getErp(session.orgId),
   ]);
   if (!sub) return NextResponse.json({ error: "Subsidiaria no encontrada" }, { status: 404 });
-  if (!conn?.catalogScriptId || !conn.catalogDeployId) {
-    return NextResponse.json({ error: "El script de catálogo del ERP no está configurado" }, { status: 422 });
+  if (!conn?.capabilities.purchaseOrders) {
+    return NextResponse.json({ error: "El ERP conectado no permite consultar órdenes de compra" }, { status: 422 });
   }
 
-  const creds: NSCredentials = {
-    accountId: conn.accountId,
-    consumerKey: decryptField(conn.consumerKey), consumerSecret: decryptField(conn.consumerSecret),
-    tokenId: decryptField(conn.tokenId), tokenSecret: decryptField(conn.tokenSecret),
-  };
-  const result = await fetchOpenPurchaseOrders(creds, conn.catalogScriptId, conn.catalogDeployId, sub.nsSubsidiaryId, vendorId);
+  const result = await conn.fetchOpenPurchaseOrders(sub.nsSubsidiaryId, vendorId);
   if (!result.ok) return NextResponse.json({ error: result.error ?? "No se pudieron consultar las OC abiertas" }, { status: 502 });
   return NextResponse.json({ purchaseOrders: result.data ?? [] });
 }

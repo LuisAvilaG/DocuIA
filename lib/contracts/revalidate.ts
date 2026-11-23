@@ -1,8 +1,10 @@
+import { orgTimeZone } from "@/lib/org-time-zone";
+import { wallClockIn } from "@/lib/time-zone";
 import { db } from "@/lib/db";
 import { contractAiAnalysisResults, contractCases, contractDocuments } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { isFeatureEnabled } from "@/lib/features";
-import { loadCasePlan } from "./plan";
+import { loadCasePlan, type ContractPlan } from "./plan";
 import type { DocsByType, Severity, ValidationResult } from "./validate";
 import { assembleResults, isAiRule, type AnalysisOutcome } from "./assemble";
 import type { AiAnalysisItem, AiAnalysisOutcome } from "./ai-analysis";
@@ -11,6 +13,10 @@ import { caseVerdict } from "./validate";
 
 export interface ContractRevalidation {
   caseId: string;
+  /** Documentos del caso (para ubicar la evidencia por página). */
+  documentIds: string[];
+  /** Controles con IA del plan que no tienen un análisis guardado (no se evaluaron). */
+  untestedAi: number;
   validations: ValidationResult[];
   verdict: ReturnType<typeof assembleResults>["verdict"];
   resultJson: Record<string, unknown>;
@@ -25,13 +31,14 @@ export interface ContractRevalidation {
 export async function calculateContractRevalidation(
   caseId: string,
   overrides: Record<string, Record<string, unknown>> = {},
+  opts: { plan?: ContractPlan } = {},
 ): Promise<ContractRevalidation> {
   const kase = await db.query.contractCases.findFirst({ where: eq(contractCases.id, caseId) });
   if (!kase) throw new Error("Caso no encontrado");
 
   const [documents, plan, validationsEnabled, storedAnalyses] = await Promise.all([
     db.query.contractDocuments.findMany({ where: eq(contractDocuments.caseId, caseId) }),
-    loadCasePlan(kase),
+    opts.plan ?? loadCasePlan(kase),
     isFeatureEnabled(kase.organizationId, "contract_advanced_validations"),
     db.query.contractAiAnalysisResults.findMany({ where: eq(contractAiAnalysisResults.caseId, caseId) }),
   ]);
@@ -42,13 +49,15 @@ export async function calculateContractRevalidation(
     (docsByType[document.detectedType] ??= []).push({
       values: overrides[document.id] ?? (document.extractedJson ?? {}) as Record<string, unknown>,
       citations: (document.citationsJson ?? {}) as Record<string, unknown>,
+      documentId: document.id,
     });
   }
 
   // Stored rows carry the rule name; the flow's AI nodes give back the node id
   // that calculations use to read analysis items.
   const nodeByRule = new Map(plan.rules.filter(isAiRule).map((rule) => [rule.name, rule.nodeId]));
-  const analyses: AnalysisOutcome[] = storedAnalyses.map((row) => ({
+  // Con otro plan (probar un borrador) solo cuentan los análisis de controles que siguen en él.
+  const analyses: AnalysisOutcome[] = storedAnalyses.filter((row) => !opts.plan || nodeByRule.has(row.ruleName)).map((row) => ({
     nodeId: nodeByRule.get(row.ruleName),
     ruleName: row.ruleName,
     severity: row.severity as Severity,
@@ -61,7 +70,7 @@ export async function calculateContractRevalidation(
     },
   }));
 
-  const assembled = assembleResults(plan, docsByType, analyses, { validationsEnabled });
+  const assembled = assembleResults(plan, docsByType, analyses, { validationsEnabled, now: wallClockIn(await orgTimeZone(kase.organizationId)) });
   const refNode = plan.flow?.nodes.find((node) => node.kind === "reference_lookup");
   const validations = refNode
     ? [...assembled.validations, ...await archiveValidationsForCase({ organizationId: kase.organizationId, caseDocumentIds: documents.map((document) => document.id), name: refNode.data.name, severity: refNode.data.severity })]
@@ -71,10 +80,21 @@ export async function calculateContractRevalidation(
   const previousResult = (kase.resultJson && typeof kase.resultJson === "object" && !Array.isArray(kase.resultJson))
     ? kase.resultJson as Record<string, unknown>
     : {};
+  // Las firmas parciales valen para los datos que se firmaron: si se corrige un
+  // campo o cambia el veredicto (p. ej. por una referencia del Archivo), se piden de nuevo.
+  const carried: Record<string, unknown> = { ...previousResult };
+  const changed = Object.keys(overrides).length > 0 || (previousResult.verdict !== undefined && previousResult.verdict !== verdict);
+  if (changed && Array.isArray(carried.approvals) && carried.approvals.length > 0) {
+    carried.approvalsReset = { at: new Date().toISOString(), count: carried.approvals.length };
+    delete carried.approvals;
+  }
+  const analyzed = new Set(storedAnalyses.map((row) => row.ruleName));
   return {
     caseId,
+    documentIds: documents.map((document) => document.id),
+    untestedAi: plan.rules.filter(isAiRule).filter((rule) => !analyzed.has(rule.name)).length,
     validations,
     verdict,
-    resultJson: { ...previousResult, validations: validations.length, calculations, calculationValues, verdict },
+    resultJson: { ...carried, validations: validations.length, calculations, calculationValues, verdict },
   };
 }

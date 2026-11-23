@@ -1,9 +1,9 @@
 import { buildOAuthHeader, NSCredentials } from "@/lib/netsuite/oauth";
 import { db } from "@/lib/db";
 import { expenseCategories, catalogDepartments, catalogClasses, orgUsers } from "@/db/schema";
-import { eq, and } from "drizzle-orm";
+import { eq, and, lt } from "drizzle-orm";
 import { randomUUID } from "crypto";
-import { hashSync } from "bcryptjs";
+import { hash } from "bcryptjs";
 
 // ── SuiteQL helper ────────────────────────────────────────────────────
 
@@ -31,6 +31,7 @@ async function runSuiteQL(
       Prefer: "transient",
     },
     body: JSON.stringify({ q: query }),
+    signal: AbortSignal.timeout(Number(process.env.NETSUITE_TIMEOUT_MS) || 30_000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -82,6 +83,7 @@ export async function syncExpenseCategories(
 
   let synced = 0;
   const errors: string[] = [];
+  const startedAt = new Date();
 
   for (const row of rows) {
     try {
@@ -114,6 +116,15 @@ export async function syncExpenseCategories(
     } catch (e) {
       errors.push(`category ${row.id}: ${e instanceof Error ? e.message : String(e)}`);
     }
+  }
+
+  // The query returns only active categories, so one that was not refreshed
+  // was inactivated or deleted in NetSuite: left active here, employees keep
+  // choosing it and the report is rejected when it is posted. Only after a
+  // complete, error-free read that brought something.
+  if (rows.length > 0 && errors.length === 0) {
+    await db.update(expenseCategories).set({ isActive: false, updatedAt: new Date() })
+      .where(and(eq(expenseCategories.organizationId, orgId), eq(expenseCategories.isActive, true), lt(expenseCategories.syncedAt, startedAt)));
   }
 
   return { synced, errors };
@@ -247,7 +258,9 @@ export async function syncEmployees(
           email,
           fullName,
           role:               "expense_submitter",
-          passwordHash:       hashSync(tempPassword, 12),
+          // Async: the synchronous hash froze the server for every tenant while
+          // a few hundred employees were imported.
+          passwordHash:       await hash(tempPassword, 12),
           isActive:           true,
           netsuiteEmployeeId: nsId,
           createdAt:          new Date(),

@@ -12,7 +12,7 @@ export async function archiveValidationsForCase(input: { organizationId: string;
     for (const ref of refs) {
       if (ref.status === "rejected") continue; // reviewer marked a false-positive citation
       const ok = ["related", "confirmed"].includes(ref.status) ? true : ref.status === "unrelated" || (ref.status === "missing" && input.severity === "block") ? false : null;
-      results.push({ ruleName: input.name, severity: input.severity, subject: ref.rawCode, ok, status: ok === true ? "pertinente" : ok === false ? "no pertinente" : "requiere revisión", reason: ref.reason ?? (ref.targetDocumentId ? "Documento origen encontrado." : "Documento origen no localizado."), checks: [{ label: `Referencia en página ${ref.pageNumber}`, ok: true }, { label: "Origen y asunto", ok }], citation: ref.context });
+      results.push({ ruleName: input.name, severity: input.severity, subject: ref.rawCode, ok, status: ok === true ? "pertinente" : ok === false ? "no pertinente" : "requiere revisión", reason: ref.reason ?? (ref.targetDocumentId ? "Documento origen encontrado." : "Documento origen no localizado."), checks: [{ label: `Referencia en página ${ref.pageNumber}`, ok: true }, { label: "Origen y asunto", ok }], citation: ref.context, evidence: ref.context && ok !== true ? [{ documentId: caseDocumentId, docType: null, field: null, quote: ref.context.slice(0, 400), page: ref.pageNumber ?? null }] : [] });
     }
   }
   if (results.length === 0) results.push({ ruleName: input.name, severity: input.severity, subject: "Referencias documentales", ok: null, status: "sin referencias", reason: "No se detectaron códigos de otros documentos en este caso.", checks: [], citation: null });

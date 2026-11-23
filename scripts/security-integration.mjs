@@ -1,4 +1,7 @@
-// Creates an isolated, disposable PostgreSQL container; never loads .env.local.
+// Creates an isolated, disposable PostgreSQL container and points the app at
+// it. It does not read .env.local itself, but `next build` / `next start` do:
+// any variable this script does not set (API keys, storage) still comes from
+// that file. The build also replaces the project's .next folder.
 import { spawn, execFileSync } from 'node:child_process';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { once } from 'node:events';
@@ -10,6 +13,7 @@ import { SignJWT } from 'jose';
 import assert from 'node:assert/strict';
 
 const root=process.cwd();
+console.log('Nota: esta prueba recompila la carpeta .next del proyecto; las variables que no fija (claves de IA, almacenamiento) se toman de .env.local.');
 const container=`docuia-security-${randomBytes(5).toString('hex')}`;
 const password=randomBytes(24).toString('hex');
 const port=3197;

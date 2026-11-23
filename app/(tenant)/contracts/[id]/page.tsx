@@ -1,104 +1,74 @@
+import { isProductActive } from "@/lib/products";
+import { orgTimeZone } from "@/lib/org-time-zone";
+import { friendlyError } from "@/lib/ap/friendly-error";
+import { caseVerdict, findingLevel } from "@/lib/contracts/validate";
 import { redirect, notFound } from "next/navigation";
 import { canApprove } from "@/lib/auth/permissions";
 import Link from "next/link";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
-import { contractAiAnalysisResults, contractArchiveDocuments, contractCases, contractDocuments, contractValidations, contractObligations, contractFlows, orgUsers, tenantAuditLog } from "@/db/schema";
-import { and, eq, asc, inArray } from "drizzle-orm";
-import {
-  CheckCircle2, XCircle, MinusCircle, ShieldCheck, ShieldAlert, ShieldX,
-  FileText, CalendarClock, FileInput, ListChecks, Calculator, FileType, Workflow,
-} from "lucide-react";
+import { contractAiAnalysisResults, contractArchiveDocuments, contractCases, contractDocuments, contractValidations, contractFlows, orgUsers, tenantAuditLog } from "@/db/schema";
+import { and, eq, asc, inArray, or, sql } from "drizzle-orm";
+import { FileText } from "lucide-react";
+import { CaseStatusPill, Notice, SectionTitle, StageNav, StatusPill, type Stage } from "@/components/kit";
 import { CaseActions } from "./actions";
-import { CaseDocuments, type CaseDoc } from "./case-documents";
+import type { CaseDoc } from "./case-documents";
+import { CaseDocuments } from "./case-documents-lazy";
+import { CaseChecks } from "./case-checks-lazy";
+import type { CheckFinding } from "./case-checks";
+import { evidenceFromQuotes, type EvidenceRef } from "@/lib/contracts/evidence";
 import { CaseProcessingRefresh } from "./case-processing-refresh";
 import { getFeature, isFeatureEnabled } from "@/lib/features";
 import { flowGraphSchema } from "@/lib/contracts/flow";
 import { CaseActivity, type CaseActivityItem } from "./case-activity";
-import { CONTRACT_CASE_STATUS, contractStatusLabel } from "@/lib/contracts/status";
+import { caseApprovalRules } from "@/lib/contracts/approval-state";
+import { canAccessTenantArea } from "@/lib/auth/permissions";
+import { ResubmitPanel } from "./resubmit-panel";
+import { RetryAnalysis } from "./retry-analysis";
 import { AiAnalysisResults } from "./ai-analysis-results";
 import { OutputDownloads } from "./output-downloads";
 
 const pretty = (k: string) => k.replace(/[_.]/g, " ").replace(/\s+/g, " ").trim().replace(/^\w/, (c) => c.toUpperCase());
 
-function Stage({ n, title, Icon, pill, first, last, children }: {
-  n: number; title: string; Icon: typeof FileText; pill?: React.ReactNode; first?: boolean; last?: boolean; children: React.ReactNode;
-}) {
-  return (
-    <div className="flex gap-3.5 items-stretch">
-      <div className="relative w-8 flex-none flex justify-center">
-        {!first && <div className="absolute top-0 h-4 w-0.5 bg-border" />}
-        {!last && <div className="absolute top-4 bottom-0 w-0.5 bg-border" />}
-        <div className="relative z-10 w-8 h-8 rounded-full bg-primary/10 text-primary flex items-center justify-center"><Icon className="w-4 h-4" /></div>
-      </div>
-      <div className="flex-1 min-w-0 pb-6">
-        <div className="flex items-center gap-2 mb-2 flex-wrap">
-          <span className="text-[10px] font-medium uppercase tracking-[0.06em] text-muted-foreground">{n} · {title}</span>
-          {pill}
-        </div>
-        {children}
-      </div>
-    </div>
-  );
-}
-const Pill = ({ children, cls }: { children: React.ReactNode; cls: string }) => (
-  <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${cls}`}>{children}</span>
-);
-
-type ValidationOutcome = { ok: boolean | null; severity: string | null };
 type CalculationItemOutcome = { values: Record<string, string>; value: number | null; status: "ok" | "missing" | "error"; reason?: string };
 type CalculationOutcome = { key: string; label: string; value: number | null; status: "ok" | "missing" | "error"; formula: string; reason?: string; items?: CalculationItemOutcome[] };
 
-/**
- * La severidad sólo describe qué ocurre si la regla falla. El distintivo de la
- * tarjeta debe comunicar primero el resultado que obtuvo en este caso.
- */
-function getRuleOutcomeTag(items: ValidationOutcome[]) {
-  if (items.length > 0 && items.every((item) => item.ok === true)) {
-    return { label: "Correcto", cls: "bg-success/10 text-success" };
-  }
-
-  const failedItem = items.find((item) => item.ok === false);
-  if (failedItem) {
-    const severityTags: Record<string, { label: string; cls: string }> = {
-      block: { label: "Bloqueante", cls: "bg-destructive/10 text-destructive" },
-      warn: { label: "Advertencia", cls: "bg-warning/10 text-warning" },
-      info: { label: "Info", cls: "bg-secondary text-muted-foreground" },
-    };
-    return severityTags[failedItem.severity ?? "warn"] ?? severityTags.warn;
-  }
-
-  return { label: "Por revisar", cls: "bg-secondary text-muted-foreground" };
-}
-
-export default async function ContractCasePage({ params }: { params: Promise<{ id: string }> }) {
+export default async function ContractCasePage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ etapa?: string }> }) {
   const { id } = await params;
+  const { etapa } = await searchParams;
   const session = await getTenantSession({ area: "contracts" });
   // Access tokens are intentionally short lived. Preserve the case URL so the
   // login page can refresh the tenant session and return the user here instead
   // of looking like the case unexpectedly signed them out.
   if (!session) redirect(`/login?returnTo=${encodeURIComponent(`/cases/${id}`)}`);
+  // Same gate as the list of cases: a case stays out of reach once the product is off.
+  if (!(await isProductActive(session.orgId, "contract_intelligence"))) redirect("/dashboard");
 
   const kase = await db.query.contractCases.findFirst({
     where: and(eq(contractCases.id, id), eq(contractCases.organizationId, session.orgId)),
   });
   if (!kase) notFound();
 
-  const [documents, validations, analyses, obligations, validationsEnabled, obligationsEnabled, generationEnabled, approvalFeature, activeFlow, auditRows, users] = await Promise.all([
+  // Dates below are formatted on the server (UTC): they need the client's zone.
+  const timeZone = await orgTimeZone(session.orgId);
+  const [documents, validations, analyses, validationsEnabled, generationEnabled, approvalFeature, activeFlow, auditRows, users] = await Promise.all([
     db.query.contractDocuments.findMany({ where: eq(contractDocuments.caseId, id) }),
     db.query.contractValidations.findMany({ where: eq(contractValidations.caseId, id) }),
     db.query.contractAiAnalysisResults.findMany({ where: eq(contractAiAnalysisResults.caseId, id) }),
-    db.query.contractObligations.findMany({ where: eq(contractObligations.caseId, id), orderBy: [asc(contractObligations.dueDate)] }),
     isFeatureEnabled(session.orgId, "contract_advanced_validations"),
-    isFeatureEnabled(session.orgId, "contract_obligation_tracking"),
     isFeatureEnabled(session.orgId, "contract_document_generation"),
     getFeature(session.orgId, "contract_approval_workflow"),
     kase.flowId ? db.query.contractFlows.findFirst({
       where: and(eq(contractFlows.id, kase.flowId), eq(contractFlows.organizationId, session.orgId)),
       columns: { id: true, name: true, graphJson: true },
     }) : Promise.resolve(null),
+    // Only the events of this case: the page reloads every few seconds while
+    // the case is analysed, and the whole log of the organization was read each time.
     db.query.tenantAuditLog.findMany({
-      where: eq(tenantAuditLog.organizationId, session.orgId),
+      where: and(
+        eq(tenantAuditLog.organizationId, session.orgId),
+        or(eq(tenantAuditLog.resourceId, id), sql`${tenantAuditLog.metadata}->>'caseId' = ${id}`),
+      ),
       columns: { id: true, userId: true, userEmail: true, action: true, resourceId: true, metadata: true, createdAt: true },
       orderBy: [asc(tenantAuditLog.createdAt)],
     }),
@@ -108,6 +78,7 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
     }),
   ]);
 
+  const approvalRules = await caseApprovalRules(session.orgId, id).catch(() => null);
   const parsedFlow = activeFlow ? flowGraphSchema.safeParse(activeFlow.graphJson) : null;
   const configuredValidations = parsedFlow?.success
     ? parsedFlow.data.nodes.filter((node) => node.kind === "validate" || node.kind === "reference_lookup").length
@@ -119,16 +90,15 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
 
   const result = (kase.resultJson ?? {}) as {
     outputKey?: string; outputMime?: string; outputName?: string; missing?: string[];
-    decision?: { action?: string; reason?: string | null; byEmail?: string | null; at?: string | null; override?: boolean } | null;
+    documents?: Array<{ documentId: string; typeWarning?: string }>;
+    decision?: { action?: string; reason?: string | null; byEmail?: string | null; at?: string | null; override?: boolean; support?: { name?: string } } | null;
     calculations?: CalculationOutcome[];
+    documentRequest?: { to: string; reason: string; documents: string[]; message?: string; at: string; byEmail?: string | null; emailSent?: boolean };
+    flow?: { snapshot?: { version?: number | null } };
   };
+  // Versión del flujo con la que se analizó el caso (los casos anteriores al historial no la tienen).
+  const flowVersion = typeof result.flow?.snapshot?.version === "number" ? result.flow.snapshot.version : null;
   const calculations = Array.isArray(result.calculations) ? result.calculations : [];
-  const status = kase.status === "approved" && result.outputKey
-    ? { label: "Aprobado · documento generado", cls: "bg-success/10 text-success" }
-    : kase.status === "generated" && result.decision?.action === "approve"
-      ? { label: "Aprobado · documento generado", cls: "bg-success/10 text-success" }
-      : CONTRACT_CASE_STATUS[kase.status as keyof typeof CONTRACT_CASE_STATUS] ?? { label: contractStatusLabel(kase.status), cls: "bg-secondary text-muted-foreground" };
-
   const docs: CaseDoc[] = documents.map((d) => ({
     id: d.id, originalName: d.originalName, mimeType: d.mimeType, detectedType: d.detectedType,
     extractedJson: (d.extractedJson ?? {}) as Record<string, unknown>,
@@ -137,18 +107,32 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
   }));
 
   // Verdict from validations.
-  let verdict: "ok" | "warn" | "block" | null = validations.length ? "ok" : null;
-  for (const v of validations) {
-    if (v.ok === false && v.severity === "block") { verdict = "block"; break; }
-    if (v.ok !== true && v.severity === "warn" && verdict === "ok") verdict = "warn";
-  }
+  const verdict: "ok" | "warn" | "block" | null = validations.length ? caseVerdict(validations) : null;
   const VERDICT = {
-    ok:    { Icon: ShieldCheck, cls: "bg-success/10 text-success", text: "Sin observaciones" },
-    warn:  { Icon: ShieldAlert, cls: "bg-warning/10 text-warning", text: "Con advertencias" },
-    block: { Icon: ShieldX,     cls: "bg-destructive/10 text-destructive", text: "Con bloqueos" },
+    ok:    { text: "Sin observaciones" },
+    warn:  { text: "Con advertencias" },
+    block: { text: "Con bloqueos" },
   };
-  const ruleGroups = new Map<string, typeof validations>();
-  for (const v of validations) { const k = v.ruleName ?? "Validación"; (ruleGroups.get(k) ?? ruleGroups.set(k, []).get(k)!).push(v); }
+  // Hallazgos numerados: bloqueos, luego advertencias, luego lo que no se pudo verificar.
+  const rank = (v: (typeof validations)[number]) => (v.ok === false ? 0 : 2) + (v.severity === "block" ? 0 : 1);
+  const findings: CheckFinding[] = validations
+    .filter((v) => findingLevel(v) !== null)
+    .sort((a, b) => rank(a) - rank(b) || a.id - b.id)
+    .map((v) => ({
+      id: v.id, ruleName: v.ruleName ?? "Validación", severity: (v.severity ?? "warn") as CheckFinding["severity"], subject: v.subject, status: v.status,
+      ok: v.ok, reason: v.reason ?? "", ai: v.subject === "Análisis con IA",
+      // Casos anteriores a la evidencia por página: solo la cita en texto.
+      evidence: Array.isArray(v.evidenceJson) ? v.evidenceJson as EvidenceRef[] : evidenceFromQuotes([v.citation]),
+    }));
+  const passedChecks = validations.filter((v) => v.ok === true).map((v) => ({ id: v.id, ruleName: v.ruleName ?? "Validación", subject: v.subject, status: v.status }));
+  // Informative rules that did not pass: never a finding (the header and the
+  // stage already say so), but listed apart so nothing the analysis saw is hidden.
+  const infoNotes = validations.filter((v) => v.ok !== true && findingLevel(v) === null)
+    .map((v) => ({ id: v.id, ruleName: v.ruleName ?? "Validación", subject: v.subject, reason: v.reason ?? "", verified: v.ok !== null }));
+  const checkDocs = docs.map((d) => ({
+    id: d.id, name: d.originalName || d.detectedType || "Documento",
+    kind: ((d.mimeType ?? "").includes("pdf") ? "pdf" : (d.mimeType ?? "").startsWith("image/") ? "image" : "other") as "pdf" | "image" | "other",
+  }));
 
   const totalFields = docs.reduce((a, d) => a + Object.keys(d.extractedJson).length, 0);
   const userNames = new Map(users.map((user) => [user.id, user.fullName || user.email]));
@@ -179,155 +163,179 @@ export default async function ContractCasePage({ params }: { params: Promise<{ i
   }
   activity.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
+  // ── Etapas: son la navegación del caso; Actividad va aparte ─────────────
+  const decided = result.decision?.action === "approve" || result.decision?.action === "reject" || kase.status === "approved" || kase.status === "rejected";
+  const rejected = result.decision?.action === "reject" || kase.status === "rejected";
+  const blocks = validations.filter((v) => findingLevel(v) === "block").length;
+  const warns = validations.filter((v) => findingLevel(v) === "warn").length;
+  const unknownDocs = docs.filter((d) => !d.detectedType || d.detectedType === "unknown").length;
+  // Documentos subidos en una casilla que la IA no reconoce como de ese tipo.
+  const typeWarnings = (Array.isArray(result.documents) ? result.documents : [])
+    .filter((d) => d.typeWarning)
+    .map((d) => ({ name: docs.find((x) => x.id === d.documentId)?.originalName ?? "Un documento", text: d.typeWarning! }));
+  // "Por decidir" only where someone decides: without the approval workflow an
+  // analysed case is finished ("Analizado") and nothing waits on anyone.
+  const analysed = kase.status === "validated" || kase.status === "review";
+  const deciding = analysed && approvalFeature.isEnabled;
+  const waitingDocs = kase.status === "awaiting_documents";
+  const stages: Stage[] = [
+    { key: "docs", label: "Documentos", detail: isProcessing ? "Leyendo…" : `${totalFields} datos · ${docs.length} documento${docs.length === 1 ? "" : "s"}`, state: isProcessing ? "run" : kase.status === "failed" ? "err" : unknownDocs || typeWarnings.length ? "warn" : "ok", href: "?etapa=docs" },
+    calculations.length
+      ? { key: "calc", label: "Cálculos", detail: `${calculations.length} resultado${calculations.length === 1 ? "" : "s"}`, state: calculations.every((c) => c.status === "ok") ? "ok" : "warn", href: "?etapa=calc" }
+      : { key: "calc", label: "Cálculos", detail: "Sin cálculos", state: "off" },
+    !validationsEnabled
+      ? { key: "checks", label: "Validaciones", detail: "No aplica", state: "off" }
+      : isProcessing ? { key: "checks", label: "Validaciones", detail: "Pendiente", state: "off" }
+      : { key: "checks", label: "Validaciones", detail: blocks ? `${blocks} bloqueo${blocks === 1 ? "" : "s"}${warns ? ` · ${warns} a revisar` : ""}` : warns ? `${warns} a revisar` : validations.length ? "Sin observaciones" : "Sin reglas", state: blocks ? "err" : warns ? "warn" : "ok", href: "?etapa=checks" },
+    decided
+      ? { key: "dec", label: "Decisión", detail: [rejected ? "Rechazado" : "Aprobado", result.decision?.byEmail].filter(Boolean).join(" · "), state: rejected ? "err" : "ok", href: "?etapa=dec" }
+      : waitingDocs ? { key: "dec", label: "Decisión", detail: "Esperando documentos", state: "now", href: "?etapa=dec" }
+      : !approvalFeature.isEnabled ? { key: "dec", label: "Decisión", detail: "No aplica", state: "off" }
+      : { key: "dec", label: "Decisión", detail: deciding ? "Pendiente" : "Después del análisis", state: deciding ? "now" : "off", href: deciding ? "?etapa=dec" : undefined },
+    !generationEnabled
+      ? { key: "doc", label: "Documento", detail: "No aplica", state: "off" }
+      : result.outputKey ? { key: "doc", label: "Documento", detail: "Generado", state: "ok", href: "?etapa=doc" }
+      : { key: "doc", label: "Documento", detail: approvalFeature.isEnabled ? "Al aprobar" : "Al terminar", state: "off", href: analysed || decided ? "?etapa=doc" : undefined },
+  ];
+  const valid = new Set([...stages.filter((st) => st.href).map((st) => st.key), "activity"]);
+  const fallback = isProcessing || kase.status === "failed" ? "docs"
+    : decided ? (result.outputKey ? "doc" : "dec")
+    : validationsEnabled && validations.length ? "checks" : "docs";
+  const tab = etapa && valid.has(etapa) ? etapa : fallback;
+  const caseTitle = kase.title || `Caso ${kase.id.slice(0, 8)}`;
+  const statusPill = analysed
+    ? <StatusPill tone={blocks ? "err" : warns ? "warn" : "ok"}>{deciding ? "Por decidir" : "Analizado"}{blocks ? ` · ${blocks} bloqueo${blocks === 1 ? "" : "s"}` : ""}</StatusPill>
+    : <CaseStatusPill status={kase.status} detail={(kase.status === "approved" || kase.status === "generated") && result.outputKey ? "documento generado" : null} />;
+  const creator = kase.createdBy ? userNames.get(kase.createdBy) : null;
+  const isWord = result.outputMime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
   return (
-    <div className="flex-1 overflow-y-auto p-6">
-      <div className="max-w-3xl mx-auto space-y-5">
-        {/* Header */}
-        <div>
-          <Link href="/cases" className="text-xs text-muted-foreground hover:text-foreground">← Casos</Link>
-          <div className="flex items-center gap-3 mt-2 flex-wrap">
-            <h1 className="text-lg font-semibold tracking-[-0.01em] text-foreground">{kase.title || `Caso ${kase.id.slice(0, 8)}`}</h1>
-            <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full ${status.cls}`}>{status.label}</span>
-            {validationsEnabled && verdict && (() => { const b = VERDICT[verdict]; return <span className={`inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full ml-auto ${b.cls}`}><b.Icon className="w-3.5 h-3.5" /> {b.text}</span>; })()}
-          </div>
-          <p className="text-xs text-muted-foreground mt-1 tabular-nums">Creado el {new Date(kase.createdAt).toLocaleString("es-MX")}</p>
-          {activeFlow && (
-            <div className="mt-3 flex items-start gap-2 rounded-lg border border-border bg-card px-3 py-2.5">
-              <Workflow className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
-              <div className="min-w-0">
-                <p className="text-[10px] font-medium uppercase tracking-[0.06em] text-muted-foreground">Flujo aplicado</p>
-                <p className="text-xs font-semibold text-foreground">{activeFlow.name}{configuredValidations !== null ? <span className="font-normal text-muted-foreground"> · {configuredValidations} controles</span> : null}</p>
-              </div>
+    <div className="flex flex-1 flex-col overflow-hidden">
+      {isProcessing && <CaseProcessingRefresh />}
+      <div className="px-6 pt-5.5 md:px-8">
+        <nav aria-label="Ruta" className="text-[13px]"><Link href="/cases" className="text-link hover:underline">Casos</Link><span className="text-muted-foreground"> / {activeFlow?.name ?? "Sin flujo"}</span></nav>
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="mt-1.5 text-2xl font-semibold leading-tight tracking-[-0.025em]">{caseTitle}</h1>
+          {statusPill}
+        </div>
+        <p className="mt-1.5 text-[13px] text-muted-foreground">
+          {[activeFlow ? `${activeFlow.name}${flowVersion ? ` v${flowVersion}` : ""}${configuredValidations !== null ? ` · ${configuredValidations} control${configuredValidations === 1 ? "" : "es"}` : ""}` : null, `creado ${new Date(kase.createdAt).toLocaleString("es-MX", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone })}`, creator ? `por ${creator}` : null].filter(Boolean).join(" · ")}
+        </p>
+        <StageNav className="mt-4.5" label="Etapas del caso" stages={stages} current={tab} aux={[{ key: "activity", label: "Actividad", href: "?etapa=activity", count: activity.length }]} />
+      </div>
+
+      <div className="mt-4.5 min-h-0 flex-1 overflow-y-auto border-t border-border">
+        <div className="flex max-w-[1100px] flex-col gap-5 px-6 py-5.5 md:px-8">
+          {isProcessing && (
+            <Notice tone="info" title="Analizando el caso">
+              Esta página se actualiza sola; puedes salir y volver cuando quieras.
+              {archiveProgress.length > 0 && (
+                <ul className="mt-2 space-y-1">{archiveProgress.map((d) => <li key={d.originalName}>{d.originalName}: {d.pageCount ? `${d.indexedPages} de ${d.pageCount} páginas` : "preparando"}</li>)}</ul>
+              )}
+            </Notice>
+          )}
+          {kase.status === "failed" && (
+            <div role="alert" className="rounded-xl border border-[#E9C6C2] bg-tone-err-bg px-5 py-4">
+              <b className="block text-base font-semibold text-tone-err">El análisis no terminó</b>
+              <p className="mt-1 text-[13.5px]">{friendlyError(kase.errorMessage?.split("\n")[0]) ?? "Ocurrió un error al analizar los documentos."}</p>
+              <p className="mt-2 text-[13px] text-muted-foreground">Si fue una falla pasajera, vuelve a analizarlo. Si se repite, revisa que los documentos sean los que pide el flujo o pide a un administrador que revise el flujo.</p>
+              {canAccessTenantArea(session.role, { area: "contracts", permission: "write" }) && <RetryAnalysis caseId={kase.id} />}
             </div>
           )}
-        </div>
 
-        <CaseActions caseId={kase.id} caseTitle={kase.title || `Caso ${kase.id.slice(0, 8)}`} status={kase.status} verdict={validationsEnabled ? verdict : null} decision={result.decision} hasOutput={Boolean(result.outputKey)} generationEnabled={generationEnabled} approvalEnabled={approvalFeature.isEnabled} allowOverride={approvalFeature.config.allow_override !== false} canManage={canApprove(session.role, "contracts")} />
-        {isProcessing && <><CaseProcessingRefresh /><div className="text-xs text-warning"><p>El caso está en proceso. Esta página se actualiza automáticamente.</p>{archiveProgress.map((document) => <p key={document.originalName} className="mt-1 text-muted-foreground">{document.originalName}: {document.pageCount ? `${document.indexedPages} de ${document.pageCount} páginas indexadas` : "preparando índice"}</p>)}</div></>}
-        {kase.errorMessage && <div className="rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-xs px-3 py-2">{kase.errorMessage}</div>}
+          {waitingDocs && (
+            <ResubmitPanel caseId={kase.id} request={result.documentRequest ?? null}
+              documents={docs.map((d) => ({ id: d.id, label: d.originalName || d.detectedType || "Documento" }))}
+              canWrite={canAccessTenantArea(session.role, { area: "contracts", permission: "write" })}
+              canCancel={canApprove(session.role, "contracts")} />
+          )}
 
-        {/* Recorrido por etapas */}
-        <div className="pt-1">
-          <Stage n={1} title="Entrada" Icon={FileInput} first pill={<Pill cls="bg-secondary text-muted-foreground">{docs.length} documento(s)</Pill>}>
-            {docs.length === 0 ? <p className="text-xs text-muted-foreground">Sin documentos.</p> : (
-              <div className="flex flex-wrap gap-2">
-                {docs.map((d) => (
-                  <span key={d.id} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs text-foreground max-w-full">
-                    <FileText className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-                    <span className="truncate">{d.originalName || "Documento"}</span>
-                    {d.detectedType && <span className="text-[10px] text-primary bg-primary/10 px-1.5 py-0.5 rounded-full shrink-0">{d.detectedType}</span>}
-                  </span>
-                ))}
-              </div>
-            )}
-          </Stage>
+          {tab === "docs" && typeWarnings.length > 0 && (
+            <Notice tone="warn" title={typeWarnings.length === 1 ? "Un documento no parece del tipo con que se subió" : `${typeWarnings.length} documentos no parecen del tipo con que se subieron`}>
+              <ul className="mt-1 space-y-0.5">{typeWarnings.map((w) => <li key={w.name}><b className="font-medium">{w.name}:</b> {w.text}</li>)}</ul>
+              <p className="mt-1">Si es el documento equivocado, pide el correcto o crea el caso de nuevo.</p>
+            </Notice>
+          )}
+          {tab === "docs" && <CaseDocuments documents={docs} canTrain={session.role === "admin"} />}
 
-          <Stage n={2} title="Extracción" Icon={ListChecks} last={!calculations.length && !validationsEnabled && !obligationsEnabled && !generationEnabled} pill={<Pill cls="bg-secondary text-muted-foreground">{totalFields} datos</Pill>}>
-            <CaseDocuments documents={docs} canTrain={session.role === "admin"} />
-          </Stage>
-
-          {calculations.length > 0 && <Stage n={3} title="Cálculos" Icon={Calculator} last={!validationsEnabled && !obligationsEnabled && !generationEnabled}
-            pill={<Pill cls={calculations.every((item) => item.status === "ok") ? "bg-success/10 text-success" : "bg-warning/10 text-warning"}>{calculations.length} resultado{calculations.length === 1 ? "" : "s"}</Pill>}>
-            <div className="overflow-hidden rounded-xl border border-border bg-card divide-y divide-border">
-              {calculations.map((item) => (
-                <div key={item.key} className="flex flex-wrap items-start gap-3 px-5 py-3">
-                  <div className="min-w-0 flex-1"><p className="text-xs font-semibold text-foreground">{item.label}</p><p className="mt-0.5 text-[11px] text-muted-foreground">{item.formula}{item.reason ? ` · ${item.reason}` : ""}</p></div>
-                  {item.items?.length ? <span className={`shrink-0 text-xs font-semibold tabular-nums ${item.status === "ok" ? "text-foreground" : "text-warning"}`}>{item.items.length} fila{item.items.length === 1 ? "" : "s"}</span> : <span className={`shrink-0 text-xs font-semibold tabular-nums ${item.status === "ok" ? "text-foreground" : "text-warning"}`}>{item.value === null ? "Por revisar" : item.value.toLocaleString("es-CO", { maximumFractionDigits: 6 })}</span>}
-                  {item.items?.length ? <div className="basis-full space-y-1 border-t border-border/70 pt-2 text-[11px] text-muted-foreground">{item.items.map((entry, index) => <div key={index} className="flex items-center justify-between gap-3"><span className="truncate">{entry.values.amparo || entry.values.nombre || entry.values.concepto || `Elemento ${index + 1}`}</span><span className={entry.status === "ok" ? "tabular-nums text-foreground" : "text-warning"}>{entry.value === null ? "Por revisar" : entry.value.toLocaleString("es-CO", { maximumFractionDigits: 6 })}</span></div>)}</div> : null}
-                </div>
-              ))}
-            </div>
-          </Stage>}
-
-          {validationsEnabled && <Stage n={calculations.length ? 4 : 3} title="Validación" Icon={ShieldCheck} last={!obligationsEnabled && !generationEnabled}
-            pill={isProcessing
-              ? <Pill cls="bg-warning/10 text-warning">pendiente</Pill>
-              : verdict ? (() => { const b = VERDICT[verdict]; return <Pill cls={b.cls}>{b.text}</Pill>; })() : <Pill cls="bg-secondary text-muted-foreground">sin reglas</Pill>}>
-            {validations.length === 0 ? (
-              <div className="bg-card border border-border rounded-xl px-5 py-4">
-                {isProcessing ? (
-                  <p className="text-xs text-muted-foreground">{configuredValidations && configuredValidations > 0 ? `Este flujo tiene ${configuredValidations} regla${configuredValidations === 1 ? "" : "s"} configurada${configuredValidations === 1 ? "" : "s"}. ` : "El flujo se está preparando. "}Las validaciones se ejecutarán cuando terminen de clasificarse y extraerse los documentos.</p>
-                ) : (
-                  <p className="text-xs text-muted-foreground">Este flujo no tiene reglas de validación. Agrégalas en el editor del flujo (nodos de Validación) para revisar firmantes, montos, cláusulas, fechas, etc.</p>
-                )}
-              </div>
-            ) : (
-              <div className="bg-card border border-border rounded-xl divide-y divide-border overflow-hidden">
-                {[...ruleGroups.entries()].map(([ruleName, items]) => {
-                  const outcomeTag = getRuleOutcomeTag(items);
-                  return (
-                    <div key={ruleName} className="px-5 py-3">
-                      <div className="flex items-center gap-2 mb-1.5">
-                        <p className="text-xs font-semibold text-foreground flex-1 min-w-0 truncate">{ruleName}</p>
-                        <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded shrink-0 ${outcomeTag.cls}`}>{outcomeTag.label}</span>
-                      </div>
-                      <div className="space-y-1.5">
-                        {items.map((v) => {
-                          const Icon = v.ok === true ? CheckCircle2 : v.ok === false ? XCircle : MinusCircle;
-                          const cls = v.ok === true ? "text-success" : v.ok === false ? "text-destructive" : "text-muted-foreground";
-                          return (
-                            <div key={v.id} className="flex items-start gap-2">
-                              <Icon className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${cls}`} />
-                              <div className="min-w-0">
-                                <p className="text-[11px] text-foreground break-words"><span className="font-medium">{v.subject}</span>{v.status ? ` · ${contractStatusLabel(v.status)}` : ""}</p>
-                                {v.reason && <p className="text-[11px] text-muted-foreground break-words">{v.reason}</p>}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
+          {tab === "calc" && (
+            <section>
+              <SectionTitle title="Cálculos" aside="con su procedencia" />
+              <ul>
+                {calculations.map((item) => (
+                  <li key={item.key} className="border-b border-line-soft py-3.5 last:border-0">
+                    <div className="flex flex-wrap items-baseline justify-between gap-3">
+                      <span className="min-w-0"><b className="block text-sm font-semibold">{item.label}</b><span className="text-[12.5px] text-muted-foreground">{item.formula}{item.reason ? ` · ${item.reason}` : ""}</span></span>
+                      <b className={`tabular-nums ${item.status === "ok" ? "" : "text-tone-warn"}`}>{item.items?.length ? `${item.items.length} fila${item.items.length === 1 ? "" : "s"}` : item.value === null ? "Por revisar" : item.value.toLocaleString("es-CO", { maximumFractionDigits: 6 })}</b>
                     </div>
-                  );
-                })}
-              </div>
-            )}
-            <AiAnalysisResults analyses={analyses} />
-          </Stage>}
+                    {item.items?.length ? (
+                      <ul className="mt-2 space-y-1 text-[13px] text-muted-foreground">
+                        {item.items.map((entry, index) => (
+                          <li key={index} className="flex justify-between gap-3"><span className="truncate">{entry.values.amparo || entry.values.nombre || entry.values.concepto || `Elemento ${index + 1}`}</span><span className={entry.status === "ok" ? "tabular-nums text-foreground" : "text-tone-warn"}>{entry.value === null ? "Por revisar" : entry.value.toLocaleString("es-CO", { maximumFractionDigits: 6 })}</span></li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
 
-          {obligationsEnabled && <Stage n={(validationsEnabled ? 4 : 3) + (calculations.length ? 1 : 0)} title="Obligaciones" Icon={CalendarClock} last={!generationEnabled}
-            pill={<Pill cls="bg-secondary text-muted-foreground">{obligations.length}</Pill>}>
-            {obligations.length === 0 ? (
-              <div className="bg-card border border-border rounded-xl px-5 py-4">
-                <p className="text-xs text-muted-foreground">No se detectaron fechas u obligaciones para este caso.</p>
-              </div>
-            ) : (
-              <div className="bg-card border border-border rounded-xl overflow-hidden">
-                <ul className="divide-y divide-border">
-                  {obligations.map((o) => (
-                    <li key={o.id} className="px-5 py-2 flex items-center gap-2">
-                      <span className="text-[11px] text-foreground flex-1 min-w-0 truncate">{o.description ?? o.type ?? "Obligación"}</span>
-                      <span className="text-[11px] text-muted-foreground tabular-nums shrink-0">{o.dueDate ? new Date(o.dueDate).toLocaleDateString("es-MX") : "—"}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </Stage>}
-
-          {generationEnabled && <Stage n={(validationsEnabled ? 3 : 2) + (obligationsEnabled ? 1 : 0) + (calculations.length ? 1 : 0) + 1} title="Generación" Icon={FileType} last
-            pill={result.outputKey ? <Pill cls="bg-success/10 text-success">listo</Pill> : <Pill cls="bg-secondary text-muted-foreground">pendiente</Pill>}>
-            <div className="bg-card border border-border rounded-xl px-5 py-4">
-              {result.outputKey ? (
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2 rounded-lg border border-border bg-secondary/40 px-3 py-2.5">
-                    <FileText className="w-4 h-4 text-primary shrink-0" />
-                    <span className="text-xs text-foreground flex-1 truncate">{result.outputMime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ? "Documento listo para descarga" : "Documento PDF"}</span>
-                    <OutputDownloads caseId={kase.id} hasWord={result.outputMime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document"} />
-                  </div>
-                  {result.missing && result.missing.length > 0 && (
-                    <p className="text-[11px] text-warning">Campos sin dato ({result.missing.length}): {result.missing.slice(0, 6).map(pretty).join(", ")}{result.missing.length > 6 ? "…" : ""}</p>
-                  )}
-                </div>
+          {tab === "checks" && (
+            <section className="flex flex-col gap-4">
+              <SectionTitle title="Validaciones" aside={verdict ? VERDICT[verdict].text : undefined} />
+              {validations.length === 0 ? (
+                <p className="text-sm text-muted-foreground">Este flujo no tiene controles. Se agregan en el editor del flujo.</p>
               ) : (
-                <p className="text-xs text-muted-foreground">{approvalFeature.isEnabled
-                  ? "El documento se habilitará cuando un administrador apruebe el caso."
-                  : "El documento se habilitará cuando termine la validación."}</p>
+                <CaseChecks docs={checkDocs} findings={findings} passed={passedChecks} notes={infoNotes} />
               )}
-            </div>
-          </Stage>}
-        </div>
+              <AiAnalysisResults analyses={analyses} />
+            </section>
+          )}
 
-        <CaseActivity items={activity} />
+          {!waitingDocs && (tab === "dec" || (tab === "checks" && deciding)) && (
+            <section className={tab === "checks" ? "border-t border-line-soft pt-4" : ""}>
+              {tab === "dec" && <SectionTitle title="Decisión" className="mb-3" aside={approvalRules ? `${approvalRules.done.length} de ${approvalRules.steps.length} aprobaci${approvalRules.steps.length === 1 ? "ón" : "ones"}` : undefined} />}
+              {approvalRules && (
+                <ol className="mb-4 flex flex-col gap-2">
+                  {approvalRules.steps.map((st) => {
+                    const signed = approvalRules.done.find((d) => d.stepKey === st.key);
+                    return (
+                      <li key={st.key} className="flex flex-wrap items-center justify-between gap-2 rounded-[10px] border border-border bg-card px-4 py-2.5 text-[13.5px]">
+                        <span><b className="font-semibold">{st.label}</b><span className="text-muted-foreground"> · {st.approvers.mode === "any" ? "cualquier persona con permiso" : `${st.approvers.userIds.length} persona${st.approvers.userIds.length === 1 ? "" : "s"} asignada${st.approvers.userIds.length === 1 ? "" : "s"}`}</span></span>
+                        {signed
+                          ? <StatusPill tone="ok">Aprobó {userNames.get(signed.byId) ?? signed.byEmail ?? "—"} · {new Date(signed.at).toLocaleString("es-MX", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone })}</StatusPill>
+                          : <StatusPill tone="warn">Pendiente</StatusPill>}
+                      </li>
+                    );
+                  })}
+                </ol>
+              )}
+              <CaseActions caseId={kase.id} caseTitle={caseTitle} status={kase.status} verdict={validationsEnabled ? verdict : null} decision={result.decision} hasOutput={Boolean(result.outputKey)} generationEnabled={generationEnabled} approvalEnabled={approvalFeature.isEnabled} allowOverride={approvalFeature.config.allow_override !== false} canManage={canApprove(session.role, "contracts")} />
+            </section>
+          )}
+
+          {tab === "doc" && (
+            <section className="flex flex-col gap-3">
+              <SectionTitle title="Documento generado" />
+              {result.outputKey ? (
+                <>
+                  <div className="flex flex-wrap items-center gap-3 rounded-xl border border-[#BFE3D0] bg-tone-ok-bg px-5 py-4">
+                    <FileText aria-hidden className="size-5 text-tone-ok" />
+                    <span className="min-w-0 flex-1 text-[13.5px] font-semibold">{isWord ? "Documento en Word listo" : "Documento PDF listo"}</span>
+                    <OutputDownloads caseId={kase.id} hasWord={isWord} />
+                  </div>
+                  {result.missing && result.missing.length > 0 && <p className="text-[13px] text-tone-warn">Quedaron sin dato ({result.missing.length}): {result.missing.slice(0, 6).map(pretty).join(", ")}{result.missing.length > 6 ? "…" : ""}</p>}
+                </>
+              ) : (
+                <p className="text-sm text-muted-foreground">{approvalFeature.isEnabled ? "Se genera cuando el caso se aprueba." : "Se genera al terminar la validación."}</p>
+              )}
+              {!approvalFeature.isEnabled && <CaseActions caseId={kase.id} caseTitle={caseTitle} status={kase.status} verdict={validationsEnabled ? verdict : null} decision={result.decision} hasOutput={Boolean(result.outputKey)} generationEnabled={generationEnabled} approvalEnabled={false} allowOverride={false} canManage={canApprove(session.role, "contracts")} />}
+            </section>
+          )}
+
+          {tab === "activity" && <CaseActivity items={activity} timeZone={timeZone} />}
+        </div>
       </div>
     </div>
   );

@@ -2,6 +2,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { contractArchiveDocuments, contractCases, contractDocuments, contractValidations } from "@/db/schema";
 import { calculateContractRevalidation } from "./revalidate";
+import { validationRows } from "./validation-rows";
 import { logAudit } from "@/lib/audit/log";
 
 /** Refreshes undecided cases when an older missing reference is resolved. */
@@ -15,12 +16,13 @@ export async function syncArchiveCases(sourceArchiveIds: string[]): Promise<void
     const kase = await db.query.contractCases.findFirst({ where: eq(contractCases.id, caseDoc.caseId) });
     if (!kase || !["validated", "review"].includes(kase.status)) continue;
     const recalculation = await calculateContractRevalidation(kase.id);
+    const rows = await validationRows(kase.id, recalculation.validations, recalculation.documentIds);
     let updated = false;
     await db.transaction(async (tx) => {
       const [locked] = await tx.select({ status: contractCases.status, updatedAt: contractCases.updatedAt }).from(contractCases).where(and(eq(contractCases.id, kase.id), eq(contractCases.organizationId, kase.organizationId))).for("update");
       if (!locked || !["validated", "review"].includes(locked.status) || locked.updatedAt.getTime() !== kase.updatedAt.getTime()) return;
       await tx.delete(contractValidations).where(eq(contractValidations.caseId, kase.id));
-      if (recalculation.validations.length > 0) await tx.insert(contractValidations).values(recalculation.validations.map((validation) => ({ caseId: kase.id, ruleName: validation.ruleName, severity: validation.severity, subject: validation.subject, status: validation.status, ok: validation.ok, reason: validation.reason, checksJson: validation.checks, citation: validation.citation })));
+      if (rows.length > 0) await tx.insert(contractValidations).values(rows);
       await tx.update(contractCases).set({ resultJson: recalculation.resultJson, updatedAt: new Date() }).where(eq(contractCases.id, kase.id));
       updated = true;
     });

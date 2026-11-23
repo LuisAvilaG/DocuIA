@@ -1,4 +1,5 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
+import { requireAdminSession } from "@/lib/auth/admin";
 import { and, eq, gte, sql } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { db } from "@/lib/db";
@@ -9,6 +10,7 @@ import { SectionTitle, num } from "@/components/admin/ui";
 const WEEKS = 8;
 
 export default async function ClientUsagePage({ params }: { params: Promise<{ id: string }> }) {
+  if ((await requireAdminSession()).error) redirect("/admin/login");
   const { id } = await params;
   const facts = await loadOneOrgFacts(id);
   if (!facts) notFound();
@@ -43,7 +45,9 @@ export default async function ClientUsagePage({ params }: { params: Promise<{ id
     { key: "reports", label: "Informes de gastos", rows: reports, show: facts.products.some((p) => p.key === "expense_management" && p.status !== "disabled") },
   ].filter((s) => s.show || s.rows.length > 0);
   const a = ai[0];
-  const fallbackPct = Number(a?.primary) > 0 ? Math.round((Number(a.fallback) / Number(a.primary)) * 100) : null;
+  // A document counts as primary or as fallback, never both: the share is over their sum.
+  const aiCalls = Number(a?.primary ?? 0) + Number(a?.fallback ?? 0);
+  const fallbackPct = aiCalls > 0 ? Math.round((Number(a?.fallback ?? 0) / aiCalls) * 100) : null;
   const statusMap = new Map<string, number>(byStatus.map((s) => [s.status, Number(s.n)]));
 
   return (
@@ -83,7 +87,7 @@ export default async function ClientUsagePage({ params }: { params: Promise<{ id
         <section>
           <SectionTitle>Documentos AP por estado (8 semanas)</SectionTitle>
           <ul className="mt-3 grid grid-cols-2 gap-x-8 text-[13px]">
-            {["completed", "review", "pending_approval", "awaiting_receipt", "processing", "failed", "uploaded", "extracting"].filter((k) => statusMap.has(k)).map((k) => (
+            {["completed", "review", "pending_approval", "awaiting_receipt", "processing", "approved", "failed", "uploaded", "extracting"].filter((k) => statusMap.has(k)).map((k) => (
               <li key={k} className="flex justify-between py-1.5 border-b border-border/60"><span className="text-muted-foreground">{k}</span><span className="tabular-nums">{num(statusMap.get(k) ?? 0)}</span></li>
             ))}
           </ul>

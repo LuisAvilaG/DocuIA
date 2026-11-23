@@ -3,8 +3,10 @@ import { getTenantSession } from "@/lib/auth/jwt";
 import { requireApAutomation } from "@/lib/products";
 import { db } from "@/lib/db";
 import { itemMappings, subsidiaries } from "@/db/schema";
-import { eq, inArray } from "drizzle-orm";
+import { desc, eq, inArray } from "drizzle-orm";
 import { MappingsClient } from "./client";
+
+const MAX_ROWS = 2000;
 import { isFeatureEnabled } from "@/lib/features";
 
 export default async function MappingsPage() {
@@ -29,6 +31,7 @@ export default async function MappingsPage() {
 
   let subs: { id: string; name: string }[] = [];
   let mappings: MappingRow[] = [];
+  let truncated = false;
 
   try {
     subs = await db
@@ -44,7 +47,12 @@ export default async function MappingsPage() {
         .select()
         .from(itemMappings)
         .where(inArray(itemMappings.subsidiaryId, subIds))
-        .limit(500);
+        // Most recent first and in a stable order; the screen says when the
+        // list does not hold everything, since it searches only what it has.
+        .orderBy(desc(itemMappings.updatedAt), desc(itemMappings.id))
+        .limit(MAX_ROWS + 1);
+      truncated = rows.length > MAX_ROWS;
+      rows.length = Math.min(rows.length, MAX_ROWS);
 
       mappings = rows.map(r => ({
         id:                 r.id,
@@ -64,5 +72,5 @@ export default async function MappingsPage() {
     console.error("[mappings]", err);
   }
 
-  return <MappingsClient subsidiaries={subs} mappings={mappings} canManage={session.role === "admin"} />;
+  return <MappingsClient subsidiaries={subs} mappings={mappings} canManage={session.role === "admin"} truncated={truncated} />;
 }

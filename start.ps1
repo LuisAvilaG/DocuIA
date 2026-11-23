@@ -78,7 +78,7 @@ Write-Host "  Login tenant  →  http://localhost:3000/login" -ForegroundColor W
 Write-Host ""
 Write-Host "  ┌─ Superadmin ──────────────────────────────────────" -ForegroundColor DarkCyan
 Write-Host "  │  Email:      admin@docuia.com" -ForegroundColor White
-Write-Host "  │  Contraseña: CONTRASENA-ELIMINADA" -ForegroundColor White
+Write-Host "  │  Contraseña: (la de PLATFORM_ADMIN_PASSWORD en .env.local)" -ForegroundColor White
 Write-Host "  └────────────────────────────────────────────────────" -ForegroundColor DarkCyan
 Write-Host ""
 Write-Host "  ┌─ Demo tenant ─────────────────────────────────────" -ForegroundColor DarkCyan

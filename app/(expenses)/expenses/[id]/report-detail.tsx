@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
+import { formatExpenseTotals } from "@/lib/expense/totals";
 import {
   PlusCircle, Trash2, Receipt, CheckCircle2, XCircle,
   AlertCircle, Clock, Send, Loader2, FileText,
@@ -16,7 +17,7 @@ const STATUS_CONFIG = {
   approved:     { label: "Aprobado",      color: "text-success bg-success/10" },
   rejected:     { label: "Rechazado",     color: "text-destructive bg-destructive/10" },
   syncing:      { label: "Sincronizando", color: "text-primary bg-primary/10" },
-  synced:       { label: "En NetSuite",   color: "text-success bg-success/10" },
+  synced:       { label: "En el ERP",   color: "text-success bg-success/10" },
   exception:    { label: "Error",         color: "text-destructive bg-destructive/10" },
 } as const;
 
@@ -45,20 +46,24 @@ export function ReportDetail({ report, isAdmin, isOwner }: { report: Report; isA
   const [deleting,   setDeleting]   = useState<string | null>(null);
   const [error,      setError]      = useState<string | null>(null);
 
-  const isDraft = report.status === "draft";
-  const total   = report.items.reduce((s, i) => s + parseFloat(i.total ?? "0"), 0);
+  // A draft is edited by its owner (or an administrator), as the API allows:
+  // a reviewer who opens it saw buttons that only answered "No autorizado".
+  const isDraft = report.status === "draft" && (isOwner || isAdmin);
   const cfg     = STATUS_CONFIG[report.status] ?? STATUS_CONFIG.draft;
-  const currencies = [...new Set(report.items.map(i => i.currency ?? "COP"))];
-  const displayCurrency = currencies.length === 1 ? currencies[0] : null;
 
   async function handleSubmit() {
     setSubmitting(true); setError(null);
-    const res  = await fetch(`/api/v1/expenses/reports/${report.id}/submit`, { method: "POST" });
-    const data = await res.json();
-    setSubmitting(false);
-    if (!res.ok) { setError(data.error ?? "Error al enviar"); return; }
-    if (data.syncError) setNotice(data.syncError);
-    router.refresh();
+    try {
+      const res  = await fetch(`/api/v1/expenses/reports/${report.id}/submit`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setError(data.error ?? "Error al enviar"); return; }
+      if (data.syncError) setNotice(data.syncError);
+      router.refresh();
+    } catch {
+      setError("No se pudo conectar con el servidor. Revisa tu conexión e inténtalo de nuevo.");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   async function handleReopen() {
@@ -97,9 +102,9 @@ export function ReportDetail({ report, isAdmin, isOwner }: { report: Report; isA
             <h1 className="text-base font-semibold text-foreground truncate">{report.purpose}</h1>
             {(report.periodStart || report.periodEnd) && (
               <p className="text-xs text-muted-foreground mt-0.5">
-                {report.periodStart && new Date(report.periodStart).toLocaleDateString("es-CO", { day: "2-digit", month: "short" })}
+                {report.periodStart && new Date(report.periodStart).toLocaleDateString("es-CO", { day: "2-digit", month: "short", timeZone: "UTC" })}
                 {report.periodStart && report.periodEnd && " – "}
-                {report.periodEnd && new Date(report.periodEnd).toLocaleDateString("es-CO", { day: "2-digit", month: "short", year: "numeric" })}
+                {report.periodEnd && new Date(report.periodEnd).toLocaleDateString("es-CO", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" })}
               </p>
             )}
           </div>
@@ -200,9 +205,7 @@ export function ReportDetail({ report, isAdmin, isOwner }: { report: Report; isA
           <div className="flex items-center justify-between">
             <span className="text-sm text-muted-foreground">Total del informe</span>
             <span className="text-base font-semibold tabular-nums text-foreground">
-              {displayCurrency
-                ? total.toLocaleString("es-CO", { style: "currency", currency: displayCurrency, maximumFractionDigits: 0 })
-                : total.toLocaleString("es-CO", { maximumFractionDigits: 0 })}
+              {formatExpenseTotals(report.items)}
             </span>
           </div>
           {error && <p className="text-xs text-destructive">{error}</p>}

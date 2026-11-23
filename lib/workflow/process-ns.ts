@@ -1,9 +1,6 @@
-import { db } from "@/lib/db";
-import { nsConnections, organizations } from "@/db/schema";
-import { eq, and } from "drizzle-orm";
 import { processDocument } from "@/lib/netsuite/client";
-import type { NSCredentials } from "@/lib/netsuite/oauth";
-import { decryptField } from "@/lib/crypto/encrypt";
+import { nsCredentials, type NsConnection } from "@/lib/netsuite/connection";
+import type { ErpPostResult } from "@/lib/erp/types";
 
 function normalize(v: unknown): string {
   return String(v ?? "").trim();
@@ -26,6 +23,9 @@ function parseDateForNS(value: string): string {
 }
 
 function toNum(v: unknown): number | null {
+  // Number(null) and Number("") are 0: an amount that was never read must not
+  // reach the ERP as a zero price.
+  if (v === null || v === undefined || v === "") return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }
@@ -91,7 +91,38 @@ function buildRestletBody(payload: Record<string, unknown>): Record<string, unkn
   };
 }
 
-function buildRecordUrl(documentType: string, accountId: string, internalId: string): string {
+// Warnings of the process script that change what was posted. The record is
+// already saved when they arrive, so they are reported, not swallowed.
+const ERP_WARNINGS: Record<string, string> = {
+  CURRENCY_NOT_SET:                "la moneda del documento no se aplicó: quedó en la moneda del proveedor",
+  CURRENCY_NOT_FOUND:              "la moneda del documento no existe en el ERP: quedó en la moneda del proveedor",
+  RATE_NOT_APPLIED:                "un precio no se aplicó",
+  NO_MATCHED_PO_LINE:              "una línea no se encontró en la OC y no se incluyó",
+  LINE_SKIPPED_NO_ITEM:            "una línea sin ítem no se incluyó",
+  EXPENSE_LINE_SKIPPED_NO_ACCOUNT: "una línea de gasto sin cuenta no se incluyó",
+  PO_LINE_FALLBACK:                "una línea no encontró su línea de la OC y se aplicó a otra del mismo ítem",
+  UNIT_NOT_SET:                    "una unidad de medida no se aplicó",
+  CUSTOM_FIELD_NOT_SET:            "un campo adicional no se aplicó",
+  ATTACHMENT_FAILED:               "no se pudo adjuntar el archivo",
+  ATTACHMENT_FOLDER_MISSING:       "no se pudo adjuntar el archivo (falta la carpeta en el ERP)",
+  ATTACHMENTS_OVER_LIMIT:          "solo se adjuntaron los primeros cuatro archivos",
+  EXTERNAL_ID_NOT_SET:             "el registro quedó sin el identificador de DocuIA",
+};
+
+export function erpWarnings(nsData: Record<string, unknown> | null | undefined): string[] {
+  const raw = Array.isArray(nsData?.warnings) ? nsData.warnings : [];
+  const messages = raw
+    .map((w) => ERP_WARNINGS[String((w as { code?: unknown } | null)?.code ?? "")])
+    .filter((m): m is string => Boolean(m));
+  return [...new Set(messages)];
+}
+
+/** Note kept on a posted document whose record was saved with warnings. */
+export function erpWarningNote(warnings: string[]): string | null {
+  return warnings.length ? `Creada en el ERP con avisos: ${warnings.join("; ")}. Revisa el registro en el ERP.` : null;
+}
+
+export function netsuiteRecordUrl(documentType: string, accountId: string, internalId: string): string {
   if (!accountId || !internalId) return "";
   const normalizedId = accountId.replace(/_/g, "-").toLowerCase();
   if (documentType === "purchase_order") {
@@ -100,42 +131,26 @@ function buildRecordUrl(documentType: string, accountId: string, internalId: str
   return `https://${normalizedId}.app.netsuite.com/app/accounting/transactions/vendbill.nl?id=${internalId}`;
 }
 
+/**
+ * Sends a document to the client's ERP, whichever it is (the name is from when
+ * NetSuite was the only one). The client's adapter does the sending.
+ */
 export async function processInNetSuite(
   organizationId: string,
   payload: Record<string, unknown>
-): Promise<{
-  ok: boolean;
-  internalId: string | null;
-  recordUrl: string | null;
-  error: string | null;
-  nsResponse: Record<string, unknown>;
-}> {
-  const org = await db.query.organizations.findFirst({
-    where: eq(organizations.id, organizationId),
-  });
-  if (!org) throw new Error(`Organization ${organizationId} not found`);
+): Promise<ErpPostResult> {
+  // Loaded here and not at the top: the NetSuite adapter imports this module.
+  const { requireErp } = await import("@/lib/erp");
+  return (await requireErp(organizationId)).postDocument(payload);
+}
 
-  const env = org.activeNsEnvironment as "sandbox" | "production";
-
-  const conn = await db.query.nsConnections.findFirst({
-    where: and(
-      eq(nsConnections.organizationId, organizationId),
-      eq(nsConnections.environment, env),
-      eq(nsConnections.isActive, true),
-    ),
-  });
-  if (!conn) throw new Error(`No hay conexión activa con el ERP (${env})`);
+/** NetSuite's way of posting: the process RESTlet builds the bill or purchase order. */
+export async function postToNetSuite(conn: NsConnection, payload: Record<string, unknown>): Promise<ErpPostResult> {
   if (!conn.processScriptId || !conn.processDeployId) {
-    throw new Error("Process script not configured for this organization");
+    throw new Error("El script de proceso del ERP no está configurado en la conexión");
   }
 
-  const creds: NSCredentials = {
-    accountId:      conn.accountId,
-    consumerKey:    decryptField(conn.consumerKey),
-    consumerSecret: decryptField(conn.consumerSecret),
-    tokenId:        decryptField(conn.tokenId),
-    tokenSecret:    decryptField(conn.tokenSecret),
-  };
+  const creds = nsCredentials(conn);
 
   const restletBody = buildRestletBody(payload);
 
@@ -162,6 +177,17 @@ export async function processInNetSuite(
     );
   }
 
+  // Found by vendor + number and not by this document's own id: it is another
+  // record (typed by hand, or the number was misread). Linking to it would mark
+  // this document as posted when nothing was created for it.
+  if (isAlreadyExists && nsData?.matched_by === "document_number") {
+    const found = normalize(nsData?.vendor_bill_internal_id || nsData?.purchase_order_internal_id || "");
+    throw new Error(
+      `Ya existe en el ERP un registro de este proveedor con el número ${normalize(restletBody.invoice_number) || "indicado"}` +
+      `${found ? ` (id ${found})` : ""}; no se creó otro. Revisa el número del documento o el registro existente.`
+    );
+  }
+
   const internalId = normalize(
     nsData?.vendor_bill_internal_id || nsData?.purchase_order_internal_id || nsData?.internal_id || nsData?.id || ""
   ) || null;
@@ -169,13 +195,14 @@ export async function processInNetSuite(
   const documentType = normalize(String(restletBody.document_type ?? "invoice"));
   const recordUrl =
     normalize(nsData?.record_url || nsData?.url || "") ||
-    (internalId ? buildRecordUrl(documentType, conn.accountId, internalId) : null);
+    (internalId ? netsuiteRecordUrl(documentType, conn.accountId, internalId) : null);
 
   return {
     ok: true,
     internalId,
     recordUrl: recordUrl || null,
     error: null,
+    warnings: erpWarnings(nsData),
     nsResponse: nsData,
   };
 }

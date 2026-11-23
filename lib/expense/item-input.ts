@@ -73,11 +73,25 @@ export function resolveAmounts(input: { subtotal?: number | null; taxAmount?: nu
   return { subtotal, taxAmount, retentionAmount, total: input.total };
 }
 
-/** Company-paid invoices (and receipts needing a Documento Equivalente) are Vendor Bills. */
+/**
+ * What the company pays a vendor directly is a Vendor Bill. Only a receipt
+ * that was explicitly marked as not needing a Documento Equivalente stays on
+ * the employee's Expense Report. A document of unknown type (typed in by hand,
+ * or not classified by the reading) is a Vendor Bill too: on the Expense Report
+ * NetSuite would reimburse the employee for something the company paid.
+ */
 export function expenseRecordType(paymentMethod: string, documentType: ExpenseDocumentType, needsDocumentoEquivalente: boolean) {
-  return paymentMethod === "company_pays_vendor" && (documentType === "invoice" || needsDocumentoEquivalente)
+  const receipt = documentType === "receipt" || documentType === "cuenta_cobro";
+  return paymentMethod === "company_pays_vendor" && (!receipt || needsDocumentoEquivalente)
     ? "vendor_bill" as const
     : "expense_report" as const;
+}
+
+const COUNTRY_CURRENCY: Record<string, string> = { CO: "COP", MX: "MXN", PE: "PEN", CL: "CLP", AR: "ARS", EC: "USD", US: "USD", BR: "BRL" };
+
+/** Currency an expense is in when nothing says otherwise: the one of the organization's country. */
+export function defaultExpenseCurrency(countryCode: string | null | undefined): string {
+  return COUNTRY_CURRENCY[(countryCode ?? "").toUpperCase()] ?? "COP";
 }
 
 export function needsDocumentoEquivalente(documentType: ExpenseDocumentType, explicit?: boolean): boolean {

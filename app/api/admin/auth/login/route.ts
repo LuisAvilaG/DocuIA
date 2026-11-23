@@ -29,7 +29,7 @@ async function handlePOST(req: NextRequest) {
       return NextResponse.json({ error: "Email y contraseña son requeridos" }, { status: 400 });
     }
     const { email, password } = parsed.data;
-    const accountKey = accountRateKey("admin-login", email);
+    const accountKey = accountRateKey("admin-login", `${email}|${ip}`);
     const accountLimit = await rateLimit(accountKey, { max: 5, windowSec: 900 });
     if (!accountLimit.ok) return NextResponse.json({ error: "Demasiados intentos" }, { status: 429, headers: { "Retry-After": String(accountLimit.retryAfterSec ?? 900) } });
 

@@ -9,6 +9,8 @@ export interface ProductDef {
   name:                string;
   description:         string;
   icon:                string;          // lucide icon name (used by UI)
+  shortName:           string;          // nombre corto en el selector de producto del menú
+  routePrefixes:       readonly string[]; // rutas del cliente que pertenecen a este producto
   requiresIntegration: boolean;         // needs NetSuite (or similar) at onboarding
   sortOrder:           number;
 }
@@ -19,6 +21,8 @@ export const PRODUCTS: ProductDef[] = [
     name: "AP Automation",
     description: "Procesamiento de facturas y órdenes de compra con IA y sincronización a NetSuite.",
     icon: "FileText",
+    shortName: "Facturas",
+    routePrefixes: ["/dashboard", "/documents", "/workflow", "/history", "/exceptions", "/mappings", "/vendor-rules", "/catalogs", "/invoice-settings", "/metrics", "/statistics"],
     requiresIntegration: true,
     sortOrder: 10,
   },
@@ -27,6 +31,8 @@ export const PRODUCTS: ProductDef[] = [
     name: "Expense Management",
     description: "Captura y aprobación de gastos de empleados con sincronización a NetSuite.",
     icon: "Receipt",
+    shortName: "Gastos",
+    routePrefixes: ["/accounting", "/expenses"],
     requiresIntegration: true,
     sortOrder: 20,
   },
@@ -35,6 +41,8 @@ export const PRODUCTS: ProductDef[] = [
     name: "Contract Intelligence",
     description: "Análisis, validación cruzada y generación documental con IA. Sin integración requerida.",
     icon: "ScrollText",
+    shortName: "Contratos",
+    routePrefixes: ["/contracts", "/cases"],
     requiresIntegration: false,
     sortOrder: 30,
   },
@@ -65,6 +73,8 @@ export const FEATURE_PRODUCT: Record<string, ProductKey> = {
   erp_attachments:        "ap_automation",
   ap_advanced_stats:      "ap_automation",
   sandbox_test_send:      "ap_automation",
+  qa_mode:                "ap_automation",
+  manual_upload:          "ap_automation",
   // Expense Management
   expense_management:      "expense_management",
   expense_approval:        "expense_management",
@@ -75,10 +85,12 @@ export const FEATURE_PRODUCT: Record<string, ProductKey> = {
   contract_advanced_validations: "contract_intelligence",
   contract_document_generation:  "contract_intelligence",
   contract_approval_workflow:    "contract_intelligence",
-  contract_obligation_tracking:  "contract_intelligence",
   contract_metrics:              "contract_intelligence",
   contract_reference_archive:    "contract_intelligence",
   contract_large_documents:      "contract_intelligence",
+  contract_flow_versions:        "contract_intelligence",
+  contract_approval_rules:       "contract_intelligence",
+  contract_document_requests:    "contract_intelligence",
 };
 
 // Platform features (product_key = null): webhook_system, api_keys,
@@ -97,6 +109,7 @@ export interface NavModule {
   feature?:   string;    // only shown if this feature is enabled
   adminOnly?: boolean;   // only shown to org admins
   roles?:     readonly string[]; // only shown to these roles (admin always sees it)
+  group?:     "config";          // se lista bajo «Configuración» en el menú
 }
 
 // Tenant permission area each product's section belongs to.
@@ -108,32 +121,40 @@ export const PRODUCT_AREA: Record<ProductKey, "documents" | "expenses" | "contra
 
 export const PRODUCT_MODULES: Record<ProductKey, NavModule[]> = {
   ap_automation: [
-    { href: "/dashboard",   label: "Dashboard",    icon: "LayoutDashboard" },
-    { href: "/workflow",    label: "Workflow",     icon: "FileUp" },
-    { href: "/history",     label: "Historial",    icon: "Clock" },
-    { href: "/exceptions",  label: "Excepciones",  icon: "AlertTriangle", feature: "exception_queue" },
-    { href: "/mappings",    label: "Mapeos",       icon: "GitMerge",      feature: "auto_mapping" },
-    { href: "/vendor-rules", label: "Reglas de proveedores", icon: "ListChecks", feature: "vendor_rules", adminOnly: true },
-    { href: "/catalogs",    label: "Catálogos",    icon: "Database" },
-    { href: "/statistics",  label: "Estadísticas", icon: "BarChart3",     feature: "advanced_analytics" },
+    { href: "/dashboard",    label: "Hoy",          icon: "LayoutDashboard" },
+    { href: "/documents",    label: "Documentos",   icon: "FileText" },
+    { href: "/exceptions",   label: "Excepciones",  icon: "AlertTriangle", feature: "exception_queue" },
+    { href: "/metrics",      label: "Métricas",     icon: "BarChart3",     feature: "advanced_analytics" },
+    { href: "/vendor-rules", label: "Reglas de proveedores", icon: "ListChecks", feature: "vendor_rules", adminOnly: true, group: "config" },
+    { href: "/mappings",     label: "Mapeos",       icon: "GitMerge",      feature: "auto_mapping", group: "config" },
+    { href: "/catalogs",     label: "Catálogos del ERP", icon: "Database", group: "config" },
+    { href: "/invoice-settings", label: "Ajustes de Facturas", icon: "SlidersHorizontal", adminOnly: true, group: "config" },
   ],
   expense_management: [
     { href: "/accounting/expenses", label: "Gastos", icon: "Receipt", feature: "expense_management", roles: ["approver", "accountant"] },
     { href: "/expenses",            label: "Mis gastos", icon: "FolderOpen", feature: "expense_management", roles: ["approver", "accountant"] },
   ],
   contract_intelligence: [
-    { href: "/contracts/dashboard",  label: "Panel",         icon: "LayoutDashboard" },
+    { href: "/contracts/dashboard",  label: "Hoy",           icon: "LayoutDashboard" },
     { href: "/cases",                label: "Casos",         icon: "ScrollText",      feature: "contract_ai_extraction" },
-    { href: "/cases/history",        label: "Historial",     icon: "Clock",           feature: "contract_ai_extraction" },
-    { href: "/contracts/archive",     label: "Archivo",       icon: "FolderOpen",      feature: "contract_reference_archive" },
     { href: "/contracts/approvals",  label: "Aprobaciones",  icon: "ClipboardCheck",  feature: "contract_approval_workflow", roles: ["approver"] },
+    { href: "/contracts/archive",    label: "Archivo",       icon: "FolderOpen",      feature: "contract_reference_archive" },
     { href: "/contracts/metrics",    label: "Métricas",      icon: "BarChart3",       feature: "contract_metrics" },
-    { href: "/contracts/quality",    label: "Calidad",       icon: "BrainCircuit",    feature: "contract_ai_extraction", adminOnly: true },
-    { href: "/contracts/flow",       label: "Flujos",        icon: "Workflow",        feature: "contract_flow_builder", adminOnly: true },
+    { href: "/contracts/flow",       label: "Flujos",        icon: "Workflow",        feature: "contract_flow_builder", adminOnly: true, group: "config" },
+    { href: "/contracts/quality",    label: "Aprendizajes",  icon: "BrainCircuit",    feature: "contract_ai_extraction", adminOnly: true, group: "config" },
+    { href: "/settings?tab=team",    label: "Usuarios",      icon: "Users",           adminOnly: true, group: "config" },
   ],
 };
 
 // Always-visible platform modules (not tied to a product).
 export const PLATFORM_MODULES: NavModule[] = [
-  { href: "/settings", label: "Configuración", icon: "Settings", adminOnly: true },
+  { href: "/settings", label: "Ajustes y usuarios", icon: "Settings", adminOnly: true },
 ];
+
+/** Producto al que pertenece una ruta del cliente (por prefijo), o null si es de plataforma. */
+export function productForPath(pathname: string): ProductKey | null {
+  for (const p of PRODUCTS) {
+    if (p.routePrefixes.some((r) => pathname === r || pathname.startsWith(r + "/"))) return p.key;
+  }
+  return null;
+}

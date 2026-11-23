@@ -22,7 +22,10 @@ export async function register() {
   }
 
   try {
-    const { getBoss, startPipelineWorker } = await import("@/lib/queue");
+    const { getBoss, startPipelineWorker, stopQueueOnShutdown } = await import("@/lib/queue");
+    // Registered in the queue module: this file is also compiled for the Edge
+    // runtime, where the process signal APIs do not exist.
+    stopQueueOnShutdown();
     await startPipelineWorker();
 
     const { startInternalScheduler } = await import("@/lib/scheduler");

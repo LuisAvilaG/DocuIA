@@ -1,3 +1,4 @@
+import { isFeatureEnabled } from "@/lib/features";
 import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
@@ -10,6 +11,9 @@ type Params = { params: Promise<{ id: string }> };
 async function handlePOST(req: NextRequest, { params }: Params) {
   const session = await getTenantSession({ area: "documents", permission: "write" });
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+  if (!await isFeatureEnabled(session.orgId, "exception_queue")) {
+    return NextResponse.json({ error: "La cola de excepciones no está activa para tu organización" }, { status: 403 });
+  }
 
   try {
     const { id } = await params;
@@ -20,6 +24,8 @@ async function handlePOST(req: NextRequest, { params }: Params) {
 
     const body = await req.json().catch(() => ({})) as Record<string, unknown>;
     const notes = String(body.notes || "").slice(0, 1000);
+    // «Descartar»: el documento no se va a procesar (p. ej. duplicado real o archivo equivocado).
+    const dismiss = body.dismiss === true;
 
     const exception = await db.query.exceptionQueue.findFirst({
       where: and(
@@ -37,15 +43,15 @@ async function handlePOST(req: NextRequest, { params }: Params) {
 
     await db.update(exceptionQueue)
       .set({
-        status: "resolved",
+        status: dismiss ? "dismissed" : "resolved",
         resolvedAt: new Date(),
         resolvedBy: session.sub,
-        resolutionNotes: notes || "Resuelta manualmente",
+        resolutionNotes: notes || (dismiss ? "Descartada manualmente" : "Resuelta manualmente"),
         updatedAt: new Date(),
       })
       .where(eq(exceptionQueue.id, exceptionId));
 
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, status: dismiss ? "dismissed" : "resolved" });
 
   } catch (err) {
     console.error("[exceptions/resolve]", err);

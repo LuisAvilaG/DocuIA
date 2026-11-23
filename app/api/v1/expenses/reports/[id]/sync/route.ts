@@ -3,7 +3,7 @@ import { canSyncExpenses } from "@/lib/auth/permissions";
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { isFeatureEnabled } from "@/lib/features";
-import { syncReportToNetsuite } from "@/lib/expense/sync-to-netsuite";
+import { postExpenseReport } from "@/lib/erp";
 import { logAudit } from "@/lib/audit/log";
 
 type Params = { params: Promise<{ id: string }> };
@@ -19,7 +19,7 @@ async function handlePOST(req: NextRequest, { params }: Params) {
   const { id } = await params;
 
   try {
-    const result = await syncReportToNetsuite(id, session.orgId);
+    const result = await postExpenseReport(id, session.orgId);
 
     await logAudit({
       orgId:        session.orgId,

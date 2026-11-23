@@ -1,5 +1,6 @@
 import type { ComponentType } from "react";
 import { Clock, CheckCircle2, XCircle, RefreshCw, AlertCircle, Loader2, PackageSearch } from "lucide-react";
+import { AP_STATUS, TONE_PILL } from "./status-vocabulary";
 
 type Icon = ComponentType<{ className?: string }>;
 
@@ -16,18 +17,20 @@ export interface ExpenseStatusEntry {
   icon: Icon;
 }
 
-// Document pipeline statuses — shared by workflow and history pages
-export const DOC_STATUS: Record<string, DocStatusEntry> = {
-  uploaded:         { label: "Subido",     color: "text-muted-foreground", bg: "bg-muted",          icon: Clock },
-  extracting:       { label: "Extrayendo", color: "text-warning",          bg: "bg-warning/10",      icon: Loader2 },
-  review:           { label: "Revisión",   color: "text-warning",          bg: "bg-warning/10",      icon: Clock },
-  pending_approval: { label: "Aprobación", color: "text-warning",          bg: "bg-warning/10",      icon: Clock },
-  approved:         { label: "Aprobado",   color: "text-primary",          bg: "bg-primary/10",      icon: CheckCircle2 },
-  processing:       { label: "Procesando", color: "text-warning",          bg: "bg-warning/10",      icon: Loader2 },
-  completed:        { label: "Completado", color: "text-success",          bg: "bg-success/10",      icon: CheckCircle2 },
-  failed:           { label: "Error",      color: "text-destructive",      bg: "bg-destructive/10",  icon: XCircle },
-  awaiting_receipt: { label: "Esperando recepción", color: "text-[oklch(0.42_0.13_255)]", bg: "bg-[oklch(0.94_0.04_250)]", icon: PackageSearch },
+// Document pipeline statuses — shared by workflow and history pages.
+// Labels and tones come from the single 2026 vocabulary (lib/status-vocabulary.ts).
+const DOC_ICONS: Record<string, Icon> = {
+  uploaded: Loader2, extracting: Loader2, review: Clock, pending_approval: Clock,
+  approved: CheckCircle2, processing: Loader2, completed: CheckCircle2, failed: XCircle,
+  awaiting_receipt: PackageSearch,
 };
+
+export const DOC_STATUS: Record<string, DocStatusEntry> = Object.fromEntries(
+  Object.entries(AP_STATUS).map(([key, word]) => {
+    const [bg, color] = TONE_PILL[word.tone].split(" ");
+    return [key, { label: word.label, color, bg, icon: DOC_ICONS[key] ?? Clock }];
+  }),
+);
 
 // Expense report statuses — shared by accounting list and detail pages
 export const EXPENSE_REPORT_STATUS: Record<string, ExpenseStatusEntry> = {

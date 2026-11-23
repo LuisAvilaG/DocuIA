@@ -14,6 +14,13 @@ import { hashSync } from "bcryptjs";
 import { randomUUID } from "crypto";
 import { eq } from "drizzle-orm";
 import { subDays, format } from "date-fns";
+import { refuseNonLocalDatabase } from "./_guard";
+
+// Six organizations with active administrators: never against a real database.
+refuseNonLocalDatabase("El seed de demostración");
+// Outside a local database the password must be chosen, not the one written in this file.
+const DEMO_PASSWORD = process.env.DEMO_PASSWORD || (process.env.ALLOW_NON_LOCAL_DB === "1" ? "" : "Demo1234!");
+if (!DEMO_PASSWORD) { console.error("Define DEMO_PASSWORD para ejecutar el seed fuera de una base local."); process.exit(1); }
 
 // ── Helpers ───────────────────────────────────────────────────
 const uid = () => randomUUID();
@@ -88,7 +95,7 @@ const ORGS = [
     ],
     features: [
       { featureId: "auto_mapping",       isEnabled: true,  config: { min_confirmations: 3, merge_similarity: 0.90, suggest_similarity: 0.80, vendor_suggest_similarity: 0.88 }, notes: "Reducido a 3 confirmaciones por volumen alto" },
-      { featureId: "ai_tiered_fallback", isEnabled: true,  config: { soft_fallback_rate: 0.05, complex_line_count_threshold: 15 }, notes: null },
+      { featureId: "ai_tiered_fallback", isEnabled: true,  config: {}, notes: null },
       { featureId: "approval_workflow",  isEnabled: true,  config: {}, notes: "Requerido por controles internos" },
       { featureId: "bulk_upload",        isEnabled: true,  config: {}, notes: null },
       { featureId: "duplicate_detection",isEnabled: true,  config: {}, notes: null },
@@ -195,7 +202,7 @@ const ORGS = [
     ],
     features: [
       { featureId: "auto_mapping",         isEnabled: true,  config: { min_confirmations: 2, merge_similarity: 0.95 }, notes: "Config agresiva por volumen" },
-      { featureId: "ai_tiered_fallback",   isEnabled: true,  config: { soft_fallback_rate: 0.10, complex_line_count_threshold: 10 }, notes: null },
+      { featureId: "ai_tiered_fallback",   isEnabled: true,  config: {}, notes: null },
       { featureId: "ai_force_secondary",   isEnabled: false, config: {}, notes: "Solo en casos especiales" },
       { featureId: "bulk_upload",          isEnabled: true,  config: {}, notes: null },
       { featureId: "duplicate_detection",  isEnabled: true,  config: {}, notes: null },
@@ -261,7 +268,7 @@ async function main() {
         id:             uid(),
         organizationId: orgId,
         email:          u.email,
-        passwordHash:   hashSync("Demo1234!", 10),
+        passwordHash:   hashSync(DEMO_PASSWORD, 10),
         fullName:       u.fullName,
         role:           u.role,
         isActive:       true,

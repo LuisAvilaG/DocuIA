@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { Receipt, ChevronRight, Clock, CheckCircle2, XCircle, AlertCircle, Send } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { formatExpenseTotals } from "@/lib/expense/totals";
 
 const STATUS_CONFIG = {
   draft:        { label: "Borrador",     color: "text-muted-foreground bg-muted",     icon: Clock },
@@ -11,7 +12,7 @@ const STATUS_CONFIG = {
   approved:     { label: "Aprobado",     color: "text-success bg-success/10",          icon: CheckCircle2 },
   rejected:     { label: "Rechazado",    color: "text-destructive bg-destructive/10",  icon: XCircle },
   syncing:      { label: "Sincronizando",color: "text-primary bg-primary/10",          icon: Clock },
-  synced:       { label: "En NetSuite",  color: "text-success bg-success/10",          icon: CheckCircle2 },
+  synced:       { label: "En el ERP",  color: "text-success bg-success/10",          icon: CheckCircle2 },
   exception:    { label: "Error",        color: "text-destructive bg-destructive/10",  icon: AlertCircle },
 } as const;
 
@@ -21,7 +22,7 @@ interface Report {
   status:      keyof typeof STATUS_CONFIG;
   submittedAt: string | null;
   createdAt:   string;
-  items:       { id: string; total: string | null }[];
+  items:       { id: string; total: string | null; currency: string | null }[];
 }
 
 export function ExpenseReportsList({ reports }: { reports: Report[] }) {
@@ -75,7 +76,7 @@ export function ExpenseReportsList({ reports }: { reports: Report[] }) {
               </span>
               {total > 0 && (
                 <p className="text-xs tabular-nums text-muted-foreground">
-                  {total.toLocaleString("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 })}
+                  {formatExpenseTotals(r.items)}
                 </p>
               )}
             </div>

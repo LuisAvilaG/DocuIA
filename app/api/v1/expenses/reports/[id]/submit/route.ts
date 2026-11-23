@@ -4,9 +4,11 @@ import { getTenantSession } from "@/lib/auth/jwt";
 import { isFeatureEnabled } from "@/lib/features";
 import { db } from "@/lib/db";
 import { expenseReports, expenseItems, orgUsers } from "@/db/schema";
-import { eq, and, inArray, ne, sum } from "drizzle-orm";
+import { eq, and, inArray, ne } from "drizzle-orm";
+import { formatExpenseTotals } from "@/lib/expense/totals";
 import { sendEmail, buildExpenseSubmittedEmail } from "@/lib/email/send";
-import { syncReportToNetsuite } from "@/lib/expense/sync-to-netsuite";
+import { postExpenseReport } from "@/lib/erp";
+import { expenseItemProblems } from "@/lib/expense/sync-precheck";
 import { logAudit } from "@/lib/audit/log";
 
 async function handlePOST(
@@ -27,7 +29,10 @@ async function handlePOST(
       eq(expenseReports.organizationId, session.orgId),
     ),
     with: {
-      items:     { columns: { id: true, total: true } },
+      items:     {
+        columns: { id: true, total: true, lineNumber: true, nsRecordType: true, currency: true, vendorNit: true, invoiceNumber: true, needsDocumentoEquivalente: true, invoiceDate: true, expenseDate: true },
+        with: { category: { columns: { netsuiteCategoryId: true, netsuiteAccountId: true } } },
+      },
       submitter: { columns: { fullName: true, email: true } },
     },
   });
@@ -36,6 +41,12 @@ async function handlePOST(
   if (report.submitterId !== session.sub) return NextResponse.json({ error: "No autorizado" }, { status: 403 });
   if (report.status !== "draft") return NextResponse.json({ error: `El informe está en estado "${report.status}" y no puede enviarse` }, { status: 409 });
   if (!report.items.length) return NextResponse.json({ error: "El informe debe tener al menos un gasto antes de enviarse" }, { status: 400 });
+  // Checked now, while the lines can still be edited: once approved, a report
+  // whose lines cannot be posted to NetSuite had no way back.
+  const problems = expenseItemProblems(report.items);
+  if (problems.length) {
+    return NextResponse.json({ error: `Corrige estos gastos antes de enviar el informe: ${problems.join("; ")}` }, { status: 400 });
+  }
 
   const approvalEnabled = await isFeatureEnabled(session.orgId, "expense_approval");
 
@@ -61,8 +72,9 @@ async function handlePOST(
     // The report is approved at this point; a sync failure (e.g. NetSuite not
     // configured) is reported to accounting, not as a failed submission.
     try {
-      const syncResult = await syncReportToNetsuite(id, session.orgId);
-      return NextResponse.json({ ok: true, autoSynced: true, syncResult });
+      const syncResult = await postExpenseReport(id, session.orgId);
+      // Sent either way; "autoSynced" only when NetSuite actually took it.
+      return NextResponse.json({ ok: true, autoSynced: syncResult.ok, syncResult });
     } catch (err) {
       console.error("[expenses/submit] auto-sync failed", err);
       return NextResponse.json({ ok: true, autoSynced: false, syncError: "El informe fue aprobado, pero no se pudo sincronizar con el ERP. Contabilidad lo revisará." });
@@ -98,14 +110,13 @@ async function handlePOST(
   });
 
   if (admins.length > 0) {
-    const totalRow = await db
-      .select({ total: sum(expenseItems.total) })
+    // One figure per currency, never a mixed sum.
+    const totalItems = await db
+      .select({ total: expenseItems.total, currency: expenseItems.currency })
       .from(expenseItems)
       .where(eq(expenseItems.reportId, id));
 
-    const totalFormatted = totalRow[0]?.total
-      ? `$${Number(totalRow[0].total).toLocaleString("es-CO", { maximumFractionDigits: 0 })}`
-      : "—";
+    const totalFormatted = totalItems.length ? formatExpenseTotals(totalItems) : "—";
 
     const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
     const html = buildExpenseSubmittedEmail({

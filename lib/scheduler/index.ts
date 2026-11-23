@@ -17,7 +17,8 @@ export const INTERNAL_SCHEDULES = [
   { key: "expense-categories-sync", queue: "system-expense-categories-sync", cron: "20 2 * * *", expireInSeconds: 20 * 60 },
   { key: "retention", queue: "system-retention", cron: "0 3 * * *", expireInSeconds: 20 * 60 },
   { key: "scheduled-reports", queue: "system-scheduled-reports", cron: "0 8 * * *", expireInSeconds: 10 * 60 },
-  { key: "contract-alerts", queue: "system-contract-alerts", cron: "15 8 * * *", expireInSeconds: 10 * 60 },
+  { key: "qa-mode", queue: "system-qa-mode", cron: "5 0 * * *", expireInSeconds: 5 * 60 },
+  { key: "approval-reminders", queue: "system-approval-reminders", cron: "0 9 * * 1-5", expireInSeconds: 10 * 60 },
 ] as const;
 
 type ScheduledTask = (typeof INTERNAL_SCHEDULES)[number];
@@ -68,8 +69,13 @@ async function invokeTask(task: ScheduledTask): Promise<unknown> {
       response = await route.GET(request);
       break;
     }
-    case "contract-alerts": {
-      const route = await import("@/app/api/internal/cron/contract-alerts/route");
+    case "approval-reminders": {
+      const route = await import("@/app/api/internal/cron/approval-reminders/route");
+      response = await route.GET(request);
+      break;
+    }
+    case "qa-mode": {
+      const route = await import("@/app/api/internal/cron/qa-mode/route");
       response = await route.GET(request);
       break;
     }

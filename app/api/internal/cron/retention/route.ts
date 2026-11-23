@@ -1,7 +1,7 @@
 import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { historyDocuments, workflowRuntimeLogs } from "@/db/schema";
+import { historyDocuments, exceptionQueue, workflowRuntimeLogs, aiBatchItems, statusEvents } from "@/db/schema";
 import { and, eq, inArray, lt } from "drizzle-orm";
 import { getFeature } from "@/lib/features";
 import { deleteFile } from "@/lib/storage/minio";
@@ -63,17 +63,55 @@ async function handleGET(req: NextRequest) {
         });
         for (const document of candidates) {
           try {
-            const [removed] = await db.delete(historyDocuments).where(and(
-              eq(historyDocuments.id, document.id),
-              eq(historyDocuments.organizationId, org.id),
-              inArray(historyDocuments.status, ["completed", "failed"]),
-            )).returning({ storageKey: historyDocuments.storageKey });
-            if (!removed) continue;
-            documentsDeleted++;
-            if (removed.storageKey) {
-              await deleteFile(removed.storageKey);
-              filesDeleted++;
+            // Files first. With the row deleted first, a file that failed to
+            // delete stayed in storage for good: nothing pointed at it any more.
+            const [stored, pending] = await Promise.all([
+              db.query.historyDocuments.findFirst({
+                where: and(eq(historyDocuments.id, document.id), eq(historyDocuments.organizationId, org.id), inArray(historyDocuments.status, ["completed", "failed"])),
+                columns: { storageKey: true, attachmentKey: true },
+              }),
+              db.select({ storageKey: exceptionQueue.storageKey }).from(exceptionQueue)
+                .where(and(eq(exceptionQueue.documentId, document.id), eq(exceptionQueue.organizationId, org.id))),
+            ]);
+            if (!stored) continue;
+            let fileFailed = false;
+            // Each file on its own: one that is already gone must not leave the others behind.
+            for (const key of new Set([stored.storageKey, stored.attachmentKey, ...pending.map((e) => e.storageKey)])) {
+              if (!key) continue;
+              try {
+                await deleteFile(key);
+                filesDeleted++;
+              } catch (err) {
+                if ((err as { name?: string } | null)?.name === "NoSuchKey") continue;
+                fileFailed = true;
+                errors++;
+                console.error("[cron/retention] file cleanup failed", { orgId: org.id, documentId: document.id, err });
+              }
             }
+            // The document stays a candidate, so tomorrow's run tries its files again.
+            if (fileFailed) continue;
+            // The exception rows that point at the document go in the same
+            // transaction, so the queue never lists a document that is gone.
+            const keys = await db.transaction(async (tx) => {
+              const [removed] = await tx.delete(historyDocuments).where(and(
+                eq(historyDocuments.id, document.id),
+                eq(historyDocuments.organizationId, org.id),
+                inArray(historyDocuments.status, ["completed", "failed"]),
+              )).returning({ storageKey: historyDocuments.storageKey, attachmentKey: historyDocuments.attachmentKey });
+              if (!removed) return null;
+              const exceptions = await tx.delete(exceptionQueue).where(and(
+                eq(exceptionQueue.documentId, document.id),
+                eq(exceptionQueue.organizationId, org.id),
+              )).returning({ storageKey: exceptionQueue.storageKey });
+              // Rows with no foreign key to the document: its batch item keeps the
+              // whole file job and the model's answer, and its status history
+              // would otherwise outlive the retention period too.
+              await tx.delete(aiBatchItems).where(and(eq(aiBatchItems.documentId, document.id), eq(aiBatchItems.organizationId, org.id)));
+              await tx.delete(statusEvents).where(and(eq(statusEvents.organizationId, org.id), eq(statusEvents.entity, "document"), eq(statusEvents.entityId, String(document.id))));
+              return [removed.storageKey, removed.attachmentKey, ...exceptions.map((e) => e.storageKey)];
+            });
+            if (!keys) continue;
+            documentsDeleted++;
           } catch (err) {
             errors++;
             console.error("[cron/retention] document cleanup failed", { orgId: org.id, documentId: document.id, err });

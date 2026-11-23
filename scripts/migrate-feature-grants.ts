@@ -5,6 +5,14 @@ import { eq } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
 async function main() {
+  // One-time migration from before admin_granted existed. Run again it rewrites
+  // admin_granted = is_enabled for every feature of every organization, undoing
+  // whatever the superadmin granted or withdrew since.
+  if (!process.argv.includes("--confirm")) {
+    console.error("Esta migración ya se aplicó una vez y reescribe los permisos de todas las organizaciones.\n" +
+      "Si de verdad necesitas repetirla: npx tsx scripts/migrate-feature-grants.ts --confirm");
+    process.exit(1);
+  }
   console.log("Migrating feature grants...");
 
   // For netsuite_dry_run: admin_granted = true for any existing row

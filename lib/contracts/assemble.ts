@@ -1,5 +1,6 @@
 import { runValidations, caseVerdict, type DocsByType, type ValidationResult } from "./validate";
 import { evaluateCalculations, type CalculationResult } from "./calculations";
+import { evidenceFromQuotes } from "./evidence";
 import type { ContractPlan } from "./plan";
 import type { AiAnalysisResponse, AiAnalysisRule } from "./ai-analysis";
 
@@ -29,6 +30,7 @@ export function aiValidation(analysis: AnalysisOutcome): ValidationResult {
     reason: summary ?? (items.length > 0 ? `${items.length} hallazgo(s) estructurado(s).` : "El análisis requiere revisión."),
     checks: [],
     citation: citations[0] ?? null,
+    evidence: outcome === "pass" ? [] : evidenceFromQuotes([...citations, ...items.map((item) => item.evidence)]),
   };
 }
 

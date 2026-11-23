@@ -50,7 +50,10 @@ export function computeSimilarity(a: string, b: string): number {
   const tokenScore = jaccardSimilarity(aTokens, bTokens);
 
   const maxLen = Math.max(aNorm.length, bNorm.length);
-  const lev = levenshtein(aNorm.slice(0, 60), bNorm.slice(0, 60));
+  // Long descriptions often share their beginning and differ at the end
+  // ("… LOCAL A12 PLAZA NORTE" / "… LOCAL B07 PLAZA SUR"): the cut has to
+  // reach that far or they score as the same text.
+  const lev = levenshtein(aNorm.slice(0, 160), bNorm.slice(0, 160));
   const levScore = maxLen > 0 ? 1 - lev / maxLen : 0;
 
   const containsBonus =

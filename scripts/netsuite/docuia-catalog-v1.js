@@ -126,7 +126,7 @@ define(["N/search", "N/record", "N/log"], (search, record, log) => {
         search.createColumn({ name: "displayname" }),
         search.createColumn({ name: "type" }),
         search.createColumn({ name: "stockunit" }),
-        search.createColumn({ name: ITEM_UOM_FIELD }),
+        ...(opts.noCustom ? [] : [search.createColumn({ name: ITEM_UOM_FIELD })]),
         search.createColumn({ name: "isinactive" }),
       ],
     });
@@ -164,7 +164,7 @@ define(["N/search", "N/record", "N/log"], (search, record, log) => {
         search.createColumn({ name: "entityid" }),
         search.createColumn({ name: "email" }),
         search.createColumn({ name: "phone" }),
-        search.createColumn({ name: "custentity_mx_rfc" }),
+        ...(opts.noCustom ? [] : [search.createColumn({ name: "custentity_mx_rfc" })]),
         search.createColumn({ name: "category" }),
         search.createColumn({ name: "isinactive" }),
       ],
@@ -194,8 +194,10 @@ define(["N/search", "N/record", "N/log"], (search, record, log) => {
       ["mainline", "is", "T"], "AND",
       ["entity", "anyof", opts.vendorId], "AND",
       ["subsidiary", "anyof", opts.subsidiaryId], "AND",
-      // Closed and fully billed POs can no longer produce a Vendor Bill.
-      ["status", "noneof", "PurchOrd:H", "PurchOrd:F"],
+      // POs that can no longer (or not yet) produce a Vendor Bill: A pending
+      // approval, C rejected, G fully billed, H closed. F is "Pending Bill"
+      // (received, ready to bill) and must stay in.
+      ["status", "noneof", "PurchOrd:A", "PurchOrd:C", "PurchOrd:G", "PurchOrd:H"],
     ];
     return search.create({
       type: search.Type.PURCHASE_ORDER,
@@ -211,6 +213,9 @@ define(["N/search", "N/record", "N/log"], (search, record, log) => {
     });
   }
 
+  // A column the search was run without (see noCustom) has no value to read.
+  function optional(read) { try { return read(); } catch (e) { return ""; } }
+
   function mapItem(row) {
     const itemid      = str(row.getValue({ name: "itemid" }));
     const displayname = str(row.getValue({ name: "displayname" }));
@@ -220,8 +225,8 @@ define(["N/search", "N/record", "N/log"], (search, record, log) => {
       name:              displayname || itemid,
       type:              str(row.getValue({ name: "type" })),
       unit:              str(row.getValue({ name: "stockunit" })),
-      drt_unit_uom_id:   str(row.getValue({ name: ITEM_UOM_FIELD })),
-      drt_unit_uom_name: str(row.getText({ name: ITEM_UOM_FIELD })),
+      drt_unit_uom_id:   str(optional(() => row.getValue({ name: ITEM_UOM_FIELD }))),
+      drt_unit_uom_name: str(optional(() => row.getText({ name: ITEM_UOM_FIELD }))),
       inactive:          str(row.getValue({ name: "isinactive" })) === "T",
     };
   }
@@ -234,7 +239,7 @@ define(["N/search", "N/record", "N/log"], (search, record, log) => {
       name:        entityid,
       email:       str(row.getValue({ name: "email" })),
       phone:       str(row.getValue({ name: "phone" })),
-      rfc:         str(row.getValue({ name: "custentity_mx_rfc" })),
+      rfc:         str(optional(() => row.getValue({ name: "custentity_mx_rfc" }))),
       category_id:   str(row.getValue({ name: "category" })),
       category_name: str(row.getText({ name: "category" })),
       inactive:    str(row.getValue({ name: "isinactive" })) === "T",
@@ -267,7 +272,14 @@ define(["N/search", "N/record", "N/log"], (search, record, log) => {
   function fetchPurchaseOrderLines(poIds) {
     const results = [];
     poIds.slice(0, 20).forEach((id) => {
-      const po = record.load({ type: record.Type.PURCHASE_ORDER, id, isDynamic: false });
+      let po;
+      try {
+        po = record.load({ type: record.Type.PURCHASE_ORDER, id, isDynamic: false });
+      } catch (e) {
+        // Deleted, or not visible to the integration role: the others are still returned.
+        log.debug({ title: "purchase order not loaded", details: str(id) + " " + str(e && e.message) });
+        return;
+      }
       const count = po.getLineCount({ sublistId: "item" });
       const lines = [];
       for (let i = 0; i < count; i++) {
@@ -388,7 +400,20 @@ define(["N/search", "N/record", "N/log"], (search, record, log) => {
         mapper = mapLocation;
       }
 
-      const paged = runPaged(srch, mapper, pageIndex, pageSize);
+      let paged;
+      try {
+        paged = runPaged(srch, mapper, pageIndex, pageSize);
+      } catch (searchError) {
+        // The custom columns (unit of the DRT bundle, RFC of the Mexican
+        // localization) do not exist in every account: without them the search
+        // is run again instead of leaving the catalog unsynced.
+        if (type !== "items" && type !== "vendors") throw searchError;
+        log.debug({ title: "catalog search without custom columns", details: str(searchError && searchError.message) });
+        srch = type === "items"
+          ? buildItemSearch({ subsidiaryId, includeInactive, serviceCategoryId, noCustom: true })
+          : buildVendorSearch({ subsidiaryId, includeInactive, noCustom: true });
+        paged = runPaged(srch, mapper, pageIndex, pageSize);
+      }
       if (paged.out_of_range) {
         return { ok: false, error: "OUT_OF_RANGE", message: "page_index out of range", page_count: paged.page_count, total_count: paged.total_count };
       }

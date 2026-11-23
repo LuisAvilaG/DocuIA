@@ -43,6 +43,7 @@ export function ClientsView({ rows }: { rows: ClientRow[] }) {
   const [status, setStatus] = useState<StatusFilter>("all");
   const [product, setProduct] = useState<string | null>(null);
   const [lifecycle, setLifecycle] = useState<ClientRow | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const counts = useMemo(() => {
     const products: Record<string, number> = { ap_automation: 0, contract_intelligence: 0, expense_management: 0 };
@@ -159,10 +160,10 @@ export function ClientsView({ rows }: { rows: ClientRow[] }) {
                             <DropdownMenuItem render={<Link href={`/admin/clients/${r.id}/erp`} />}>Conexión ERP</DropdownMenuItem>
                             <DropdownMenuItem render={<Link href={`/admin/clients/${r.id}/users`} />}>Usuarios</DropdownMenuItem>
                             <DropdownMenuSeparator />
-                            <DropdownMenuItem onClick={() => setLifecycle(r)} className={r.status === "suspended" ? "" : "text-[oklch(0.50_0.14_80)]"}>
+                            <DropdownMenuItem onClick={() => { setDeleting(false); setLifecycle(r); }} className={r.status === "suspended" ? "" : "text-[oklch(0.50_0.14_80)]"}>
                               {r.status === "suspended" ? "Restablecer acceso" : "Suspender acceso"}
                             </DropdownMenuItem>
-                            <DropdownMenuItem variant="destructive" onClick={() => setLifecycle(r)}>Eliminar organización…</DropdownMenuItem>
+                            <DropdownMenuItem variant="destructive" onClick={() => { setDeleting(true); setLifecycle(r); }}>Eliminar organización…</DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </td>
@@ -194,7 +195,7 @@ export function ClientsView({ rows }: { rows: ClientRow[] }) {
       </Main>
 
       {lifecycle && (
-        <ClientLifecycleDialog open onClose={() => setLifecycle(null)} org={lifecycle} />
+        <ClientLifecycleDialog key={`${lifecycle.id}-${deleting}`} open onClose={() => setLifecycle(null)} org={lifecycle} initialMode={deleting ? "delete" : undefined} />
       )}
     </>
   );

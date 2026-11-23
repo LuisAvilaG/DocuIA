@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
 import { ChevronLeft, ChevronRight, Eye, FileUp, Loader2, Plus, Save, Trash2, X, ZoomIn, ZoomOut } from "lucide-react";
 import type { VisualFieldMapping } from "@/lib/contracts/visual-training";
+import { pageWords, wordsInArea, type PdfTextDoc } from "@/lib/contracts/pdf-words";
 
 pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 
@@ -56,6 +57,8 @@ export function VisualTrainingWorkspace({ flowId, documentType, documentName, fi
   const [error, setError] = useState<string | null>(null);
   const [deleteArmed, setDeleteArmed] = useState(false);
   const stageRef = useRef<HTMLDivElement>(null);
+  // The PDF on screen, to read the words under a zone (and which file it is).
+  const pdfRef = useRef<{ url: string; pdf: PdfTextDoc } | null>(null);
   const drawingRef = useRef<{ start: { x: number; y: number }; pointerId: number } | null>(null);
   const [draft, setDraft] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
 
@@ -138,8 +141,18 @@ export function VisualTrainingWorkspace({ flowId, documentType, documentName, fi
     const area = rectangle(drawing.start, pointFromEvent(event));
     setDraft(null);
     if (!activeField || area.width < 0.012 || area.height < 0.008) return;
-    const selectedText = window.getSelection?.()?.toString().trim().replace(/\s+/g, " ").slice(0, 220) || undefined;
-    setMappings((current) => [...current.filter((mapping) => mapping.fieldKey !== activeField), { fieldKey: activeField, page, ...area, ...(selectedText ? { anchorText: selectedText } : {}) }]);
+    const mapped: VisualFieldMapping = { fieldKey: activeField, page, ...area };
+    setMappings((current) => [...current.filter((mapping) => mapping.fieldKey !== activeField), mapped]);
+    // The anchor is the text under the zone, read from the PDF itself: nothing
+    // can be selected on this canvas, so the selection was always empty and no
+    // anchor was ever saved. (An image has no text to read.)
+    const source = pdfRef.current;
+    if (isPdf && source && source.url === fileUrl) {
+      void pageWords(source.pdf, page).then((words) => {
+        const anchorText = wordsInArea(words, area).slice(0, 220);
+        if (anchorText) setMappings((current) => current.map((mapping) => (mapping === mapped ? { ...mapping, anchorText } : mapping)));
+      }).catch(() => undefined);
+    }
     const remaining = fields.find((field) => field.fieldKey !== activeField && !mappedKeys.has(field.fieldKey));
     if (remaining) setActiveField(remaining.fieldKey);
   }
@@ -209,7 +222,7 @@ export function VisualTrainingWorkspace({ flowId, documentType, documentName, fi
             </div>
             <div className="min-h-0 flex-1 overflow-auto p-5 sm:p-7">
               {loading ? <div className="flex h-full items-center justify-center text-xs text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Cargando variantes…</div> : !fileUrl ? <label className="mx-auto flex h-full min-h-80 max-w-lg cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-border bg-card px-8 text-center hover:border-primary/50 hover:bg-primary/[0.02]"><FileUp className="mb-3 h-8 w-8 text-primary" /><p className="text-sm font-medium text-foreground">Sube un documento representativo</p><p className="mt-1 max-w-sm text-xs leading-relaxed text-muted-foreground">PDF, JPG, PNG o WEBP. Marca una vez dónde vive cada dato para que este formato se extraiga con más precisión.</p><span className="mt-4 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground">Elegir documento</span><input className="sr-only" type="file" accept="application/pdf,image/jpeg,image/png,image/webp" onChange={(event) => chooseFile(event.target.files?.[0] ?? null)} /></label> : <div className="mx-auto w-fit"><div ref={stageRef} className={`relative select-none overflow-hidden bg-white shadow-[0_3px_20px_oklch(0.18_0.015_258_/_0.18)] ${activeField ? "cursor-crosshair" : "cursor-default"}`} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={endDrawing} onPointerCancel={() => { drawingRef.current = null; setDraft(null); }}>
-                {isPdf ? <Document file={fileUrl} onLoadSuccess={(pdf) => { setPages(pdf.numPages); setPage((current) => Math.min(current, pdf.numPages)); extractPdfSignature(pdf); }} loading={<div className="flex h-[640px] w-[460px] items-center justify-center text-xs text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Cargando PDF…</div>} error={<div className="flex h-[340px] w-[460px] items-center justify-center px-6 text-center text-xs text-destructive">No se pudo mostrar el PDF. Puedes volver a subir el documento.</div>}><Page pageNumber={page} width={Math.round(510 * zoom)} renderTextLayer={false} renderAnnotationLayer={false} /></Document> : <img src={fileUrl} alt={safeFileName(newFile?.name ?? active?.originalName ?? null)} draggable={false} style={{ display: "block", width: Math.round(510 * zoom), height: "auto" }} />}
+                {isPdf ? <Document file={fileUrl} onLoadSuccess={(pdf) => { pdfRef.current = { url: fileUrl, pdf: pdf as unknown as PdfTextDoc }; setPages(pdf.numPages); setPage((current) => Math.min(current, pdf.numPages)); extractPdfSignature(pdf); }} loading={<div className="flex h-[640px] w-[460px] items-center justify-center text-xs text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Cargando PDF…</div>} error={<div className="flex h-[340px] w-[460px] items-center justify-center px-6 text-center text-xs text-destructive">No se pudo mostrar el PDF. Puedes volver a subir el documento.</div>}><Page pageNumber={page} width={Math.round(510 * zoom)} renderTextLayer={false} renderAnnotationLayer={false} /></Document> : <img src={fileUrl} alt={safeFileName(newFile?.name ?? active?.originalName ?? null)} draggable={false} style={{ display: "block", width: Math.round(510 * zoom), height: "auto" }} />}
                 <div className="absolute inset-0">{currentMappings.map((mapping) => { const index = fieldIndex(mapping.fieldKey); const colour = colourAt(Math.max(0, index)); const field = fieldByKey.get(mapping.fieldKey); return <button key={mapping.fieldKey} onClick={(event) => { event.stopPropagation(); setActiveField(mapping.fieldKey); }} style={{ position: "absolute", left: `${mapping.x * 100}%`, top: `${mapping.y * 100}%`, width: `${mapping.width * 100}%`, height: `${mapping.height * 100}%`, border: `2px solid ${colour.stroke}`, background: colour.fill }} className="group rounded-sm text-left outline-none"><span style={{ background: colour.stroke }} className="absolute -top-5 left-0 max-w-40 truncate rounded px-1.5 py-0.5 text-[10px] font-medium text-white opacity-0 shadow-sm transition-opacity group-hover:opacity-100">{field?.label ?? mapping.fieldKey}</span></button>; })}{draft && <div style={{ position: "absolute", left: `${draft.x * 100}%`, top: `${draft.y * 100}%`, width: `${draft.width * 100}%`, height: `${draft.height * 100}%`, border: "2px dashed var(--color-primary)", background: "oklch(0.48 0.15 182 / 0.15)" }} />}</div>
               </div></div>}
             </div>

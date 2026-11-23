@@ -40,7 +40,8 @@ async function handlePOST(_req: NextRequest, { params }: { params: Promise<{ id:
 
   try {
     const [docs, validations, analyses, plan] = await Promise.all([
-      db.query.contractDocuments.findMany({ where: eq(contractDocuments.caseId, id), columns: { detectedType: true, extractedJson: true } }),
+      // A stable order: a field present in two documents takes its value from the first one.
+      db.query.contractDocuments.findMany({ where: eq(contractDocuments.caseId, id), columns: { detectedType: true, extractedJson: true }, orderBy: (d, { asc }) => [asc(d.createdAt), asc(d.id)] }),
       db.query.contractValidations.findMany({ where: eq(contractValidations.caseId, id), columns: { subject: true, status: true, reason: true } }),
       db.query.contractAiAnalysisResults.findMany({ where: eq(contractAiAnalysisResults.caseId, id), columns: { ruleName: true, summary: true, itemsJson: true } }),
       loadCasePlan(kase),
@@ -90,14 +91,25 @@ async function handlePOST(_req: NextRequest, { params }: { params: Promise<{ id:
     const outputKey = `contracts/${session.orgId}/${id}/output-${Date.now()}.${extension}`;
     await uploadFile(Buffer.from(output), outputKey, outputMime);
 
-    const prevResult = (kase.resultJson ?? {}) as Record<string, unknown>;
-    await db.update(contractCases).set({
+    // Rendering takes a while. Lock the row and write over what is stored now:
+    // a case reopened meanwhile must not get this output (nor its old status)
+    // back, and a signature or note saved meanwhile must not be lost.
+    const saved = await db.transaction(async (tx) => {
+      const [current] = await tx.select({ status: contractCases.status, resultJson: contractCases.resultJson })
+        .from(contractCases)
+        .where(and(eq(contractCases.id, id), eq(contractCases.organizationId, session.orgId)))
+        .for("update");
+      if (!current || current.status !== kase.status) return false;
+      const prevResult = (current.resultJson ?? {}) as Record<string, unknown>;
       // The approval remains the source of truth. Generation is an output of
       // that decision, not a replacement for it in the case lifecycle.
-      status: kase.status,
-      resultJson: { ...prevResult, outputKey, outputMime, outputName, missing, generatedAt: new Date().toISOString() },
-      updatedAt: new Date(),
-    }).where(eq(contractCases.id, id));
+      await tx.update(contractCases).set({
+        resultJson: { ...prevResult, outputKey, outputMime, outputName, missing, generatedAt: new Date().toISOString() },
+        updatedAt: new Date(),
+      }).where(eq(contractCases.id, id));
+      return true;
+    });
+    if (!saved) return NextResponse.json({ error: "El caso cambió mientras se generaba el documento. Recarga la página." }, { status: 409 });
 
     await logAudit({ orgId: session.orgId, userId: session.sub, userEmail: session.email, action: "contract.generated", resourceType: "contract_case", resourceId: id });
 

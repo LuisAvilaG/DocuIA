@@ -215,6 +215,9 @@ export async function fetchCatalogPage(
   }
 }
 
+const OPEN_PO_PAGE_SIZE = 500;
+const OPEN_PO_MAX_PAGES = 10;
+
 export async function fetchOpenPurchaseOrders(
   creds: NSCredentials,
   scriptId: string,
@@ -224,20 +227,27 @@ export async function fetchOpenPurchaseOrders(
 ): Promise<NSRestletResult<NSOpenPurchaseOrder[]>> {
   const url = buildRestletUrl(creds.accountId, scriptId, deployId);
   try {
-    const res = await nsPost(url, {
-      type: "open_purchase_orders",
-      subsidiary_id: subsidiaryId,
-      vendor_id: vendorId,
-      page_index: 0,
-      page_size: 100,
-    }, creds);
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 200)}`, status: res.status };
+    // Every page: a vendor with more open POs than one page would otherwise
+    // have the rest reported as "not open" when validating the chosen PO.
+    const all: NSOpenPurchaseOrder[] = [];
+    for (let page = 0; page < OPEN_PO_MAX_PAGES; page++) {
+      const res = await nsPost(url, {
+        type: "open_purchase_orders",
+        subsidiary_id: subsidiaryId,
+        vendor_id: vendorId,
+        page_index: page,
+        page_size: OPEN_PO_PAGE_SIZE,
+      }, creds);
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 200)}`, status: res.status };
+      }
+      const json = await res.json();
+      if (!json.ok) return { ok: false, error: json.message || json.error || "Catalog script error" };
+      all.push(...(json.results ?? []));
+      if (page + 1 >= (Number(json.page_count) || 1)) break;
     }
-    const json = await res.json();
-    if (!json.ok) return { ok: false, error: json.message || json.error || "Catalog script error" };
-    return { ok: true, data: json.results ?? [] };
+    return { ok: true, data: all };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }

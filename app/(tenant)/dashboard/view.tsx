@@ -1,16 +1,12 @@
 import Link from "next/link";
+import { Upload } from "lucide-react";
 import type { DashboardData } from "@/lib/dashboard/ap-dashboard";
 import { reasonBucket } from "@/lib/stats/ap-stats";
-import { FileText } from "lucide-react";
+import { ActionLink, ApStatusPill, PageFrame, SectionTitle } from "@/components/kit";
+import { friendlyError } from "@/lib/ap/friendly-error";
 
-function groupReasons(reasons: { reason: string | null; count: number }[]): string {
-  const m = new Map<string, number>();
-  for (const r of reasons) m.set(reasonBucket(r.reason), (m.get(reasonBucket(r.reason)) ?? 0) + r.count);
-  return [...m.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${n} ${k.charAt(0).toLowerCase()}${k.slice(1)}`).join(" · ");
-}
-
-const DOC_TYPE_LABELS: Record<string, string> = { invoice: "Factura", purchase_order: "OC", xml_cfdi: "CFDI" };
-const DAY_LABELS = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
+const DAY_LABELS = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"];
+const DAY_NAMES = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"];
 
 function ago(date: Date): string {
   const min = Math.floor((Date.now() - date.getTime()) / 60000);
@@ -22,62 +18,57 @@ function ago(date: Date): string {
   return d === 1 ? "1 día" : `${d} días`;
 }
 
-const money = (n: number) => n.toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const short = (s: string | null, max = 42) => (s && s.length > max ? `${s.slice(0, max - 1).trimEnd()}…` : s);
+const money = (n: number) => n.toLocaleString("es-MX", { style: "currency", currency: "MXN", minimumFractionDigits: 2 });
+/** An amount in its own currency («$1,740.00» for pesos, «USD 45.00» for the rest). */
+const moneyIn = (n: number, currency: string) => {
+  if (!currency || currency === "MXN") return `${money(n)}${currency ? " MXN" : ""}`;
+  try { return n.toLocaleString("es-MX", { style: "currency", currency, currencyDisplay: "code", minimumFractionDigits: 2 }); }
+  catch { return `${currency} ${n.toLocaleString("es-MX", { minimumFractionDigits: 2 })}`; }
+};
+const short = (s: string | null, max = 40) => (s && s.length > max ? `${s.slice(0, max - 1).trimEnd()}…` : s);
+const plural = (n: number, one: string, many: string) => `${n.toLocaleString("es-MX")} ${n === 1 ? one : many}`;
+
+/** «Ítem sin mapear (2), proveedor no identificado (1) y otros motivos (1).» */
+function reasonSentence(reasons: { reason: string | null; count: number }[]): string {
+  const m = new Map<string, number>();
+  for (const r of reasons) m.set(reasonBucket(r.reason), (m.get(reasonBucket(r.reason)) ?? 0) + r.count);
+  const parts = [...m.entries()].sort((a, b) => b[1] - a[1]).map(([k, n], i) => `${i ? k.charAt(0).toLowerCase() + k.slice(1) : k} (${n})`);
+  if (parts.length <= 1) return parts[0] ? `${parts[0]}.` : "";
+  return `${parts.slice(0, -1).join(", ")} y ${parts[parts.length - 1]}.`;
+}
 
 type Recent = DashboardData["recent"][number];
 
-function recentState(d: Recent): { dot: string; label: string } {
-  switch (d.status) {
-    case "completed": return { dot: "bg-success", label: d.approvedBy ? "En el ERP" : "En el ERP · automática" };
-    case "review": return { dot: "bg-warning", label: `En revisión${d.errorMessage ? ` · ${short(d.errorMessage, 34)}` : ""}` };
-    case "pending_approval": return { dot: "bg-warning", label: "Por aprobar" };
-    case "awaiting_receipt": return { dot: "bg-[oklch(0.50_0.14_255)]", label: "Esperando recepción" };
-    case "failed": return { dot: "bg-destructive", label: `Excepción${d.errorMessage ? ` · ${short(d.errorMessage, 34)}` : ""}` };
-    case "processing": case "extracting": case "uploaded": return { dot: "bg-muted-foreground/50", label: "Procesando" };
-    default: return { dot: "bg-muted-foreground/50", label: d.status };
-  }
+function recentDetail(d: Recent): string | null {
+  if (d.status === "completed") return d.approvedBy ? null : "automática";
+  if (d.status === "review" || d.status === "failed") return short(friendlyError(d.errorMessage), 36);
+  return null;
 }
 
-// Documents per day this week: one series, today emphasized, direct label on today only.
-function WeekBars({ days }: { days: number[] }) {
-  const todayIdx = (new Date().getDay() + 6) % 7;
-  const W = 380, H = 170, left = 30, base = 136, top = 18;
-  const max = Math.max(4, ...days);
-  const step = Math.pow(10, Math.floor(Math.log10(max)));
-  const nice = Math.ceil(max / step / 2) * step * 2;
-  const ticks = [0, nice / 2, nice];
-  const y = (v: number) => base - (v / nice) * (base - top);
-  const slot = (W - left) / 7;
-  const bw = 20;
+/** Documentos por día de la semana: una serie, valor encima de cada barra con datos. */
+function WeekBars({ days, todayIdx }: { days: number[]; todayIdx: number }) {
+  const shown = days.slice(0, Math.max(5, todayIdx + 1)); // fin de semana solo si ya llegó
+  const W = 320, base = 104, top = 24, slot = W / shown.length, bw = Math.min(28, slot * 0.5);
+  const max = Math.max(1, ...shown);
+  const said = shown.map((n, i) => `${DAY_NAMES[i]} ${i > todayIdx ? "sin datos todavía" : n}`).join(", ");
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full max-w-[380px] h-auto" role="img" aria-label={`Documentos por día esta semana: ${days.map((n, i) => `${DAY_LABELS[i]} ${n}`).join(", ")}`}>
-      {ticks.map((t) => (
-        <g key={t}>
-          <line x1={left} x2={W - 2} y1={y(t)} y2={y(t)} className="stroke-border" strokeWidth={1} />
-          <text x={left - 6} y={y(t) + 4} textAnchor="end" fontSize={10.5} className="fill-muted-foreground">{t.toLocaleString("es-MX")}</text>
-        </g>
-      ))}
-      {days.map((n, i) => {
-        const x = left + slot * i + (slot - bw) / 2;
-        const isToday = i === todayIdx;
+    <svg viewBox={`0 0 ${W} 130`} className="mt-3.5 block h-auto w-full" role="img" aria-label={`Documentos por día esta semana: ${said}.`}>
+      <line x1={0} x2={W} y1={base} y2={base} stroke="#D6D2C8" />
+      {shown.map((n, i) => {
+        const x = slot * i + (slot - bw) / 2;
+        const h = (n / max) * (base - top);
         const future = i > todayIdx;
-        const h = base - y(n);
         return (
           <g key={i}>
-            <title>{`${DAY_LABELS[i]}: ${n.toLocaleString("es-MX")} documento${n === 1 ? "" : "s"}`}</title>
-            {/* hit target larger than the bar */}
-            <rect x={left + slot * i} y={top} width={slot} height={base - top} fill="transparent" />
-            {n > 0 && (
-              <path
-                d={`M${x} ${base}V${base - h + Math.min(4, h)}Q${x} ${base - h} ${x + Math.min(4, h)} ${base - h}H${x + bw - Math.min(4, h)}Q${x + bw} ${base - h} ${x + bw} ${base - h + Math.min(4, h)}V${base}Z`}
-                className={isToday ? "fill-primary" : "fill-primary/35"}
-              />
+            {n > 0 ? (
+              <path d={`M${x} ${base}V${base - h + 4}a4 4 0 0 1 4-4h${bw - 8}a4 4 0 0 1 4 4V${base}z`} className={i === todayIdx ? "fill-primary" : "fill-primary/80"}>
+                <title>{`${DAY_NAMES[i]}: ${plural(n, "documento", "documentos")}`}</title>
+              </path>
+            ) : (
+              <rect x={x} y={base - 4} width={bw} height={4} rx={2} fill="#E2DFD8" />
             )}
-            {isToday && (
-              <text x={x + bw / 2} y={base - h - 7} textAnchor="middle" fontSize={11.5} fontWeight={600} className="fill-foreground">{n.toLocaleString("es-MX")} hoy</text>
-            )}
-            <text x={x + bw / 2} y={160} textAnchor="middle" fontSize={10.5} fontWeight={isToday ? 600 : 400} className={isToday ? "fill-foreground" : future ? "fill-muted-foreground/60" : "fill-muted-foreground"}>{DAY_LABELS[i]}</text>
+            {n > 0 && !future && <text x={x + bw / 2} y={base - h - 6} textAnchor="middle" fontSize={11} fontWeight={600} className="fill-foreground">{n.toLocaleString("es-MX")}</text>}
+            <text x={x + bw / 2} y={122} textAnchor="middle" fontSize={11} className="fill-muted-foreground">{DAY_LABELS[i]}</text>
           </g>
         );
       })}
@@ -85,157 +76,127 @@ function WeekBars({ days }: { days: number[] }) {
   );
 }
 
-const TASK_TONE = {
-  warn: "bg-warning/10 text-warning",
-  err: "bg-destructive/10 text-destructive",
-  info: "bg-primary/10 text-primary",
-  wait: "bg-[oklch(0.95_0.03_250)] text-[oklch(0.45_0.14_255)]",
-} as const;
-
-function Task({ count, title, detail, href, cta, tone }: { count: number; title: string; detail: string; href: string; cta: string; tone: keyof typeof TASK_TONE }) {
+function Todo({ count, title, detail, href, cta }: { count: number; title: string; detail: string; href: string; cta: string }) {
   return (
-    <Link href={href} className="group flex items-center gap-4 px-5 py-3.5 hover:bg-accent/40 transition-colors">
-      <span className={`w-11 h-11 shrink-0 rounded-lg flex items-center justify-center text-base font-semibold tabular-nums ${TASK_TONE[tone]}`}>{count.toLocaleString("es-MX")}</span>
-      <span className="flex flex-col gap-0.5 min-w-0">
-        <span className="text-[0.8125rem] font-semibold text-foreground">{title}</span>
-        <span className="text-xs text-muted-foreground truncate">{detail}</span>
-      </span>
-      <span className="ml-auto text-xs font-semibold text-primary group-hover:underline shrink-0">{cta} →</span>
-    </Link>
+    <li className="grid grid-cols-[56px_minmax(0,1fr)_auto] items-center gap-4 border-b border-line-soft py-4">
+      <span className="text-center text-[26px] font-semibold tracking-[-0.03em] tabular-nums">{count.toLocaleString("es-MX")}</span>
+      <div className="min-w-0">
+        <h3 className="text-[14.5px] font-semibold">{title}</h3>
+        <p className="mt-0.5 text-[13.5px] text-foreground/80">{detail}</p>
+      </div>
+      <ActionLink href={href} variant="secondary" size="sm">{cta}</ActionLink>
+    </li>
   );
 }
 
-export function DashboardView({ data, statsEnabled }: { data: DashboardData | null; statsEnabled: boolean }) {
-  const hour = new Date().getHours();
-  const greeting = hour < 13 ? "Buenos días" : hour < 20 ? "Buenas tardes" : "Buenas noches";
-  const dateLabel = new Date().toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long" });
+export function DashboardView({ data, statsEnabled, exceptionsEnabled, canUpload }: { data: DashboardData | null; statsEnabled: boolean; exceptionsEnabled: boolean; canUpload: boolean }) {
+  // Rendered on the server: dates and times need the client's zone.
+  const timeZone = data?.timeZone;
+  const dateLabel = new Date().toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", timeZone });
 
   const tasks = data ? [
     data.review && {
-      key: "review", count: data.review.count, title: "En revisión", href: "/history?status=review", cta: "Revisar", tone: "warn" as const,
-      detail: `Ítems, proveedor u OC por confirmar.${data.review.oldest ? ` La más antigua tiene ${ago(new Date(data.review.oldest))}.` : ""}`,
+      key: "review", count: data.review.count, title: "Por revisar", href: "/documents?status=review", cta: "Revisar",
+      detail: reasonSentence(data.reviewReasons) || "Ítems, proveedor u orden de compra por confirmar.",
     },
     data.exceptions.count > 0 && {
-      key: "exceptions", count: data.exceptions.count, title: "Excepciones", href: "/exceptions", cta: "Resolver",
-      detail: groupReasons(data.exceptions.reasons) || "Documentos que no pudieron procesarse.", tone: "err" as const,
+      key: "exceptions", count: data.exceptions.count, title: "Excepciones", href: exceptionsEnabled ? "/exceptions" : "/documents?status=failed", cta: exceptionsEnabled ? "Resolver" : "Ver",
+      detail: reasonSentence(data.exceptions.reasons) || "Documentos que no pudieron procesarse.",
     },
     data.approval && {
-      key: "approval", count: data.approval.count, title: "Por aprobar", href: "/history?status=pending_approval", cta: "Aprobar", tone: "info" as const,
-      detail: `Esperan a un aprobador. $${money(data.approval.amount)} en total.`,
+      key: "approval", count: data.approval.count, title: "Por aprobar", href: "/documents?status=pending_approval", cta: "Aprobar",
+      detail: data.approvalAmounts.length ? `${data.approvalAmounts.map((a) => moneyIn(a.amount, a.currency)).join(" · ")} en total.` : `${money(data.approval.amount)} en total.`,
     },
     data.receipt && {
-      key: "receipt", count: data.receipt.count, title: "Esperando recepción", href: "/history?status=awaiting_receipt", cta: "Ver", tone: "wait" as const,
-      detail: `Se envían solas cuando almacén registre la entrada.${data.receipt.nextCheck ? ` Próxima revisión ${new Date(data.receipt.nextCheck).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" })}.` : ""}`,
+      key: "receipt", count: data.receipt.count, title: "Esperando recepción", href: "/documents?status=awaiting_receipt", cta: "Ver",
+      detail: `Se envían solas cuando almacén registre la entrada.${data.receipt.nextCheck ? ` Se revisa de nuevo a las ${new Date(data.receipt.nextCheck).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit", timeZone })}.` : ""}`,
     },
   ].filter((t): t is Exclude<typeof t, false | undefined | null> => Boolean(t)) : [];
   const attentionTotal = tasks.reduce((s, t) => s + t.count, 0);
 
-  const firstName = data?.firstName ? `, ${data.firstName}` : "";
+  const headline = !data
+    ? "Resumen del día"
+    : data.today.total === 0
+      ? "Hoy todavía no llegan documentos."
+      : `Hoy ${data.today.total === 1 ? "llegó 1 documento" : `llegaron ${plural(data.today.total, "", "documentos").trim()}`}; ${data.today.auto === 0 ? "ninguno está en el ERP todavía" : `${data.today.auto.toLocaleString("es-MX")} ya ${data.today.auto === 1 ? "está" : "están"} en el ERP sin intervención`}.`;
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
-      {/* Topbar — same shell as every other screen */}
-      <div className="h-14 border-b border-border px-6 flex items-center justify-between gap-4 shrink-0">
+    <PageFrame>
+      <header className="flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
-          <h1 className="text-sm font-semibold tracking-[-0.01em] text-foreground">{greeting}{firstName}</h1>
-          <p className="text-xs text-muted-foreground first-letter:uppercase">{dateLabel}</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.06em] text-link first-letter:uppercase">{dateLabel}</p>
+          <h1 className="mt-1 max-w-3xl text-[26px] font-semibold leading-tight tracking-[-0.025em]">{headline}</h1>
         </div>
-        <Link
-          href="/workflow"
-          className="inline-flex items-center gap-1.5 bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-medium px-3 py-[7px] rounded-md transition-colors shrink-0"
-        >
-          <FileText className="w-3 h-3" />
-          Subir documentos
-        </Link>
-      </div>
+        {canUpload && <ActionLink href="/documents?upload=1"><Upload />Subir documentos</ActionLink>}
+      </header>
 
-      <div className="flex-1 overflow-auto">
-        {!data ? (
-          <p className="p-6 text-sm text-muted-foreground">No se pudo cargar el resumen. Intenta recargar la página.</p>
-        ) : (
-          <div className="p-6 space-y-5 max-w-[1400px]">
-            <p className="text-sm text-foreground/80">
-              {data.today.total === 0
-                ? "Hoy todavía no llegan documentos."
-                : <>Hoy llegaron <strong className="text-foreground">{data.today.total.toLocaleString("es-MX")} documento{data.today.total === 1 ? "" : "s"}</strong>; <strong className="text-foreground">{data.today.auto.toLocaleString("es-MX")}</strong> ya {data.today.auto === 1 ? "está" : "están"} en el ERP sin intervención.</>}
-            </p>
-
-            <div className="grid grid-cols-1 xl:grid-cols-3 gap-5 items-start">
-              {/* Needs attention */}
-              <section className="xl:col-span-2 bg-card border border-border rounded-xl overflow-hidden">
-                <div className="px-5 py-3.5 border-b border-border flex items-baseline gap-2.5">
-                  <h2 className="text-sm font-semibold tracking-[-0.01em] text-foreground">Necesita tu atención</h2>
-                  <span className="text-xs text-muted-foreground">{attentionTotal.toLocaleString("es-MX")} documento{attentionTotal === 1 ? "" : "s"}</span>
-                </div>
-                {tasks.length === 0 ? (
-                  <p className="px-5 py-8 text-sm text-muted-foreground">Nada pendiente. Todo lo que llegó ya se procesó.</p>
-                ) : (
-                  <div className="divide-y divide-border">
-                    {tasks.map(({ key, ...t }) => <Task key={key} {...t} />)}
-                  </div>
-                )}
-              </section>
-
-              {/* This week */}
-              <section className="bg-card border border-border rounded-xl overflow-hidden">
-                <div className="px-5 py-3.5 border-b border-border flex items-baseline gap-2.5">
-                  <h2 className="text-sm font-semibold tracking-[-0.01em] text-foreground">Esta semana</h2>
-                  {statsEnabled && <Link href="/statistics" className="ml-auto text-xs text-muted-foreground hover:text-foreground">Estadísticas →</Link>}
-                </div>
-                <div className="px-5 pt-4 pb-5 flex flex-col gap-4">
-                  <WeekBars days={data.week.days} />
-                  <div className="grid grid-cols-3 gap-3 border-t border-border pt-4">
-                    <div><p className="text-[0.6875rem] font-medium uppercase tracking-[0.06em] text-muted-foreground">Documentos</p><p className="mt-1 text-xl font-semibold tabular-nums">{data.week.total.toLocaleString("es-MX")}</p></div>
-                    <div><p className="text-[0.6875rem] font-medium uppercase tracking-[0.06em] text-muted-foreground">Sin intervención</p><p className="mt-1 text-xl font-semibold tabular-nums">{data.week.autoPct === null ? "—" : `${data.week.autoPct}%`}</p></div>
-                    <div><p className="text-[0.6875rem] font-medium uppercase tracking-[0.06em] text-muted-foreground">Mapeos nuevos</p><p className="mt-1 text-xl font-semibold tabular-nums">+{data.week.learned.toLocaleString("es-MX")}</p></div>
-                  </div>
-                </div>
-              </section>
-            </div>
-
-            {/* Recent */}
-            <section className="bg-card border border-border rounded-xl overflow-hidden">
-              <div className="px-5 py-3.5 border-b border-border flex items-center justify-between">
-                <h2 className="text-sm font-semibold tracking-[-0.01em] text-foreground">Recientes</h2>
-                <Link href="/history" className="text-xs text-muted-foreground hover:text-foreground">Ver historial →</Link>
-              </div>
-              {data.recent.length === 0 ? (
-                <p className="px-5 py-8 text-sm text-muted-foreground">Sube tu primer documento desde <Link href="/workflow" className="text-primary hover:underline">Workflow</Link>.</p>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-border">
-                        {["Documento", "Proveedor", "OC", "Total", "Estado", "Hace"].map((h) => (
-                          <th key={h} className={`px-5 py-2.5 text-[0.6875rem] font-medium uppercase tracking-[0.06em] text-muted-foreground ${h === "Total" || h === "Hace" ? "text-right" : "text-left"}`}>{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border">
-                      {data.recent.map((d) => {
-                        const st = recentState(d);
-                        return (
-                          <tr key={d.id} className="hover:bg-accent/40 transition-colors">
-                            <td className="px-5 py-3 whitespace-nowrap">
-                              <Link href={`/history/${d.id}`} className="text-xs font-semibold text-foreground hover:underline">{d.numDoc ?? `#${d.id}`}</Link>
-                              <span className="ml-2 text-[0.6875rem] font-medium bg-secondary text-muted-foreground px-1.5 py-0.5 rounded-sm">{DOC_TYPE_LABELS[d.documentType] ?? d.documentType}</span>
-                            </td>
-                            <td className="px-5 py-3 text-xs text-foreground max-w-[260px] truncate">{d.vendor ?? "—"}</td>
-                            <td className="px-5 py-3 text-xs text-muted-foreground">{d.poLabel ?? "—"}</td>
-                            <td className="px-5 py-3 text-xs text-right tabular-nums text-foreground">{d.total ? `$${money(Number(d.total))}` : "—"}</td>
-                            <td className="px-5 py-3 max-w-[280px]"><span className="inline-flex items-center gap-1.5 text-xs text-foreground/85 truncate max-w-full"><span className={`w-2 h-2 rounded-full shrink-0 ${st.dot}`} /><span className="truncate">{st.label}</span></span></td>
-                            <td className="px-5 py-3 text-[0.6875rem] text-right tabular-nums text-muted-foreground whitespace-nowrap">{ago(d.createdAt)}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+      {!data ? (
+        <p className="mt-8 text-sm text-muted-foreground">No se pudo cargar el resumen. Intenta recargar la página.</p>
+      ) : (
+        <>
+          <div className="mt-8 grid grid-cols-1 items-start gap-11 lg:grid-cols-[minmax(0,1.5fr)_minmax(300px,1fr)]">
+            <section>
+              <SectionTitle title="Necesita tu atención" aside={plural(attentionTotal, "documento", "documentos")} />
+              {tasks.length === 0
+                ? <p className="py-6 text-sm text-muted-foreground">Nada pendiente. Todo lo que llegó ya se procesó.</p>
+                : <ul>{tasks.map(({ key, ...t }) => <Todo key={key} {...t} />)}</ul>}
             </section>
+
+            <aside>
+              <SectionTitle title="Esta semana" aside={statsEnabled ? <Link href="/metrics" className="text-link hover:underline">Métricas →</Link> : undefined} />
+              <WeekBars days={data.week.days} todayIdx={data.todayIdx} />
+              <dl className="mt-3 text-[13.5px]">
+                {[
+                  ["Documentos", data.week.total.toLocaleString("es-MX")],
+                  ["Sin intervención", data.week.autoPct === null ? "—" : `${data.week.autoPct} %`],
+                  ["Mapeos nuevos", data.week.learned.toLocaleString("es-MX")],
+                ].map(([k, v]) => (
+                  <div key={k} className="flex justify-between border-b border-line-soft py-2.5 last:border-0">
+                    <dt className="text-muted-foreground">{k}</dt>
+                    <dd className="font-semibold tabular-nums">{v}</dd>
+                  </div>
+                ))}
+              </dl>
+            </aside>
           </div>
-        )}
-      </div>
-    </div>
+
+          <section className="mt-10">
+            <SectionTitle title="Recientes" aside={<Link href="/documents" className="text-link hover:underline">Ver todos los documentos</Link>} />
+            {data.recent.length === 0 ? (
+              <p className="py-6 text-sm text-muted-foreground">
+                Todavía no hay documentos.{canUpload && <> Empieza con <Link href="/documents?upload=1" className="text-link hover:underline">Subir documentos</Link>.</>}
+              </p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-[13.5px]">
+                  <thead>
+                    <tr className="border-b border-border">
+                      {["Documento", "Proveedor", "OC", "Total", "Estado", "Hace"].map((h) => (
+                        <th key={h} scope="col" className={`whitespace-nowrap px-3.5 py-2.5 text-[11.5px] font-semibold uppercase tracking-[0.05em] text-muted-foreground ${h === "Total" ? "text-right" : "text-left"}`}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.recent.map((d) => (
+                      <tr key={d.id} className="border-b border-line-soft last:border-0">
+                        <td className="px-3.5 py-3 whitespace-nowrap">
+                          <Link href={`/history/${d.id}`} className="font-medium text-link hover:underline">{d.numDoc ?? `#${d.id}`}</Link>
+                          {d.documentType === "purchase_order" && <span className="ml-2 rounded-md bg-secondary px-1.5 py-0.5 text-xs text-muted-foreground">OC</span>}
+                        </td>
+                        <td className="max-w-[240px] truncate px-3.5 py-3">{d.vendor ?? "—"}</td>
+                        <td className="px-3.5 py-3 whitespace-nowrap">{d.poLabel ?? <span className="text-muted-foreground">Sin OC</span>}</td>
+                        <td className="px-3.5 py-3 text-right tabular-nums whitespace-nowrap">{d.total ? Number(d.total).toLocaleString("es-MX", { style: "currency", currency: "MXN" }) : "—"}</td>
+                        <td className="max-w-[300px] px-3.5 py-3"><ApStatusPill status={d.status} detail={recentDetail(d)} dot /></td>
+                        <td className="px-3.5 py-3 text-muted-foreground whitespace-nowrap">{ago(d.createdAt)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        </>
+      )}
+    </PageFrame>
   );
 }

@@ -1,14 +1,13 @@
+import { logWorkflow } from "@/lib/workflow/log";
 import { withApiSecurity } from "@/lib/security/http";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { subsidiaries, catalogItems, catalogVendors, catalogLocations, orgFeatures } from "@/db/schema";
-import { and, eq, max, sql } from "drizzle-orm";
+import { and, eq, lt, max, sql } from "drizzle-orm";
 import { getFeature } from "@/lib/features";
-import { fetchCatalogPage } from "@/lib/netsuite/client";
-import type { NSCredentials } from "@/lib/netsuite/oauth";
-import type { NSCatalogItem, NSVendor, NSLocation } from "@/lib/netsuite/client";
-import { decryptField } from "@/lib/crypto/encrypt";
-import { getActiveNsConnection } from "@/lib/netsuite/connection";
+import { operatingOrganization } from "@/lib/auth/jwt";
+import { getErp } from "@/lib/erp";
+import type { ErpCatalogItem as NSCatalogItem, ErpVendor as NSVendor, ErpLocation as NSLocation } from "@/lib/erp/types";
 
 function cronAuth(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
@@ -22,7 +21,7 @@ async function handleGET(req: NextRequest) {
   }
 
   try {
-    const orgs = await db.query.organizations.findMany({ columns: { id: true } });
+    const orgs = await db.query.organizations.findMany({ where: operatingOrganization(), columns: { id: true } });
     const summary: Record<string, unknown> = {};
 
     for (const org of orgs) {
@@ -77,37 +76,36 @@ async function handleGET(req: NextRequest) {
             eq(subsidiaries.isActive, true),
           ),
         });
+        // When each subsidiary was last read: items or vendors, whichever is
+        // newer (a subsidiary without items otherwise looked never synced and
+        // pulled its vendors and locations again at every check).
+        const lastSyncOf = new Map<string, Date | null>();
+        for (const sub of allSubs) {
+          const [[itemSync], [vendorSync]] = await Promise.all([
+            db.select({ lastAt: max(catalogItems.updatedAt) }).from(catalogItems).where(eq(catalogItems.subsidiaryId, sub.id)),
+            db.select({ lastAt: max(catalogVendors.updatedAt) }).from(catalogVendors).where(eq(catalogVendors.subsidiaryId, sub.id)),
+          ]);
+          lastSyncOf.set(sub.id, [itemSync?.lastAt, vendorSync?.lastAt].filter((d): d is Date => d instanceof Date).sort((a, b) => b.getTime() - a.getTime())[0] ?? null);
+        }
+        const isDue = (sub: { id: string }) => { const at = lastSyncOf.get(sub.id); return !at || Date.now() - at.getTime() >= intervalMs; };
+        // The per-run limit of MXN subsidiaries is taken from the ones that are
+        // due, oldest first. Taken from the whole list it always picked the same
+        // first N, found them up to date, and the rest were never synced.
         const mxLimit = Math.max(0, Math.round(advanced.mx_max_subsidiaries_per_run ?? 0));
-        const mxSubs = allSubs.filter(sub => sub.currency === "MXN");
-        const otherSubs = allSubs.filter(sub => sub.currency !== "MXN");
-        const subs = mxLimit > 0 ? [...otherSubs, ...mxSubs.slice(0, mxLimit)] : allSubs;
+        const age = (sub: { id: string }) => lastSyncOf.get(sub.id)?.getTime() ?? 0;
+        const mxDue = allSubs.filter(sub => sub.currency === "MXN" && isDue(sub)).sort((a, b) => age(a) - age(b));
+        const subs = mxLimit > 0 ? [...allSubs.filter(sub => sub.currency !== "MXN"), ...mxDue.slice(0, mxLimit)] : allSubs;
 
-        const conn = await getActiveNsConnection(org.id);
-
-        if (!conn?.catalogScriptId || !conn?.catalogDeployId) {
-          summary[org.id] = { skipped: "no catalog script configured" };
+        const erp = await getErp(org.id);
+        if (!erp) {
+          summary[org.id] = { skipped: "no ERP connected" };
           continue;
         }
-
-        const creds: NSCredentials = {
-          accountId:      conn.accountId,
-          consumerKey:    decryptField(conn.consumerKey),
-          consumerSecret: decryptField(conn.consumerSecret),
-          tokenId:        decryptField(conn.tokenId),
-          tokenSecret:    decryptField(conn.tokenSecret),
-        };
 
         const orgSummary: Record<string, unknown> = {};
 
         for (const sub of subs) {
-          // Check last sync via most recent updatedAt in catalog tables
-          const [lastSync] = await db
-            .select({ lastAt: max(catalogItems.updatedAt) })
-            .from(catalogItems)
-            .where(eq(catalogItems.subsidiaryId, sub.id));
-
-          const lastAt = lastSync?.lastAt;
-          if (lastAt && Date.now() - lastAt.getTime() < intervalMs) {
+          if (!isDue(sub)) {
             orgSummary[sub.id] = { skipped: "not due yet" };
             continue;
           }
@@ -118,21 +116,22 @@ async function handleGET(req: NextRequest) {
           for (const type of syncTypes) {
             let page = 0;
             let total = 0;
+            // Whether every page of this catalog arrived.
+            let complete = false;
             const now = new Date();
 
             while (true) {
-              const result = await fetchCatalogPage(
-                creds, conn.catalogScriptId, conn.catalogDeployId,
-                type, sub.nsSubsidiaryId, page, pageSize, timeoutMs,
-                type === "items" && sub.currency === "MXN" ? String(advanced.mx_service_category_id ?? "") : undefined,
-              );
+              const result = await erp.fetchCatalogPage(type, sub.nsSubsidiaryId, page, {
+                pageSize, timeoutMs,
+                serviceCategoryId: type === "items" && sub.currency === "MXN" ? String(advanced.mx_service_category_id ?? "") : undefined,
+              });
               if (!result.ok || !result.data) {
                 // Report partial pages instead of a silent "ok".
                 if (!result.ok) subSummary[`${type}_error`] = result.error ?? "fetch failed";
                 break;
               }
               const rows = result.data.results;
-              if (!rows.length) break;
+              if (!rows.length) { complete = true; break; }
 
               // Batch upsert the whole page in one statement (was one round-trip
               // per row → 500 per page). set: reads each row's own EXCLUDED values.
@@ -181,12 +180,6 @@ async function handleGET(req: NextRequest) {
                 }
               }
               if (type === "locations") {
-                // Drop this subsidiary's locations once before repopulating, to
-                // clear rows wrongly stored for other subsidiaries before the
-                // subsidiary filter existed.
-                if (page === 0) {
-                  await db.delete(catalogLocations).where(eq(catalogLocations.subsidiaryId, sub.id));
-                }
                 const values = (rows as NSLocation[]).map(row => ({
                   subsidiaryId: sub.id, internalId: row.internal_id,
                   name: row.name || null, fullName: row.full_name || null,
@@ -204,12 +197,25 @@ async function handleGET(req: NextRequest) {
               }
 
               total += rows.length;
-              if (page + 1 >= result.data.page_count) break;
+              if (page + 1 >= result.data.page_count) { complete = true; break; }
               page++;
+            }
+            // Locations this read did not bring (removed in the ERP, or stored for
+            // another subsidiary before the filter existed) go only once the whole
+            // list arrived. Deleted up front, a page that failed afterwards left
+            // the subsidiary without part of its locations until the next day.
+            if (type === "locations" && complete && total > 0) {
+              await db.delete(catalogLocations).where(and(eq(catalogLocations.subsidiaryId, sub.id), lt(catalogLocations.updatedAt, now)));
             }
             subSummary[type] = total;
           }
           orgSummary[sub.id] = subSummary;
+          // The monitor's "Sincronizaciones (24 h)" reads these.
+          const failedType = Object.keys(subSummary).find((key) => key.endsWith("_error"));
+          await logWorkflow({
+            organizationId: org.id, stage: "sync", step: "catalog", status: failedType ? "FAILED" : "SUCCESS",
+            errorMessage: failedType ? String(subSummary[failedType]) : undefined, metaJson: { subsidiaryId: sub.id, ...subSummary },
+          });
         }
         summary[org.id] = orgSummary;
       } catch (err) {

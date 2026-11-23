@@ -258,6 +258,16 @@ export default async function InvoiceDetailPage({ params, searchParams }: {
             </div>
           )}
           <div className="min-h-0 overflow-y-auto px-6 py-5.5 md:px-7">
+            {/* A failed document says why here too. The reason lived only under
+                "Envío al ERP": on this tab a failure showed "Sin líneas" and nothing else. */}
+            {doc.status === "failed" && (
+              <div role="alert" className="mb-4 rounded-xl border border-[#E9C6C2] bg-tone-err-bg px-4 py-3 text-[13.5px]">
+                <b className="font-semibold text-tone-err">{exception?.errorCode ? "El ERP rechazó el documento." : "No se pudo procesar el documento."}</b>{" "}
+                {reason ?? "Sin detalle del error."}{" "}
+                <Link href="?tab=erp" className="font-semibold text-link hover:underline">Ver cómo seguir</Link>
+                {lines.length === 0 && <span className="mt-1 block text-[12.5px] text-muted-foreground">Las líneas no se guardan cuando el documento falla antes de terminar de leerse o de cotejarse.</span>}
+              </div>
+            )}
             <dl className="grid grid-cols-[130px_minmax(0,1fr)] gap-x-3.5 gap-y-2 text-[13.5px]">
               <dt className="text-muted-foreground">Proveedor</dt><dd>{vendor ?? "—"}</dd>
               {draft?.invoiceDate && <><dt className="text-muted-foreground">Fecha</dt><dd className="tabular-nums">{draft.invoiceDate}</dd></>}

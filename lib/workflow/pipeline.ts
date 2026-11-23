@@ -579,8 +579,13 @@ async function runPipelineInner(input: PipelineInput): Promise<PipelineResult> {
     }
 
     // ── 9. Send to NetSuite ───────────────────────────────────────────────
-    await db.update(historyDocuments).set({ status: "processing", updatedAt: new Date() })
-      .where(eq(historyDocuments.id, docId));
+    // What was read and matched is saved before the send. If the ERP rejects the
+    // document, its lines are still there to look at: saved only on success, a
+    // failed send left the document with "sin líneas" as if nothing had been read.
+    const sendDraft = draftWithPo(payload);
+    await db.update(historyDocuments).set({
+      status: "processing", products: { ...payload, approval_draft: sendDraft } as unknown, poInternalId: poId, updatedAt: new Date(),
+    }).where(eq(historyDocuments.id, docId));
 
     // Read dry_run fresh here so tenant changes during processing take effect
     const dryRun = await isFeatureEnabled(input.organizationId, "netsuite_dry_run");
@@ -598,7 +603,6 @@ async function runPipelineInner(input: PipelineInput): Promise<PipelineResult> {
     const qaPlan = qa && !dryRun
       ? buildQaPlan({ config: qa, orgId: input.organizationId, docId, previous: 0, baseNumber: extraction.invoice.invoiceNumber || null })
       : null;
-    const sendDraft = draftWithPo(payload);
     const nsResult = await processInNetSuite(
       input.organizationId,
       {

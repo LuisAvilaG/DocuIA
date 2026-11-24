@@ -34,12 +34,31 @@ export interface CalculationDefinition {
   itemFilter?: { key: string; value: string };
 }
 
+/**
+ * Where one side of the operation comes from. Kept with the result so the case
+ * can show "base × factor = result" and what the base was read from.
+ */
+export interface CalculationPart {
+  source: "field" | "fixed" | "item" | "number";
+  /** Field key, fixed-value key, item column or the literal number. */
+  name: string;
+  /** Label of a fixed value. */
+  label?: string;
+  /** Document type of a field. */
+  docType?: string;
+  /** The number used when it is one for the whole calculation; null when it changes per item. */
+  value: number | null;
+}
+
 export interface CalculationItemResult {
   values: Record<string, string>;
   evidence?: string | null;
   value: number | null;
   status: "ok" | "missing" | "error";
   reason?: string;
+  /** The two numbers of this item's operation (absent in cases analysed before they were kept). */
+  base?: number | null;
+  operand?: number | null;
 }
 
 export interface CalculationResult {
@@ -51,6 +70,9 @@ export interface CalculationResult {
   sourceValue: number | null;
   reason?: string;
   items?: CalculationItemResult[];
+  /** Operation and origin of its two sides (absent in cases analysed before they were kept). */
+  operation?: CalculationOperation;
+  parts?: { base: CalculationPart; operand: CalculationPart };
 }
 
 type DocsByTypeLike = Record<string, Array<{ values: Record<string, unknown> }>>;
@@ -101,6 +123,29 @@ function resolveReference(
   return toNumber(Array.isArray(raw) ? raw[0] : raw);
 }
 
+function partOf(ref: CalculationReference | CalculationOperand | number, definition: CalculationDefinition, value: number | null): CalculationPart {
+  if (typeof ref === "number") return { source: "number", name: String(ref), value: ref };
+  if (ref.type === "number") return { source: "number", name: String(ref.value), value: ref.value };
+  if (ref.type === "fixed") return { source: "fixed", name: ref.key, label: definition.fixedValues?.find((fixed) => fixed.key === ref.key)?.label, value };
+  if (ref.type === "item") return { source: "item", name: ref.key, value: null };
+  return { source: "field", name: ref.field, docType: ref.docType, value };
+}
+
+/**
+ * Operation of a stored result taken from a fresh evaluation of the same case.
+ * Only where the result is the same number: a stored value is never explained
+ * with an operation that gives something else.
+ */
+export function adoptParts(stored: CalculationResult, fresh: CalculationResult | undefined): CalculationResult {
+  if (stored.parts || !fresh?.parts || !fresh.operation) return stored;
+  if (stored.items) {
+    const items = fresh.items ?? [];
+    if (items.length !== stored.items.length || stored.items.some((item, index) => item.value !== items[index].value)) return stored;
+    return { ...stored, operation: fresh.operation, parts: fresh.parts, items: stored.items.map((item, index) => ({ ...item, base: items[index].base, operand: items[index].operand })) };
+  }
+  return stored.value === fresh.value ? { ...stored, operation: fresh.operation, parts: fresh.parts } : stored;
+}
+
 export type AnalysisCalculationItem = { values: Record<string, string>; evidence?: string | null };
 
 /**
@@ -116,6 +161,7 @@ export function evaluateCalculations(
     const fixed = new Map((definition.fixedValues ?? []).map((value) => [value.key, value.value]));
     const formula = formulaText(definition.operation, definition.operand);
     const itemMode = definition.mode === "each_analysis_item";
+    const { operation } = definition;
 
     if (itemMode) {
       const rawItems = analysisItemsByNode[definition.analysisNodeId ?? ""] ?? [];
@@ -125,13 +171,14 @@ export function evaluateCalculations(
       const items = filtered.map((entry) => {
         const base = resolveReference(definition.base, docsByType, fixed, entry.values);
         const operand = resolveReference(definition.operand, docsByType, fixed, entry.values);
+        const sides = { values: entry.values, evidence: entry.evidence, base, operand };
         if (base === null || operand === null) {
-          return { values: entry.values, evidence: entry.evidence, value: null, status: "missing" as const, reason: "Falta un valor de la fórmula en este elemento." };
+          return { ...sides, value: null, status: "missing" as const, reason: "Falta un valor de la fórmula en este elemento." };
         }
-        const result = apply(base, definition.operation, operand);
-        if (result === null) return { values: entry.values, evidence: entry.evidence, value: null, status: "error" as const, reason: "No es posible dividir entre cero." };
+        const result = apply(base, operation, operand);
+        if (result === null) return { ...sides, value: null, status: "error" as const, reason: "No es posible dividir entre cero." };
         const factor = 10 ** definition.decimals;
-        return { values: entry.values, evidence: entry.evidence, value: Math.round((result + Number.EPSILON) * factor) / factor, status: "ok" as const };
+        return { ...sides, value: Math.round((result + Number.EPSILON) * factor) / factor, status: "ok" as const };
       });
       return {
         key: definition.key, label: definition.label, value: null,
@@ -139,22 +186,29 @@ export function evaluateCalculations(
         formula, sourceValue: null,
         reason: items.length ? undefined : "No se encontraron elementos para calcular.",
         items,
+        operation,
+        // A side read from each item has no single value; the others are the same for every item.
+        parts: {
+          base: partOf(definition.base, definition, resolveReference(definition.base, docsByType, fixed)),
+          operand: partOf(definition.operand, definition, resolveReference(definition.operand, docsByType, fixed)),
+        },
       };
     }
 
     const base = resolveReference(definition.base, docsByType, fixed);
+    const operand = base === null ? null : resolveReference(definition.operand, docsByType, fixed);
+    const shown = { operation, parts: { base: partOf(definition.base, definition, base), operand: partOf(definition.operand, definition, operand) } };
     if (base === null) {
-      return { key: definition.key, label: definition.label, value: null, status: "missing", sourceValue: null, formula, reason: "No se encontró el valor base de este cálculo." };
+      return { key: definition.key, label: definition.label, value: null, status: "missing", sourceValue: null, formula, reason: "No se encontró el valor base de este cálculo.", ...shown };
     }
-    const operand = resolveReference(definition.operand, docsByType, fixed);
     if (operand === null) {
-      return { key: definition.key, label: definition.label, value: null, status: "missing", sourceValue: base, formula, reason: "No se encontró el segundo valor de la fórmula." };
+      return { key: definition.key, label: definition.label, value: null, status: "missing", sourceValue: base, formula, reason: "No se encontró el segundo valor de la fórmula.", ...shown };
     }
-    const value = apply(base, definition.operation, operand);
+    const value = apply(base, operation, operand);
     if (value === null) {
-      return { key: definition.key, label: definition.label, value: null, status: "error", sourceValue: base, formula, reason: "No es posible dividir entre cero." };
+      return { key: definition.key, label: definition.label, value: null, status: "error", sourceValue: base, formula, reason: "No es posible dividir entre cero.", ...shown };
     }
     const factor = 10 ** definition.decimals;
-    return { key: definition.key, label: definition.label, value: Math.round((value + Number.EPSILON) * factor) / factor, status: "ok", sourceValue: base, formula };
+    return { key: definition.key, label: definition.label, value: Math.round((value + Number.EPSILON) * factor) / factor, status: "ok", sourceValue: base, formula, ...shown };
   });
 }

@@ -10,12 +10,13 @@ import { db } from "@/lib/db";
 import { contractAiAnalysisResults, contractArchiveDocuments, contractCases, contractDocuments, contractValidations, contractFlows, orgUsers, tenantAuditLog } from "@/db/schema";
 import { and, eq, asc, inArray, or, sql } from "drizzle-orm";
 import { FileText } from "lucide-react";
-import { CaseStatusPill, Notice, SectionTitle, StageNav, StatusPill, type Stage } from "@/components/kit";
+import { ActionLink, CaseStatusPill, Notice, SectionTitle, StageNav, StatusPill, type Stage } from "@/components/kit";
+import { cn } from "@/lib/utils";
 import { CaseActions } from "./actions";
 import type { CaseDoc } from "./case-documents";
 import { CaseDocuments } from "./case-documents-lazy";
 import { CaseChecks } from "./case-checks-lazy";
-import type { CheckFinding } from "./case-checks";
+import type { CheckAnalysis, CheckFinding } from "./case-checks";
 import { evidenceFromQuotes, type EvidenceRef } from "@/lib/contracts/evidence";
 import { CaseProcessingRefresh } from "./case-processing-refresh";
 import { getFeature, isFeatureEnabled } from "@/lib/features";
@@ -25,13 +26,26 @@ import { caseApprovalRules } from "@/lib/contracts/approval-state";
 import { canAccessTenantArea } from "@/lib/auth/permissions";
 import { ResubmitPanel } from "./resubmit-panel";
 import { RetryAnalysis } from "./retry-analysis";
-import { AiAnalysisResults } from "./ai-analysis-results";
+import { CaseCalculations, calculationItemName, evidenceKey } from "./case-calculations";
+import { DecisionPanel } from "./decision-panel";
+import type { CalculationResult } from "@/lib/contracts/calculations";
+import { calculationsWithOperation } from "@/lib/contracts/revalidate";
 import { OutputDownloads } from "./output-downloads";
 
 const pretty = (k: string) => k.replace(/[_.]/g, " ").replace(/\s+/g, " ").trim().replace(/^\w/, (c) => c.toUpperCase());
+const nf = (n: number) => n.toLocaleString("es-CO", { maximumFractionDigits: 6 });
+const listEs = new Intl.ListFormat("es", { type: "conjunction" });
 
-type CalculationItemOutcome = { values: Record<string, string>; value: number | null; status: "ok" | "missing" | "error"; reason?: string };
-type CalculationOutcome = { key: string; label: string; value: number | null; status: "ok" | "missing" | "error"; formula: string; reason?: string; items?: CalculationItemOutcome[] };
+/** One line of «Lo que vas a decidir»: what it is, what it says and where to see it whole. */
+function SummaryRow({ title, link, children }: { title: string; link?: { label: string; href: string }; children: React.ReactNode }) {
+  return (
+    <div className="grid grid-cols-1 items-baseline gap-x-4.5 gap-y-1.5 border-t border-border py-4 first-of-type:border-foreground md:grid-cols-[150px_minmax(0,1fr)_auto]">
+      <b className="text-sm font-semibold">{title}</b>
+      <div className="min-w-0 text-[13.5px]">{children}</div>
+      {link ? <Link href={link.href} className="text-[13px] font-semibold text-link hover:underline">{link.label}</Link> : <span />}
+    </div>
+  );
+}
 
 export default async function ContractCasePage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ etapa?: string }> }) {
   const { id } = await params;
@@ -51,12 +65,13 @@ export default async function ContractCasePage({ params, searchParams }: { param
 
   // Dates below are formatted on the server (UTC): they need the client's zone.
   const timeZone = await orgTimeZone(session.orgId);
-  const [documents, validations, analyses, validationsEnabled, generationEnabled, approvalFeature, activeFlow, auditRows, users] = await Promise.all([
+  const [documents, validations, analyses, validationsEnabled, generationEnabled, requestsEnabled, approvalFeature, activeFlow, auditRows, users] = await Promise.all([
     db.query.contractDocuments.findMany({ where: eq(contractDocuments.caseId, id) }),
     db.query.contractValidations.findMany({ where: eq(contractValidations.caseId, id) }),
     db.query.contractAiAnalysisResults.findMany({ where: eq(contractAiAnalysisResults.caseId, id) }),
     isFeatureEnabled(session.orgId, "contract_advanced_validations"),
     isFeatureEnabled(session.orgId, "contract_document_generation"),
+    isFeatureEnabled(session.orgId, "contract_document_requests").catch(() => false),
     getFeature(session.orgId, "contract_approval_workflow"),
     kase.flowId ? db.query.contractFlows.findFirst({
       where: and(eq(contractFlows.id, kase.flowId), eq(contractFlows.organizationId, session.orgId)),
@@ -92,7 +107,7 @@ export default async function ContractCasePage({ params, searchParams }: { param
     outputKey?: string; outputMime?: string; outputName?: string; missing?: string[];
     documents?: Array<{ documentId: string; typeWarning?: string }>;
     decision?: { action?: string; reason?: string | null; byEmail?: string | null; at?: string | null; override?: boolean; support?: { name?: string } } | null;
-    calculations?: CalculationOutcome[];
+    calculations?: CalculationResult[];
     documentRequest?: { to: string; reason: string; documents: string[]; message?: string; at: string; byEmail?: string | null; emailSent?: boolean };
     flow?: { snapshot?: { version?: number | null } };
   };
@@ -209,6 +224,91 @@ export default async function ContractCasePage({ params, searchParams }: { param
   const creator = kase.createdBy ? userNames.get(kase.createdBy) : null;
   const isWord = result.outputMime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
+  // ── Lo que muestran Cálculos, Validaciones y Decisión ──────────────────
+  // Cases analysed before the operation was kept get it from a fresh evaluation (no write).
+  const shownCalculations = (tab === "calc" || tab === "dec") && calculations.some((c) => !c.parts)
+    ? await calculationsWithOperation(kase, calculations, documents, analyses).catch(() => calculations)
+    : calculations;
+  const docNames: Record<string, string> = {};
+  for (const d of docs) if (d.detectedType) docNames[d.detectedType] ??= d.originalName || d.detectedType;
+  // Page of each quote the validations already located, for the «Dónde» of a calculation.
+  const quotePages: Record<string, number> = {};
+  for (const v of validations) {
+    for (const e of (Array.isArray(v.evidenceJson) ? v.evidenceJson : []) as EvidenceRef[]) {
+      if (e?.page && typeof e.quote === "string") quotePages[evidenceKey(e.quote)] = e.page;
+    }
+  }
+  const checkAnalyses: CheckAnalysis[] = analyses.map((a) => {
+    const rows = (Array.isArray(a.itemsJson) ? a.itemsJson as unknown[] : []).flatMap((entry) => {
+      const raw = entry as { values?: unknown; evidence?: unknown } | null;
+      if (!raw || typeof raw.values !== "object" || raw.values === null) return [];
+      const values = Object.fromEntries(Object.entries(raw.values as Record<string, unknown>).map(([k, v]) => [k, v === null || v === undefined ? "" : String(v)]));
+      return [{ values, evidence: typeof raw.evidence === "string" && raw.evidence.trim() ? raw.evidence : null }];
+    });
+    return {
+      id: a.id, ruleName: a.ruleName, passed: a.outcome === "pass", summary: a.summary, rows,
+      columns: rows[0] ? Object.keys(rows[0].values) : [],
+      citations: Array.isArray(a.citationsJson) ? (a.citationsJson as unknown[]).filter((c): c is string => typeof c === "string" && c.trim().length > 0) : [],
+    };
+  });
+  // What is still open, in words: the bar under Cálculos and Validaciones and the summary of Decisión.
+  const unverified = findings.filter((f) => f.ok === null).length;
+  const toReview = Math.max(0, warns - unverified);
+  const openParts = [
+    blocks ? `${blocks} bloqueo${blocks === 1 ? "" : "s"}` : null,
+    toReview ? `${toReview} hallazgo${toReview === 1 ? "" : "s"} por revisar` : null,
+    unverified ? `${unverified} hallazgo${unverified === 1 ? "" : "s"} sin verificar` : null,
+  ].filter((part): part is string => part !== null);
+  const openText = openParts.length ? `${blocks + warns === 1 ? "Queda" : "Quedan"} ${listEs.format(openParts)}.` : validations.length ? "Sin observaciones." : null;
+  const canManage = canApprove(session.role, "contracts");
+  const when = (at: string | Date) => new Date(at).toLocaleString("es-MX", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone });
+  const decisionSteps = (approvalRules?.steps ?? []).map((st) => {
+    const signed = approvalRules!.done.find((d) => d.stepKey === st.key);
+    return {
+      key: st.key, label: st.label,
+      who: st.approvers.mode === "any" ? "cualquier persona con permiso" : `${st.approvers.userIds.length} persona${st.approvers.userIds.length === 1 ? "" : "s"} asignada${st.approvers.userIds.length === 1 ? "" : "s"}`,
+      signed: signed ? `Aprobó ${userNames.get(signed.byId) ?? signed.byEmail ?? "—"} · ${when(signed.at)}` : null,
+    };
+  });
+  const outputName = parsedFlow?.success ? parsedFlow.data.nodes.find((node) => node.kind === "generate")?.data.name ?? null : null;
+  // The summary of Decisión lists every result in one line: name, factor and value.
+  const summaryResults = shownCalculations.flatMap((calc) => {
+    const factor = (operand: number | null | undefined) => (operand === null || operand === undefined || !calc.operation ? null : `${nf(operand)}${calc.operation === "percentage" ? " %" : ""}`);
+    return calc.items
+      ? calc.items.map((entry, index) => ({ key: `${calc.key}-${index}`, name: [calculationItemName(entry.values, index), factor(entry.operand ?? calc.parts?.operand.value)].filter(Boolean).join(" · "), value: entry.value }))
+      : [{ key: calc.key, name: calc.label, value: calc.value }];
+  });
+  // Validaciones uses the whole width, each half with its own scroll.
+  const fullWidth = tab === "checks" && validations.length > 0;
+  const notices = (
+    <>
+      {isProcessing && (
+        <Notice tone="info" title="Analizando el caso">
+          Esta página se actualiza sola; puedes salir y volver cuando quieras.
+          {archiveProgress.length > 0 && (
+            <ul className="mt-2 space-y-1">{archiveProgress.map((d) => <li key={d.originalName}>{d.originalName}: {d.pageCount ? `${d.indexedPages} de ${d.pageCount} páginas` : "preparando"}</li>)}</ul>
+          )}
+        </Notice>
+      )}
+      {kase.status === "failed" && (
+        <div role="alert" className="rounded-xl border border-[#E9C6C2] bg-tone-err-bg px-5 py-4">
+          <b className="block text-base font-semibold text-tone-err">El análisis no terminó</b>
+          <p className="mt-1 text-[13.5px]">{friendlyError(kase.errorMessage?.split("\n")[0]) ?? "Ocurrió un error al analizar los documentos."}</p>
+          <p className="mt-2 text-[13px] text-muted-foreground">Si fue una falla pasajera, vuelve a analizarlo. Si se repite, revisa que los documentos sean los que pide el flujo o pide a un administrador que revise el flujo.</p>
+          {canAccessTenantArea(session.role, { area: "contracts", permission: "write" }) && <RetryAnalysis caseId={kase.id} />}
+        </div>
+      )}
+
+      {waitingDocs && (
+        <ResubmitPanel caseId={kase.id} request={result.documentRequest ?? null}
+          documents={docs.map((d) => ({ id: d.id, label: d.originalName || d.detectedType || "Documento" }))}
+          canWrite={canAccessTenantArea(session.role, { area: "contracts", permission: "write" })}
+          canCancel={canManage} />
+      )}
+    </>
+  );
+  const hasNotices = isProcessing || kase.status === "failed" || waitingDocs;
+
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       {isProcessing && <CaseProcessingRefresh />}
@@ -224,31 +324,15 @@ export default async function ContractCasePage({ params, searchParams }: { param
         <StageNav className="mt-4.5" label="Etapas del caso" stages={stages} current={tab} aux={[{ key: "activity", label: "Actividad", href: "?etapa=activity", count: activity.length }]} />
       </div>
 
+      {fullWidth ? (
+        <div className="mt-4.5 flex min-h-0 flex-1 flex-col overflow-y-auto border-t border-border lg:overflow-hidden">
+          {hasNotices && <div className="flex shrink-0 flex-col gap-5 px-6 py-5.5 md:px-8">{notices}</div>}
+          <CaseChecks docs={checkDocs} findings={findings} passed={passedChecks} notes={infoNotes} analyses={checkAnalyses} verdict={verdict ? VERDICT[verdict].text : undefined} />
+        </div>
+      ) : (
       <div className="mt-4.5 min-h-0 flex-1 overflow-y-auto border-t border-border">
-        <div className="flex max-w-[1100px] flex-col gap-5 px-6 py-5.5 md:px-8">
-          {isProcessing && (
-            <Notice tone="info" title="Analizando el caso">
-              Esta página se actualiza sola; puedes salir y volver cuando quieras.
-              {archiveProgress.length > 0 && (
-                <ul className="mt-2 space-y-1">{archiveProgress.map((d) => <li key={d.originalName}>{d.originalName}: {d.pageCount ? `${d.indexedPages} de ${d.pageCount} páginas` : "preparando"}</li>)}</ul>
-              )}
-            </Notice>
-          )}
-          {kase.status === "failed" && (
-            <div role="alert" className="rounded-xl border border-[#E9C6C2] bg-tone-err-bg px-5 py-4">
-              <b className="block text-base font-semibold text-tone-err">El análisis no terminó</b>
-              <p className="mt-1 text-[13.5px]">{friendlyError(kase.errorMessage?.split("\n")[0]) ?? "Ocurrió un error al analizar los documentos."}</p>
-              <p className="mt-2 text-[13px] text-muted-foreground">Si fue una falla pasajera, vuelve a analizarlo. Si se repite, revisa que los documentos sean los que pide el flujo o pide a un administrador que revise el flujo.</p>
-              {canAccessTenantArea(session.role, { area: "contracts", permission: "write" }) && <RetryAnalysis caseId={kase.id} />}
-            </div>
-          )}
-
-          {waitingDocs && (
-            <ResubmitPanel caseId={kase.id} request={result.documentRequest ?? null}
-              documents={docs.map((d) => ({ id: d.id, label: d.originalName || d.detectedType || "Documento" }))}
-              canWrite={canAccessTenantArea(session.role, { area: "contracts", permission: "write" })}
-              canCancel={canApprove(session.role, "contracts")} />
-          )}
+        <div className={cn("flex flex-col gap-5 px-6 py-5.5 md:px-8", tab === "calc" ? "mx-auto max-w-[1044px]" : tab === "dec" ? "mx-auto max-w-[1184px]" : "max-w-[1100px]")}>
+          {notices}
 
           {tab === "docs" && typeWarnings.length > 0 && (
             <Notice tone="warn" title={typeWarnings.length === 1 ? "Un documento no parece del tipo con que se subió" : `${typeWarnings.length} documentos no parecen del tipo con que se subieron`}>
@@ -258,61 +342,75 @@ export default async function ContractCasePage({ params, searchParams }: { param
           )}
           {tab === "docs" && <CaseDocuments documents={docs} canTrain={session.role === "admin"} />}
 
-          {tab === "calc" && (
-            <section>
-              <SectionTitle title="Cálculos" aside="con su procedencia" />
-              <ul>
-                {calculations.map((item) => (
-                  <li key={item.key} className="border-b border-line-soft py-3.5 last:border-0">
-                    <div className="flex flex-wrap items-baseline justify-between gap-3">
-                      <span className="min-w-0"><b className="block text-sm font-semibold">{item.label}</b><span className="text-[12.5px] text-muted-foreground">{item.formula}{item.reason ? ` · ${item.reason}` : ""}</span></span>
-                      <b className={`tabular-nums ${item.status === "ok" ? "" : "text-tone-warn"}`}>{item.items?.length ? `${item.items.length} fila${item.items.length === 1 ? "" : "s"}` : item.value === null ? "Por revisar" : item.value.toLocaleString("es-CO", { maximumFractionDigits: 6 })}</b>
-                    </div>
-                    {item.items?.length ? (
-                      <ul className="mt-2 space-y-1 text-[13px] text-muted-foreground">
-                        {item.items.map((entry, index) => (
-                          <li key={index} className="flex justify-between gap-3"><span className="truncate">{entry.values.amparo || entry.values.nombre || entry.values.concepto || `Elemento ${index + 1}`}</span><span className={entry.status === "ok" ? "tabular-nums text-foreground" : "text-tone-warn"}>{entry.value === null ? "Por revisar" : entry.value.toLocaleString("es-CO", { maximumFractionDigits: 6 })}</span></li>
-                        ))}
-                      </ul>
-                    ) : null}
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
+          {tab === "calc" && <CaseCalculations calculations={shownCalculations} docNames={docNames} pages={quotePages} />}
 
           {tab === "checks" && (
             <section className="flex flex-col gap-4">
-              <SectionTitle title="Validaciones" aside={verdict ? VERDICT[verdict].text : undefined} />
-              {validations.length === 0 ? (
-                <p className="text-sm text-muted-foreground">Este flujo no tiene controles. Se agregan en el editor del flujo.</p>
-              ) : (
-                <CaseChecks docs={checkDocs} findings={findings} passed={passedChecks} notes={infoNotes} />
-              )}
-              <AiAnalysisResults analyses={analyses} />
+              <SectionTitle title="Validaciones" />
+              <p className="text-sm text-muted-foreground">Este flujo no tiene controles. Se agregan en el editor del flujo.</p>
             </section>
           )}
 
-          {!waitingDocs && (tab === "dec" || (tab === "checks" && deciding)) && (
-            <section className={tab === "checks" ? "border-t border-line-soft pt-4" : ""}>
-              {tab === "dec" && <SectionTitle title="Decisión" className="mb-3" aside={approvalRules ? `${approvalRules.done.length} de ${approvalRules.steps.length} aprobaci${approvalRules.steps.length === 1 ? "ón" : "ones"}` : undefined} />}
-              {approvalRules && (
-                <ol className="mb-4 flex flex-col gap-2">
-                  {approvalRules.steps.map((st) => {
-                    const signed = approvalRules.done.find((d) => d.stepKey === st.key);
-                    return (
-                      <li key={st.key} className="flex flex-wrap items-center justify-between gap-2 rounded-[10px] border border-border bg-card px-4 py-2.5 text-[13.5px]">
-                        <span><b className="font-semibold">{st.label}</b><span className="text-muted-foreground"> · {st.approvers.mode === "any" ? "cualquier persona con permiso" : `${st.approvers.userIds.length} persona${st.approvers.userIds.length === 1 ? "" : "s"} asignada${st.approvers.userIds.length === 1 ? "" : "s"}`}</span></span>
-                        {signed
-                          ? <StatusPill tone="ok">Aprobó {userNames.get(signed.byId) ?? signed.byEmail ?? "—"} · {new Date(signed.at).toLocaleString("es-MX", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone })}</StatusPill>
-                          : <StatusPill tone="warn">Pendiente</StatusPill>}
-                      </li>
-                    );
-                  })}
-                </ol>
-              )}
-              <CaseActions caseId={kase.id} caseTitle={caseTitle} status={kase.status} verdict={validationsEnabled ? verdict : null} decision={result.decision} hasOutput={Boolean(result.outputKey)} generationEnabled={generationEnabled} approvalEnabled={approvalFeature.isEnabled} allowOverride={approvalFeature.config.allow_override !== false} canManage={canApprove(session.role, "contracts")} />
-            </section>
+          {!waitingDocs && tab === "dec" && (
+            <div className="flex flex-wrap items-start gap-7">
+              <section aria-labelledby="sum-h" className="flex min-w-0 flex-[999_1_520px] flex-col">
+                <h2 id="sum-h" className="mb-3 text-[17px] font-semibold tracking-[-0.015em]">{decided ? "Lo que se decidió" : "Lo que vas a decidir"}</h2>
+                <SummaryRow title="Documentos" link={{ label: "Ver datos", href: "?etapa=docs" }}>
+                  <ul className="flex flex-col gap-1.5">
+                    {docs.map((d) => {
+                      const count = Object.keys(d.extractedJson).length;
+                      return <li key={d.id}>{d.originalName || d.detectedType || "Documento"}<span className="block text-[12.5px] text-muted-foreground">{count} dato{count === 1 ? "" : "s"} leído{count === 1 ? "" : "s"}</span></li>;
+                    })}
+                    {docs.length === 0 && <li className="text-muted-foreground">Sin documentos.</li>}
+                  </ul>
+                </SummaryRow>
+                {summaryResults.length > 0 && (
+                  <SummaryRow title="Cálculos" link={{ label: "Ver operación", href: "?etapa=calc" }}>
+                    <ul className="flex flex-col gap-[5px]">
+                      {summaryResults.slice(0, 8).map((row) => (
+                        <li key={row.key} className="flex justify-between gap-3.5">
+                          <span className="min-w-0">{row.name}</span>
+                          <span className={cn("whitespace-nowrap font-semibold tabular-nums", row.value === null && "text-tone-warn")}>{row.value === null ? "Por revisar" : nf(row.value)}</span>
+                        </li>
+                      ))}
+                      {summaryResults.length > 8 && <li className="text-[12.5px] text-muted-foreground">y {summaryResults.length - 8} más</li>}
+                    </ul>
+                  </SummaryRow>
+                )}
+                {validationsEnabled && (
+                  <SummaryRow title="Validaciones" link={validations.length ? { label: "Ver en el documento", href: "?etapa=checks" } : undefined}>
+                    {findings.length > 0 ? (
+                      <>
+                        <StatusPill tone={blocks ? "err" : "warn"} className="mb-1.5">{listEs.format(openParts)}</StatusPill>
+                        <ul className="flex flex-col gap-1">
+                          {findings.slice(0, 3).map((f) => <li key={f.id}>{f.ruleName}{f.reason ? `: ${f.reason.split(/(?<=[.!?])\s/)[0]}` : ""}</li>)}
+                          {findings.length > 3 && <li className="text-[12.5px] text-muted-foreground">y {findings.length - 3} más</li>}
+                        </ul>
+                      </>
+                    ) : validations.length ? (
+                      <><StatusPill tone="ok" className="mb-1.5">Sin observaciones</StatusPill><span className="block text-[12.5px] text-muted-foreground">{validations.length} control{validations.length === 1 ? "" : "es"} revisado{validations.length === 1 ? "" : "s"}</span></>
+                    ) : <span className="text-muted-foreground">Este flujo no tiene controles.</span>}
+                  </SummaryRow>
+                )}
+                {decided ? (
+                  generationEnabled && (
+                    <SummaryRow title="Documento" link={result.outputKey ? { label: "Ver documento", href: "?etapa=doc" } : undefined}>
+                      {result.outputKey ? "Generado." : rejected ? "No se genera: el caso fue rechazado." : "Todavía no se ha generado."}
+                    </SummaryRow>
+                  )
+                ) : (
+                  <SummaryRow title="Al aprobar">
+                    {generationEnabled
+                      ? <>Se genera el documento del flujo.{outputName && <span className="block text-[12.5px] text-muted-foreground">{outputName}</span>}</>
+                      : "El caso queda aprobado. Este flujo no genera documento."}
+                  </SummaryRow>
+                )}
+              </section>
+
+              <DecisionPanel caseId={kase.id} caseTitle={caseTitle} status={kase.status} verdict={validationsEnabled ? verdict : null} decision={result.decision}
+                hasOutput={Boolean(result.outputKey)} generationEnabled={generationEnabled} approvalEnabled={approvalFeature.isEnabled} allowOverride={approvalFeature.config.allow_override !== false}
+                canManage={canManage} steps={decisionSteps} openFindings={blocks + warns} requestsEnabled={requestsEnabled} />
+            </div>
           )}
 
           {tab === "doc" && (
@@ -337,6 +435,15 @@ export default async function ContractCasePage({ params, searchParams }: { param
           {tab === "activity" && <CaseActivity items={activity} timeZone={timeZone} />}
         </div>
       </div>
+      )}
+
+      {/* La decisión siempre a la vista: ya no hay botones al fondo de una página larga. */}
+      {deciding && (tab === "calc" || tab === "checks") && (
+        <div className={cn("flex shrink-0 flex-wrap items-center gap-3 border-t px-6 py-3 md:px-8", openParts.length ? "border-[#EBD9AE] bg-tone-warn-bg" : "border-border bg-card")}>
+          <p className="min-w-[240px] flex-1 text-[13.5px]"><b className="font-semibold">Por decidir.</b>{openText ? ` ${openText}` : ""}</p>
+          <ActionLink href="?etapa=dec">{canManage ? "Revisar y decidir" : "Ver la decisión"}</ActionLink>
+        </div>
+      )}
     </div>
   );
 }

@@ -37,17 +37,20 @@ export function InvoiceHead({ title, status, statusDetail, meta, actions, stages
 
 /**
  * Why the invoice waits for a person, beside its title: how sure the reading
- * was, and the reason it stopped. It used to be a notice above the data.
+ * was, and the reason it stopped. One line and a thin bar, so it never weighs
+ * more than the title it sits next to.
  */
 export function ReadingConfidence({ pct, reason }: { pct: number; reason?: string | null }) {
   return (
-    <div aria-label="Por qué está en revisión" className="mt-1.5 grid w-[340px] max-w-full grid-cols-[auto_minmax(0,1fr)] items-center gap-x-4 gap-y-1">
-      <span className="row-span-2 text-[30px] font-semibold leading-none tracking-[-0.03em] tabular-nums">{pct} %</span>
-      <span className="text-[11.5px] font-semibold uppercase tracking-[0.05em] text-foreground/75">Confianza de lectura</span>
-      <span role="img" aria-label={`${pct} de 100`} className="block h-[5px] rounded-[3px] bg-border">
-        <span className="block h-full rounded-[3px] bg-[#B07C0E]" style={{ width: `${Math.max(0, Math.min(100, pct))}%` }} />
-      </span>
-      {reason && <span className="col-span-2 mt-1 text-[12.5px] leading-snug text-muted-foreground">En revisión: {reason}</span>}
+    <div aria-label="Por qué está en revisión" className="mt-0.5 flex max-w-[380px] flex-col gap-[3px] md:items-end md:text-right">
+      <div className="flex items-center gap-2.5">
+        <span className="text-[11.5px] font-semibold uppercase tracking-[0.05em] text-foreground/75">Confianza de lectura</span>
+        <span role="img" aria-label={`${pct} de 100`} className="block h-1 w-[72px] rounded-sm bg-border">
+          <span className="block h-full rounded-sm bg-[#B07C0E]" style={{ width: `${Math.max(0, Math.min(100, pct))}%` }} />
+        </span>
+        <b className="text-[15px] font-semibold tabular-nums">{pct} %</b>
+      </div>
+      {reason && <span className="text-[12.5px] leading-snug text-muted-foreground">En revisión: {reason}</span>}
     </div>
   );
 }

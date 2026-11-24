@@ -13,6 +13,8 @@ type Props = {
   action: CaseDecisionAction;
   blocked: boolean;
   allowOverride: boolean;
+  /** What the reviewer already wrote in the case before opening the dialog. */
+  initialReason?: string;
   onClose: () => void;
   onComplete: () => void;
 };
@@ -25,9 +27,9 @@ type Support = { status: "uploading"; name: string; progress: number } | { statu
  * cada validación sin resolver se marca como revisada, la justificación es
  * obligatoria y se puede adjuntar un soporte; todo queda en el registro.
  */
-export function DecisionDialog({ caseId, caseTitle, action, blocked, allowOverride, onClose, onComplete }: Props) {
+export function DecisionDialog({ caseId, caseTitle, action, blocked, allowOverride, initialReason = "", onClose, onComplete }: Props) {
   const titleId = useId();
-  const [reason, setReason] = useState("");
+  const [reason, setReason] = useState(initialReason);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [findings, setFindings] = useState<Finding[] | null>(null);

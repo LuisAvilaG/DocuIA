@@ -7,6 +7,7 @@ import { isFeatureEnabled } from "@/lib/features";
 import { loadCasePlan, type ContractPlan } from "./plan";
 import type { DocsByType, Severity, ValidationResult } from "./validate";
 import { assembleResults, isAiRule, type AnalysisOutcome } from "./assemble";
+import { adoptParts, evaluateCalculations, type CalculationResult } from "./calculations";
 import type { AiAnalysisItem, AiAnalysisOutcome } from "./ai-analysis";
 import { archiveValidationsForCase } from "./archive-validations";
 import { caseVerdict } from "./validate";
@@ -20,6 +21,60 @@ export interface ContractRevalidation {
   validations: ValidationResult[];
   verdict: ReturnType<typeof assembleResults>["verdict"];
   resultJson: Record<string, unknown>;
+}
+
+type StoredDocument = { id: string; detectedType: string | null; extractedJson: unknown; citationsJson: unknown };
+type StoredAnalysis = { ruleName: string; severity: string; outputMode: string; outcome: string; summary: string | null; itemsJson: unknown; citationsJson: unknown };
+
+function docsByTypeOf(documents: StoredDocument[], overrides: Record<string, Record<string, unknown>> = {}): DocsByType {
+  const docsByType: DocsByType = {};
+  for (const document of documents) {
+    if (!document.detectedType) continue;
+    (docsByType[document.detectedType] ??= []).push({
+      values: overrides[document.id] ?? (document.extractedJson ?? {}) as Record<string, unknown>,
+      citations: (document.citationsJson ?? {}) as Record<string, unknown>,
+      documentId: document.id,
+    });
+  }
+  return docsByType;
+}
+
+// Stored rows carry the rule name; the flow's AI nodes give back the node id
+// that calculations use to read analysis items.
+function storedOutcomes(plan: ContractPlan, rows: StoredAnalysis[], onlyInPlan: boolean): AnalysisOutcome[] {
+  const nodeByRule = new Map(plan.rules.filter(isAiRule).map((rule) => [rule.name, rule.nodeId]));
+  return rows.filter((row) => !onlyInPlan || nodeByRule.has(row.ruleName)).map((row) => ({
+    nodeId: nodeByRule.get(row.ruleName),
+    ruleName: row.ruleName,
+    severity: row.severity as Severity,
+    outputMode: row.outputMode,
+    response: {
+      outcome: row.outcome as AiAnalysisOutcome,
+      summary: row.summary,
+      items: Array.isArray(row.itemsJson) ? row.itemsJson as AiAnalysisItem[] : [],
+      citations: Array.isArray(row.citationsJson) ? (row.citationsJson as unknown[]).map(String) : [],
+    },
+  }));
+}
+
+/**
+ * Stored calculations with their operation ("base × factor"), for cases
+ * analysed before it was kept: evaluated again from what is saved, without
+ * writing, and adopted only where the result is the same number.
+ */
+export async function calculationsWithOperation(
+  kase: { organizationId: string; flowId: string | null; resultJson: unknown },
+  stored: CalculationResult[],
+  documents: StoredDocument[],
+  analyses: StoredAnalysis[],
+): Promise<CalculationResult[]> {
+  if (stored.every((item) => item.parts)) return stored;
+  const plan = await loadCasePlan(kase);
+  const analysisItems = Object.fromEntries(storedOutcomes(plan, analyses, false)
+    .filter((analysis) => analysis.nodeId)
+    .map((analysis) => [analysis.nodeId!, analysis.response.items]));
+  const fresh = evaluateCalculations(plan.calculations, docsByTypeOf(documents), analysisItems);
+  return stored.map((item) => adoptParts(item, fresh.find((candidate) => candidate.key === item.key)));
 }
 
 /**
@@ -43,32 +98,9 @@ export async function calculateContractRevalidation(
     db.query.contractAiAnalysisResults.findMany({ where: eq(contractAiAnalysisResults.caseId, caseId) }),
   ]);
 
-  const docsByType: DocsByType = {};
-  for (const document of documents) {
-    if (!document.detectedType) continue;
-    (docsByType[document.detectedType] ??= []).push({
-      values: overrides[document.id] ?? (document.extractedJson ?? {}) as Record<string, unknown>,
-      citations: (document.citationsJson ?? {}) as Record<string, unknown>,
-      documentId: document.id,
-    });
-  }
-
-  // Stored rows carry the rule name; the flow's AI nodes give back the node id
-  // that calculations use to read analysis items.
-  const nodeByRule = new Map(plan.rules.filter(isAiRule).map((rule) => [rule.name, rule.nodeId]));
+  const docsByType = docsByTypeOf(documents, overrides);
   // Con otro plan (probar un borrador) solo cuentan los análisis de controles que siguen en él.
-  const analyses: AnalysisOutcome[] = storedAnalyses.filter((row) => !opts.plan || nodeByRule.has(row.ruleName)).map((row) => ({
-    nodeId: nodeByRule.get(row.ruleName),
-    ruleName: row.ruleName,
-    severity: row.severity as Severity,
-    outputMode: row.outputMode,
-    response: {
-      outcome: row.outcome as AiAnalysisOutcome,
-      summary: row.summary,
-      items: Array.isArray(row.itemsJson) ? row.itemsJson as AiAnalysisItem[] : [],
-      citations: Array.isArray(row.citationsJson) ? (row.citationsJson as unknown[]).map(String) : [],
-    },
-  }));
+  const analyses = storedOutcomes(plan, storedAnalyses, Boolean(opts.plan));
 
   const assembled = assembleResults(plan, docsByType, analyses, { validationsEnabled, now: wallClockIn(await orgTimeZone(kase.organizationId)) });
   const refNode = plan.flow?.nodes.find((node) => node.kind === "reference_lookup");

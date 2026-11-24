@@ -641,7 +641,10 @@ export function ReviewClient({
           tone: "none",
           message: liveOutcome?.kind === "ok"
             ? <span className="text-success font-medium">La factura cuadra con la OC.</span>
-            : parksForApproval ? "Al enviarla, un aprobador la revisará antes de crearla en el ERP." : "Verifica proveedor, OC y líneas antes de enviar.",
+            : parksForApproval ? "Al enviarla, un aprobador la revisará antes de crearla en el ERP."
+            // En «Envío al ERP» los datos ya están a la vista: solo se avisa de lo que puede fallar.
+            : tab === "erp" && !locationId && payload.catalogs.locations.length > 0 ? "Si tu ERP exige ubicación, rechazará esta factura."
+            : "Verifica proveedor, OC y líneas antes de enviar.",
           primary: { label: missingCount > 0 ? `${sendLabel} (${missingCount} sin ítem)` : sendLabel, run: send },
         };
     }
@@ -673,6 +676,9 @@ export function ReviewClient({
     if (!Number.isFinite(expected) || expected === 0) return null;
     return { sum, expected, ok: Math.abs(sum - expected) < 0.5 };
   })();
+  // «Envío al ERP»: lo que llevará la factura de proveedor.
+  const erpLocation = payload.catalogs.locations.find((l) => l.internal_id === locationId)?.name ?? null;
+  const erpPo = poId ? (comparison?.poInternalId === poId ? comparison.poTranid : purchaseOrders.find((p) => p.internal_id === poId)?.tranid ?? poId) : null;
   const stages: Stage[] = invoiceStages({
     lines: { total: lines.length, missing: missingCount },
     vendorMissing: !vendorId,
@@ -1107,20 +1113,84 @@ export function ReviewClient({
               )}
 
               {tab === "erp" && (
-                <section className="flex flex-col gap-3">
-                  <h2 className="text-[15px] font-semibold">Lo que se va a crear en el ERP</h2>
-                  <dl className="grid grid-cols-[150px_minmax(0,1fr)] gap-x-3.5 gap-y-2 text-[13.5px]">
-                    <dt className="text-muted-foreground">Proveedor</dt><dd>{vendorName || <span className="text-tone-warn">Sin elegir</span>}</dd>
-                    <dt className="text-muted-foreground">Factura</dt><dd>{doc.invoice_number ?? "Sin número"} · {doc.invoice_date}</dd>
-                    <dt className="text-muted-foreground">Orden de compra</dt><dd>{poId ? (comparison?.poInternalId === poId ? comparison.poTranid : purchaseOrders.find((p) => p.internal_id === poId)?.tranid ?? poId) : "Sin OC"}</dd>
-                    <dt className="text-muted-foreground">Ubicación</dt><dd>{payload.catalogs.locations.find((l) => l.internal_id === locationId)?.name ?? "Sin ubicación"}</dd>
-                    <dt className="text-muted-foreground">Líneas</dt><dd>{assignedCount} con ítem{missingCount > 0 ? ` · ${missingCount} se omiten` : ""}</dd>
-                    <dt className="text-muted-foreground">Total</dt><dd className="tabular-nums">${fmt(Number(doc.totals.total))} {doc.currency}</dd>
-                  </dl>
+                <div className="mx-auto flex w-full max-w-[860px] flex-col gap-4.5">
+                  <section aria-labelledby="bill-h" className="overflow-hidden rounded-xl border border-border bg-white">
+                    <div className="flex flex-wrap items-baseline justify-between gap-4 border-b border-foreground px-5.5 pb-3.5 pt-4.5">
+                      <h2 id="bill-h" className="text-lg font-semibold tracking-[-0.015em]">Factura de proveedor que se va a crear</h2>
+                      {subsidiaryName && <span className="text-[12.5px] text-muted-foreground">En el ERP de {subsidiaryName}</span>}
+                    </div>
+                    <dl className="grid grid-cols-[repeat(auto-fit,minmax(min(150px,100%),1fr))] gap-x-5.5 gap-y-3.5 border-b border-line-soft px-5.5 py-4">
+                      <div>
+                        <dt className={erpFactLabel}>Proveedor</dt>
+                        <dd className={cn(erpFactValue, !vendorName && "text-tone-warn")}>{vendorName || "Sin elegir"}</dd>
+                      </div>
+                      <div>
+                        <dt className={erpFactLabel}>Número y fecha</dt>
+                        <dd className={cn(erpFactValue, "tabular-nums")}>{doc.invoice_number ?? "Sin número"}{doc.invoice_date && <small className={erpFactNote}>{doc.invoice_date}</small>}</dd>
+                      </div>
+                      <div>
+                        <dt className={erpFactLabel}>Ubicación</dt>
+                        <dd className={cn(erpFactValue, !erpLocation && "text-tone-warn")}>
+                          {erpLocation ?? "Sin ubicación"}
+                          {!erpLocation && <small className={erpFactNote}><button type="button" onClick={() => selectTab("lines")} className="text-link hover:underline">Elegir en Datos y líneas</button></small>}
+                        </dd>
+                      </div>
+                      {poEnabled && (
+                        <div>
+                          <dt className={erpFactLabel}>Orden de compra</dt>
+                          <dd className={erpFactValue}>
+                            {erpPo ?? "Sin OC"}
+                            <small className={erpFactNote}>{!erpPo && "Factura independiente · "}<button type="button" onClick={() => selectTab("po")} className="text-link hover:underline">{erpPo ? "Cambiar" : "Elegir una OC"}</button></small>
+                          </dd>
+                        </div>
+                      )}
+                    </dl>
+                    {/* Las líneas se desplazan dentro de la tarjeta: con 50 el total sigue a la vista. */}
+                    <div className="max-h-[372px] overflow-auto">
+                      <table className="w-full border-collapse text-[13.5px]">
+                        <thead>
+                          <tr>
+                            {(["#", "Ítem del ERP", "Unidad", "Cant.", "Precio", "Importe"] as const).map((h, i) => (
+                              <th key={h} scope="col" className={cn("sticky top-0 whitespace-nowrap bg-white px-3 py-2.5 text-[11.5px] font-semibold uppercase tracking-[0.05em] text-foreground/75 shadow-[inset_0_-1px_0_#E2DFD8] first:pl-5.5 last:pr-5.5", i > 2 ? "text-right" : "text-left")}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {lines.map((line) => {
+                            const has = Boolean(line.confirmed_item_id);
+                            return (
+                              <tr key={line.line_no} className="border-b border-line-soft last:border-0 [&>td]:px-3 [&>td]:py-[9px] [&>td]:align-top [&>td:first-child]:pl-5.5 [&>td:last-child]:pr-5.5">
+                                <td className="tabular-nums text-muted-foreground">{line.line_no}</td>
+                                <td>
+                                  {has ? (getDisplayCode(line) ?? getDisplayName(line)) : <span className="font-semibold text-tone-warn">Sin ítem · se omite al enviar</span>}
+                                  <small className="block text-[12.5px] text-muted-foreground">{line.description || "Línea sin descripción"}</small>
+                                </td>
+                                <td>{(has && unitName(line)) || "—"}</td>
+                                <td className="whitespace-nowrap text-right tabular-nums">{line.quantity}</td>
+                                <td className="whitespace-nowrap text-right tabular-nums">{line.rate !== null ? `$${fmt(line.rate)}` : "—"}</td>
+                                <td className="whitespace-nowrap text-right tabular-nums">{line.amount !== null ? `$${fmt(line.amount)}` : "—"}</td>
+                              </tr>
+                            );
+                          })}
+                          {lines.length === 0 && <tr><td colSpan={6} className="px-5.5 py-4 text-muted-foreground">La factura no tiene líneas.</td></tr>}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="flex flex-wrap items-baseline justify-between gap-4 border-t border-border px-5.5 pb-3.5 pt-3 text-sm font-semibold">
+                      <span className="text-[12.5px] font-normal text-muted-foreground">
+                        {assignedCount} línea{assignedCount === 1 ? "" : "s"}
+                        {balance?.ok && ", cuadran con el total del documento"}
+                        {balance && !balance.ok && <span className="font-semibold text-tone-warn"> · suman ${fmt(balance.sum)}; el subtotal es ${fmt(balance.expected)}</span>}
+                        {missingCount > 0 && <span className="font-semibold text-tone-warn"> · {missingCount} sin ítem se omite{missingCount === 1 ? "" : "n"}</span>}
+                        {lines.length > 6 && " · desplázate en la tabla para verlas todas"}
+                      </span>
+                      <span className="tabular-nums">Total ${fmt(Number(doc.totals.total))} {doc.currency}</span>
+                    </div>
+                  </section>
                   {sandboxTest && (
                     <SandboxTestSend docId={docId} history={testSends} disabled={submitting} buildBody={() => (vendorId && validLines.length ? reviewBody() : null)} />
                   )}
-                </section>
+                </div>
               )}
             </div>
           </div>
@@ -1148,6 +1218,10 @@ export function ReviewClient({
     </>
   );
 }
+
+const erpFactLabel = "text-[11.5px] font-semibold uppercase tracking-[0.05em] text-foreground/75";
+const erpFactValue = "mt-[3px] text-sm font-semibold";
+const erpFactNote = "block text-[12.5px] font-normal text-muted-foreground";
 
 /** One choice in the item window: a radio row with the item, its unit and where it comes from. */
 function ItemOptionRow({ name, checked, title, sub, tag, accent = false, onPick }: {

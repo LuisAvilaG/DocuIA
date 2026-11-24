@@ -9,7 +9,7 @@ import { and, desc, eq, ilike, inArray, or, sql, type SQL } from "drizzle-orm";
 import { isInvoiceFormat } from "@/lib/subsidiaries/invoice-format";
 import { DocumentsView, type DocListRow, type DocTab } from "./view";
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE = 10;
 
 /** Pestañas de la lista: clave de URL → estados que agrupa. */
 type DocStatus = (typeof historyDocuments.status.enumValues)[number];

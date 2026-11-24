@@ -159,7 +159,7 @@ export function CasesView({ rows, counts, total, page, pageSize, filters, flows,
             </table>
           </div>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-            <span className="text-[12.5px] tabular-nums text-muted-foreground">Mostrando {from}–{to} de {total.toLocaleString("es-MX")}</span>
+            <span className="text-[12.5px] tabular-nums text-muted-foreground">Mostrando {from}–{to} de {total.toLocaleString("es-MX")}{total > pageSize && ` · página ${page} de ${Math.ceil(total / pageSize)}`}</span>
             <span className="flex gap-1.5">
               {page > 1 ? <Link href={href({ page: page - 1 })} scroll={false} className={btn("secondary", "sm")}>Anterior</Link> : <span aria-disabled className={btn("secondary", "sm", "pointer-events-none opacity-50")}>Anterior</span>}
               {to < total ? <Link href={href({ page: page + 1 })} scroll={false} className={btn("secondary", "sm")}>Siguiente</Link> : <span aria-disabled className={btn("secondary", "sm", "pointer-events-none opacity-50")}>Siguiente</span>}

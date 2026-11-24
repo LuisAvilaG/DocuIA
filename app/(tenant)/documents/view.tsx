@@ -169,7 +169,7 @@ export function DocumentsView({
             </table>
           </div>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-            <span className="text-[12.5px] text-muted-foreground tabular-nums">Mostrando {from.toLocaleString("es-MX")}–{to.toLocaleString("es-MX")} de {total.toLocaleString("es-MX")}</span>
+            <span className="text-[12.5px] text-muted-foreground tabular-nums">Mostrando {from.toLocaleString("es-MX")}–{to.toLocaleString("es-MX")} de {total.toLocaleString("es-MX")}{total > pageSize && ` · página ${page} de ${Math.ceil(total / pageSize)}`}</span>
             <span className="flex gap-1.5">
               <PageLink href={page > 1 ? href({ page: page - 1 }) : null}>Anterior</PageLink>
               <PageLink href={to < total ? href({ page: page + 1 }) : null}>Siguiente</PageLink>

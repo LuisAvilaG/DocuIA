@@ -10,7 +10,7 @@ import { db } from "@/lib/db";
 import { contractCases, contractDocTypes, contractDocuments, contractFlows, contractValidations, orgUsers } from "@/db/schema";
 import { CasesView, type CaseListRow, type CaseView } from "./view";
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE = 10;
 type CaseStatus = (typeof contractCases.status.enumValues)[number];
 
 const VIEWS: Record<Exclude<CaseView, "all" | "findings">, CaseStatus[]> = {

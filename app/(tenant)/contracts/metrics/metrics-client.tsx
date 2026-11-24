@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { BarChart3, CalendarDays, ChevronDown, Clock3, Files, Filter, ShieldCheck, TriangleAlert } from "lucide-react";
+import { BarChart3, CalendarDays, Clock3, Files, Filter, ShieldCheck, TriangleAlert } from "lucide-react";
 import { FlowBars, SignerDonut, ThroughputArea } from "./charts";
 import { CONTRACT_CASE_STATUS, contractStatusLabel } from "@/lib/contracts/status";
 
@@ -166,5 +166,5 @@ function EmptyMetrics() {
 }
 
 function Select({ value, onChange, options, label }: { value: string; onChange: (value: string) => void; options: Array<{ value: string; label: string }>; label: string }) {
-  return <label className="relative"><span className="sr-only">{label}</span><select value={value} onChange={(event) => onChange(event.target.value)} className="appearance-none rounded-md border border-border bg-card py-1.5 pl-2.5 pr-7 text-xs text-foreground outline-none transition-colors hover:bg-secondary focus:border-primary/60">{options.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select><ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" /></label>;
+  return <label className="relative"><span className="sr-only">{label}</span><select value={value} onChange={(event) => onChange(event.target.value)} className="appearance-none rounded-md border border-border bg-card py-1.5 pl-2.5 pr-7 text-xs text-foreground outline-none transition-colors hover:bg-secondary focus:border-primary/60">{options.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>;
 }

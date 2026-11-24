@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { eq } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { requireApAutomation } from "@/lib/products";
 import { getAllFeatures } from "@/lib/features";
@@ -9,11 +9,11 @@ import { tenantCanToggle, tenantEditableKeys, TENANT_OFF_KEY } from "@/lib/featu
 import { qaModeActive } from "@/lib/features/qa-mode";
 import { INVOICE_FORMAT_LABEL, isInvoiceFormat } from "@/lib/subsidiaries/invoice-format";
 import { db } from "@/lib/db";
-import { organizations, subsidiaries } from "@/db/schema";
+import { catalogLocations, organizations, subsidiaries } from "@/db/schema";
 import { listVendorRules } from "@/lib/workflow/vendor-rules-store";
 import { PageFrame, StatusPill } from "@/components/kit";
 import { cn } from "@/lib/utils";
-import { SettingRows, ThresholdRow, type SettingRow } from "./rows";
+import { SettingRows, SubsidiaryLocationRow, ThresholdRow, type SettingRow } from "./rows";
 import { TENANT_COPY } from "./copy";
 
 const TOPICS = [
@@ -48,10 +48,16 @@ export default async function InvoiceSettingsPage({ searchParams }: { searchPara
   const [resolved, org, subs, rules] = await Promise.all([
     getAllFeatures(session.orgId),
     db.query.organizations.findFirst({ where: eq(organizations.id, session.orgId), columns: { autoProcessThreshold: true, activeNsEnvironment: true, timezone: true } }),
-    db.query.subsidiaries.findMany({ where: eq(subsidiaries.organizationId, session.orgId), columns: { id: true, name: true, nsSubsidiaryId: true, currency: true, invoiceFormat: true, isActive: true }, orderBy: [subsidiaries.name] }),
+    db.query.subsidiaries.findMany({ where: eq(subsidiaries.organizationId, session.orgId), columns: { id: true, name: true, nsSubsidiaryId: true, currency: true, invoiceFormat: true, isActive: true, defaultLocationId: true }, orderBy: [subsidiaries.name] }),
     listVendorRules(session.orgId).catch(() => []),
   ]);
   const byId = new Map(resolved.map((f) => [f.id, f]));
+  // Only the Subsidiarias topic lists locations: the default one of each subsidiary.
+  const locations = topic.key === "subs" && subs.length
+    ? await db.select({ subsidiaryId: catalogLocations.subsidiaryId, id: catalogLocations.internalId, name: catalogLocations.name }).from(catalogLocations)
+        .where(and(inArray(catalogLocations.subsidiaryId, subs.map((s) => s.id)), eq(catalogLocations.isInactive, false)))
+        .orderBy(asc(catalogLocations.name))
+    : [];
   const catalog = new Map(FEATURE_CATALOG.map((f) => [f.id as string, f]));
 
   const row = (id: string): SettingRow | null => {
@@ -115,18 +121,25 @@ export default async function InvoiceSettingsPage({ searchParams }: { searchPara
             <div>
               {subs.length === 0 && <p className="px-4.5 py-4 text-sm text-muted-foreground">Sin subsidiarias. DocuIA las configura al conectar tu ERP.</p>}
               {subs.map((s) => (
-                <div key={s.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4 border-b border-line-soft px-4.5 py-3.5 last:border-0">
-                  <span className="min-w-0">
-                    <b className="block text-sm font-semibold">{s.name}{!s.isActive && <span className="ml-2 text-xs font-normal text-muted-foreground">inactiva</span>}</b>
-                    <span className="text-[12.5px] text-muted-foreground">ID en el ERP {s.nsSubsidiaryId} · {s.currency} · facturas {isInvoiceFormat(s.invoiceFormat) ? INVOICE_FORMAT_LABEL[s.invoiceFormat] : s.invoiceFormat}</span>
-                  </span>
-                  <StatusPill tone="mute">Lo ajusta DocuIA</StatusPill>
+                <div key={s.id} className="border-b border-line-soft px-4.5 py-3.5 last:border-0">
+                  <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4">
+                    <span className="min-w-0">
+                      <b className="block text-sm font-semibold">{s.name}{!s.isActive && <span className="ml-2 text-xs font-normal text-muted-foreground">inactiva</span>}</b>
+                      <span className="text-[12.5px] text-muted-foreground">ID en el ERP {s.nsSubsidiaryId} · {s.currency} · facturas {isInvoiceFormat(s.invoiceFormat) ? INVOICE_FORMAT_LABEL[s.invoiceFormat] : s.invoiceFormat}</span>
+                    </span>
+                    <StatusPill tone="mute">Lo ajusta DocuIA</StatusPill>
+                  </div>
+                  <SubsidiaryLocationRow subsidiaryId={s.id} initial={s.defaultLocationId ?? ""}
+                    locations={locations.filter((l) => l.subsidiaryId === s.id).map((l) => ({ id: l.id, name: l.name ?? l.id }))} />
                 </div>
               ))}
             </div>
           ) : (
             <div>
-              {topic.key === "lectura" && <ThresholdRow initialPct={Math.round((org?.autoProcessThreshold ?? 0.85) * 100)} />}
+              {topic.key === "lectura" && (
+                <ThresholdRow initialPct={Math.round((org?.autoProcessThreshold ?? 0.85) * 100)}
+                  autoSend={{ granted: byId.get("auto_send")?.adminGranted ?? false, enabled: byId.get("auto_send")?.isEnabled ?? false }} />
+              )}
               <SettingRows rows={rows} />
             </div>
           )}

@@ -19,6 +19,9 @@ export const subsidiaries = pgTable("subsidiaries", {
   taxId:          varchar("tax_id", { length: 20 }),
   // Formato de las facturas de proveedores: "cfdi" (XML + PDF) o "pdf" (PDF o imagen).
   invoiceFormat:  varchar("invoice_format", { length: 10 }).notNull().default("pdf"),
+  // Location (ERP internal id) an invoice gets when nobody chooses one: the
+  // automatic send has no reviewer to pick it, and some ERP accounts require it.
+  defaultLocationId: varchar("default_location_id", { length: 64 }),
   isActive:      boolean("is_active").notNull().default(true),
   createdAt:      timestamp("created_at").notNull().defaultNow(),
   updatedAt:      timestamp("updated_at").notNull().defaultNow(),

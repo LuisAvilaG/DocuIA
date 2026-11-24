@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type ReactNode, type InputHTMLAttributes, type SelectHTMLAttributes } from "react";
-import { CalendarDays, Check, ChevronDown, Copy, Eye, EyeOff, Sparkles } from "lucide-react";
+import { CalendarDays, Check, Copy, Eye, EyeOff, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // Form vocabulary for the platform-admin screens. Every control shares the same
@@ -41,7 +41,6 @@ export function Select({ className, children, ...props }: SelectHTMLAttributes<H
   return (
     <span className="relative block">
       <select className={cn(control, "appearance-none pr-9 cursor-pointer", className)} {...props}>{children}</select>
-      <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" aria-hidden="true" />
     </span>
   );
 }

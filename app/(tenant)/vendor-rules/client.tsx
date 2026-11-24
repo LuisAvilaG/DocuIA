@@ -15,7 +15,7 @@ interface Props {
   canManage: boolean;
   maxRules: number;
   orgThresholdPct: number;
-  features: { poMatching: boolean; threeWay: boolean; sat: boolean };
+  features: { poMatching: boolean; threeWay: boolean; sat: boolean; autoSend: boolean };
   /** Proveedores y facturas del trimestre por regla. */
   usage: Record<string, RuleUsage>;
 }
@@ -206,7 +206,7 @@ export function VendorRulesClient({ initialRules, categories, canManage, maxRule
       { k: "rx", label: "Recepción", value: noPo ? "No aplica" : cfg.requireReceipt ? "Exige entrada" : "No" },
       { k: "tol", label: "Tolerancia", value: noPo ? "No aplica" : tolerance(cfg) },
       { k: "mm", label: "Si no cuadra", value: noPo ? "No aplica" : cfg.onMismatch ? MISMATCH_LABEL[cfg.onMismatch] : "General" },
-      { k: "auto", label: "Envío solo", value: cfg.neverAutoProcess ? "Nunca · siempre revisión" : `Con ${cfg.autoProcessPct ?? orgThresholdPct} %${cfg.satRequired ? " · SAT" : ""}` },
+      { k: "auto", label: "Envío solo", value: !features.autoSend ? "Apagado en Ajustes de Facturas" : cfg.neverAutoProcess ? "Nunca · siempre revisión" : `Con ${cfg.autoProcessPct ?? orgThresholdPct} %${cfg.satRequired ? " · SAT" : ""}` },
     ];
   };
   const baseSteps = defaultRule ? steps(defaultRule.config) : null;
@@ -399,6 +399,7 @@ export function VendorRulesClient({ initialRules, categories, canManage, maxRule
               </>
             )}
             <PathStep n={c.poRequirement !== "none" ? 5 : 2} title="Envío solo al ERP">
+              {!features.autoSend && <p className="rounded-lg bg-tone-warn-bg px-3 py-2 text-[12.5px] text-tone-warn">El envío automático está apagado en Ajustes de Facturas: todas las facturas pasan a revisión, también las de esta regla.</p>}
               <label className="flex items-center justify-between gap-3 text-[13.5px]">
                 <span>Siempre enviar a revisión</span>
                 <Switch checked={c.neverAutoProcess} onCheckedChange={(v) => setConfig({ neverAutoProcess: v })} aria-label="Siempre enviar a revisión" />

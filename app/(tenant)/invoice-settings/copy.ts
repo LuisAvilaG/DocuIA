@@ -11,6 +11,7 @@ export const TENANT_COPY: Record<string, { name: string; description: string }> 
   vendor_rules:             { name: "Reglas de proveedores", description: "Excepciones a estos ajustes por proveedor o por categoría." },
   sat_cfdi_validation:      { name: "Validación del CFDI ante el SAT", description: "Confirma que el CFDI está vigente y que el RFC y el UUID son correctos." },
   approval_workflow:        { name: "Flujo de aprobación", description: "Un aprobador revisa las facturas antes de enviarlas al ERP." },
+  auto_send:                { name: "Envío automático", description: "Las facturas leídas con la confianza pedida se envían solas al ERP." },
   duplicate_detection:      { name: "Detección de duplicados", description: "Detiene la factura si ya existe el mismo número del mismo proveedor." },
   erp_attachments:          { name: "Adjuntos y campos en el ERP", description: "Adjunta los archivos a la factura del ERP y llena el UUID y campos propios." },
   netsuite_dry_run:         { name: "Modo prueba", description: "Valida contra el ERP pero no crea nada." },

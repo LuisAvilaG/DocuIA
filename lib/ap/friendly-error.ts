@@ -3,6 +3,8 @@
 // personas pasan tal cual.
 
 const RULES: Array<[RegExp, string]> = [
+  // The ERP account requires a location and the invoice went without one.
+  [/(?:introduzca valores para|please enter value\(s\) for)\s*:?.*(?:ubicaci[oó]n|location)/i, "El ERP pide la ubicación de la factura. Elígela al revisarla, o define la ubicación predeterminada en Ajustes de Facturas → Subsidiarias."],
   // The ERP client reports "HTTP 401: …"; the reading service never does.
   [/^HTTP (?:401|403)\b|(?:netsuite|restlet|\bERP\b).*(?:unauthori[sz]ed|invalid login)/i, "El ERP rechazó la conexión. Revisa las credenciales del ERP."],
   [/^HTTP (?:429|5\d\d)\b|(?:netsuite|restlet|\bERP\b).*(?:timeout|timed out|ECONN|fetch failed)/i, "El ERP no respondió. Reintenta en unos minutos."],

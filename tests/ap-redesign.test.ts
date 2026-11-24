@@ -11,6 +11,7 @@ test("errores técnicos se vuelven una frase legible", () => {
   assert.equal(friendlyError("Missing GOOGLE_API_KEY environment variable"), "Falta configurar el acceso al servicio de lectura. Avísale a DocuIA.");
   assert.equal(friendlyError('{"code":"X"}'), "Ocurrió un error técnico al procesarlo. Reintenta o avísale a DocuIA.");
   assert.equal(friendlyError("2 líneas sin ítem del ERP"), "2 líneas sin ítem del ERP");
+  assert.match(friendlyError("No se pudo procesar el documento. USER_ERROR: Introduzca valores para: Ubicación") ?? "", /^El ERP pide la ubicación de la factura/);
   assert.equal(friendlyError(null), null);
 });
 

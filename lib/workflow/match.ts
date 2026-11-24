@@ -1,7 +1,7 @@
 import { eq, and, asc, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
-  catalogItems, catalogVendors, catalogLocations, itemMappings,
+  catalogItems, catalogVendors, catalogLocations, itemMappings, subsidiaries,
 } from "@/db/schema";
 import { computeSimilarity, normalizeForLookup } from "./similarity";
 import type {
@@ -278,12 +278,22 @@ export async function loadLocations(subsidiaryId: string, limit = 120): Promise<
         eq(catalogLocations.isInactive, false)
       )
     )
+    .orderBy(asc(catalogLocations.name))
     .limit(limit);
 
   return rows.map((r) => ({
     internal_id: String(r.internal_id),
     name: String(r.name || ""),
   }));
+}
+
+/**
+ * The subsidiary's default location, only while it is still one of its active
+ * locations: one removed or inactivated in the ERP would be rejected there.
+ */
+export async function loadDefaultLocation(subsidiaryId: string, locations: LocationOption[]): Promise<string | null> {
+  const [sub] = await db.select({ id: subsidiaries.defaultLocationId }).from(subsidiaries).where(eq(subsidiaries.id, subsidiaryId)).limit(1);
+  return sub?.id && locations.some((l) => l.internal_id === sub.id) ? sub.id : null;
 }
 
 // ── Item mapping memory ───────────────────────────────────────────────────────
@@ -509,6 +519,7 @@ export async function buildUiPayload(
   }
 
   const locations = await loadLocations(subsidiaryId);
+  const defaultLocationId = await loadDefaultLocation(subsidiaryId, locations);
 
   const now = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Mexico_City",
@@ -577,7 +588,7 @@ export async function buildUiPayload(
       },
       lines,
     },
-    catalogs: { vendors, locations },
+    catalogs: { vendors, locations, default_location_id: defaultLocationId },
     meta: {
       parser_version: parserVersion,
       subsidiary_id: subsidiaryId,

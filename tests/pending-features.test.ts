@@ -9,6 +9,9 @@ test("motivo final de revisión: lo más importante primero, como mucho dos", ()
   assert.equal(reviewReason({ ...base, confidence: 0.71 }), "Lectura con 71 % de confianza (pide 90 %)");
   assert.equal(reviewReason({ ...base, neverAutoProcess: true }), "La regla del proveedor pide revisarla siempre");
   assert.equal(reviewReason(base), "Revisión pedida por la configuración");
+  // Envío automático apagado: es el motivo cuando no hay nada que corregir, y va después de lo que sí lo hay.
+  assert.equal(reviewReason({ ...base, autoSendOff: true }), "El envío automático está apagado");
+  assert.equal(reviewReason({ ...base, autoSendOff: true, vendorSelected: false }), "Proveedor sin identificar en el ERP · El envío automático está apagado");
 });
 
 test("aviso cuando el documento de una casilla no parece de ese tipo", async () => {

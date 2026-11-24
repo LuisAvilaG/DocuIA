@@ -139,6 +139,8 @@ export type UiPayload = {
   catalogs: {
     vendors: VendorOption[];
     locations: LocationOption[];
+    /** The subsidiary's default location, when it is one of the active ones. */
+    default_location_id?: string | null;
   };
   meta: Record<string, unknown>;
   /** Vendor rule, fiscal validation and PO comparison (lib/workflow/ap-checks.ts). */

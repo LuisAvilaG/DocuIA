@@ -10,6 +10,7 @@ import { catalogItems, exceptionQueue, historyDocuments, nsConnections, organiza
 import { and, eq, inArray } from "drizzle-orm";
 import { getFeature, isFeatureEnabled } from "@/lib/features";
 import { storedDraft, type NsDraft } from "@/lib/workflow/ns-payload";
+import { loadDefaultLocation, loadLocations } from "@/lib/workflow/match";
 import { orgTimeZone } from "@/lib/org-time-zone";
 import type { ApChecks } from "@/lib/workflow/ap-checks";
 import type { LineStatus } from "@/lib/workflow/po-match";
@@ -150,7 +151,13 @@ export default async function InvoiceDetailPage({ params, searchParams }: {
   if (doc.status === "review") {
     if (!doc.products) notFound();
     const reviewed = reviewedDraft(doc.products);
-    const payload = reviewed ? await payloadFromDraft(doc.products, reviewed, doc.subsidiaryId) : doc.products;
+    const read = reviewed ? await payloadFromDraft(doc.products, reviewed, doc.subsidiaryId) : doc.products;
+    // Locations as they are now, not as they were when the invoice was read:
+    // a catalog synced afterwards left the reviewer with no location to choose.
+    const locations = await loadLocations(doc.subsidiaryId, 500);
+    const defaultLocationId = await loadDefaultLocation(doc.subsidiaryId, locations);
+    const base = read as { catalogs?: Record<string, unknown> } & Record<string, unknown>;
+    const payload = { ...base, catalogs: { ...base.catalogs, locations, default_location_id: defaultLocationId } };
     return (
       <ReviewClient
         docId={doc.id}
@@ -170,7 +177,7 @@ export default async function InvoiceDetailPage({ params, searchParams }: {
         isCfdi={isCfdi}
         canWrite={canWrite}
         initialPoId={reviewed ? reviewed.poId : undefined}
-        initialLocationId={reviewed?.locationId ?? null}
+        initialLocationId={reviewed ? reviewed.locationId : defaultLocationId}
         payload={payload as unknown as Parameters<typeof ReviewClient>[0]["payload"]}
       />
     );

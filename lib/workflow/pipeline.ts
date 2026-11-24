@@ -479,7 +479,10 @@ async function runPipelineInner(input: PipelineInput): Promise<PipelineResult> {
     // A vendor rule can raise or lower the bar, or keep its invoices for a person.
     const rule = checks.vendorRule;
     const threshold = rule?.autoProcessPct != null ? rule.autoProcessPct / 100 : autoProcessThreshold;
+    // The client can turn automatic sending off: then a person sends every invoice.
+    const autoSendOn = feat.isEnabled("auto_send");
     const autoProcess =
+      autoSendOn &&
       !rule?.neverAutoProcess &&
       !totalsWarning &&
       payload.confidence.overall >= threshold &&
@@ -527,6 +530,7 @@ async function runPipelineInner(input: PipelineInput): Promise<PipelineResult> {
             confidence: payload.confidence.overall,
             threshold,
             neverAutoProcess: Boolean(rule?.neverAutoProcess),
+            autoSendOff: !autoSendOn,
           }),
           updatedAt: new Date(),
         })

@@ -1,0 +1,1 @@
+ALTER TABLE "subsidiaries" ADD COLUMN "default_location_id" varchar(64);

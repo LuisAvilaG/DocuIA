@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useMemo, Fragment } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
@@ -960,15 +961,15 @@ export function ReviewClient({
                     {([["Fecha", doc.invoice_date], ["Vence", doc.due_date], ["OC en la factura", doc.purchase_order]] as const).filter(([, v]) => v).map(([k, v]) => (
                       <Fragment key={k}><dt className="text-muted-foreground">{k}</dt><dd className="tabular-nums">{v}</dd></Fragment>
                     ))}
-                    {payload.catalogs.locations.length > 0 && (
-                      <>
-                        <dt className="self-center text-muted-foreground">Ubicación</dt>
-                        <dd className="max-w-64">
-                          <SelectMenu value={locationId} onChange={setLocationId} ariaLabel="Ubicación" placeholder="Sin ubicación"
-                            options={[{ value: "", label: "Sin ubicación" }, ...payload.catalogs.locations.map((loc) => ({ value: loc.internal_id, label: loc.name }))]} />
-                        </dd>
-                      </>
-                    )}
+                    <dt className="self-center text-muted-foreground">Ubicación</dt>
+                    <dd className="max-w-64">
+                      {payload.catalogs.locations.length > 0 ? (
+                        <SelectMenu value={locationId} onChange={setLocationId} ariaLabel="Ubicación" placeholder="Sin ubicación"
+                          options={[{ value: "", label: "Sin ubicación" }, ...payload.catalogs.locations.map((loc) => ({ value: loc.internal_id, label: loc.name }))]} />
+                      ) : (
+                        <span className="text-muted-foreground">Esta subsidiaria no tiene ubicaciones del ERP. <Link href="/catalogs" className="font-semibold text-link hover:underline">Sincroniza los catálogos</Link> para elegir una.</span>
+                      )}
+                    </dd>
                   </dl>
                 </section>
 

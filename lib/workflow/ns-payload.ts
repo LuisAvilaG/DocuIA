@@ -117,7 +117,7 @@ function num(value: unknown): number | null {
 }
 
 /** Draft from the extraction payload as matched (auto-process). */
-export function draftFromUiPayload(payload: Pick<UiPayload, "document">): NsDraft {
+export function draftFromUiPayload(payload: Pick<UiPayload, "document"> & { catalogs?: Partial<UiPayload["catalogs"]> }): NsDraft {
   const d = payload.document;
   return {
     vendorId:      d.vendor.selected_internal_id,
@@ -126,7 +126,8 @@ export function draftFromUiPayload(payload: Pick<UiPayload, "document">): NsDraf
     invoiceDate:   d.invoice_date,
     dueDate:       d.due_date,
     currency:      d.currency,
-    locationId:    null,
+    // Nobody reviews an automatic send: it goes with the subsidiary's default location.
+    locationId:    payload.catalogs?.default_location_id ?? null,
     poId:          null,
     lines: d.lines
       .filter((l) => l.selected_item_id)
@@ -167,7 +168,7 @@ export function assignPoLines(lines: NsDraft["lines"], comparison: PoLineSource[
 }
 
 /** Auto-process draft plus the PO chosen by the AP checks, with each line tied to its PO line. */
-export function draftWithPo(payload: Pick<UiPayload, "document" | "ap_checks">): NsDraft {
+export function draftWithPo(payload: Pick<UiPayload, "document" | "ap_checks"> & { catalogs?: Partial<UiPayload["catalogs"]> }): NsDraft {
   const draft = draftFromUiPayload(payload);
   const po = payload.ap_checks?.po;
   if (!po?.selectedPoId) return draft;

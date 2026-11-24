@@ -8,6 +8,8 @@ export function reviewReason(input: {
   confidence: number;
   threshold: number;
   neverAutoProcess: boolean;
+  /** The client turned automatic sending off: every invoice waits for a person. */
+  autoSendOff?: boolean;
 }): string {
   const reasons: string[] = [];
   if (input.decisionReason) reasons.push(input.decisionReason);
@@ -19,5 +21,7 @@ export function reviewReason(input: {
   if (reasons.length === 0 && input.confidence < input.threshold) {
     reasons.push(`Lectura con ${Math.round(input.confidence * 100)} % de confianza (pide ${Math.round(input.threshold * 100)} %)`);
   }
+  // Last: with something to fix, that is what the reviewer needs to read first.
+  if (input.autoSendOff) reasons.push("El envío automático está apagado");
   return reasons.slice(0, 2).join(" · ") || "Revisión pedida por la configuración";
 }

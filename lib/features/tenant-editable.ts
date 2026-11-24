@@ -16,6 +16,7 @@ export const TENANT_EDITABLE: Record<string, TenantEditable> = {
   },
   three_way_match:     { keys: ["recheck_hours", "max_wait_days", "on_timeout", "scope"] },
   approval_workflow:   { toggle: true },
+  auto_send:           { toggle: true },
   duplicate_detection: { toggle: true },
   bulk_upload:         { keys: ["batch_mode", "batch_wait_minutes"] },
   auto_mapping:        { keys: ["min_confirmations"] },

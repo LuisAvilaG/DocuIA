@@ -104,6 +104,13 @@ export async function recheckAwaitingReceipt(doc: HistoryDocument, requestedBy: 
     await moveTo(doc, "review", gate.outcome.reason, checks);
     return { status: "review", reason: gate.outcome.reason };
   }
+  // Automatic sending was turned off while the document waited for its goods:
+  // one nobody has sent by hand goes to a person instead of posting itself.
+  if (!flags.isEnabled("auto_send") && !seenByReviewer) {
+    const reason = "Recepción completa; el envío automático está apagado";
+    await moveTo(doc, "review", reason, checks);
+    return { status: "review", reason };
+  }
   if (flags.isEnabled("approval_workflow") && !approvedBy) {
     await moveTo(doc, "pending_approval", "Recepción completa; falta la aprobación", checks);
     return { status: "pending_approval" };

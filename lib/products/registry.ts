@@ -60,6 +60,7 @@ export const FEATURE_PRODUCT: Record<string, ProductKey> = {
   po_processing:          "ap_automation",
   netsuite_dry_run:       "ap_automation",
   approval_workflow:      "ap_automation",
+  auto_send:              "ap_automation",
   duplicate_detection:    "ap_automation",
   bulk_upload:            "ap_automation",
   exception_queue:        "ap_automation",

@@ -8,7 +8,7 @@ import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
   Camera, Upload, FileText, AlertCircle, Loader2, CheckCircle2,
-  ChevronDown, Calendar,
+  Calendar,
 } from "lucide-react";
 import { calculateTaxes } from "@/lib/expense/tax-engine";
 import type { ExpenseOcrResult } from "@/lib/expense/extract";
@@ -503,7 +503,6 @@ export function ItemCaptureClient({ reportId, reportPurpose, categories, departm
                 {/* Keep a currency read from the receipt visible and selected. */}
                 {!["COP", "MXN", "USD"].includes(currency) && <option value={currency}>{currency}</option>}
               </select>
-              <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             </div>
           </div>
 
@@ -626,7 +625,6 @@ export function ItemCaptureClient({ reportId, reportPurpose, categories, departm
                     <option key={c.id} value={String(c.id)}>{c.name}</option>
                   ))}
                 </select>
-                <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               </div>
             )}
           </div>
@@ -646,7 +644,6 @@ export function ItemCaptureClient({ reportId, reportPurpose, categories, departm
                     <option key={d.id} value={String(d.id)}>{d.name}</option>
                   ))}
                 </select>
-                <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               </div>
             </div>
           )}
@@ -666,7 +663,6 @@ export function ItemCaptureClient({ reportId, reportPurpose, categories, departm
                     <option key={c.id} value={String(c.id)}>{c.name}</option>
                   ))}
                 </select>
-                <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               </div>
             </div>
           )}

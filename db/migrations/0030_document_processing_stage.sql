@@ -1,0 +1,1 @@
+ALTER TABLE "history_documents" ADD COLUMN "processing_stage" varchar(16);

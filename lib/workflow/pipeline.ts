@@ -54,6 +54,14 @@ export type PipelineResult =
   | { status: "completed";         documentId: number; netsuiteId: string | null; recordUrl: string | null }
   | { status: "failed";            documentId: number; error: string };
 
+/**
+ * Marks where the pipeline is, for the upload panel's steps. A failed write
+ * only leaves the panel a step behind: it never stops the document.
+ */
+async function setStage(docId: number, stage: "read" | "match" | "checks" | "send"): Promise<void> {
+  await db.update(historyDocuments).set({ processingStage: stage }).where(eq(historyDocuments.id, docId)).catch(() => {});
+}
+
 // ─── Feature loader ──────────────────────────────────────────────────────────
 async function loadFeatures(organizationId: string) {
   const all = await getAllFeatures(organizationId);
@@ -167,7 +175,7 @@ async function runPipelineInner(input: PipelineInput): Promise<PipelineResult> {
     // must not restart a document that already reached review or the ERP.
     docId = input.documentId;
     const claimed = await db.update(historyDocuments)
-      .set({ status: "extracting", updatedAt: new Date() })
+      .set({ status: "extracting", processingStage: "read", updatedAt: new Date() })
       .where(and(eq(historyDocuments.id, docId), inArray(historyDocuments.status, ["uploaded", "extracting", "failed"])))
       .returning({ id: historyDocuments.id });
     if (!claimed.length) return { status: "failed", documentId: docId, error: "El documento ya fue procesado; no se vuelve a leer." };
@@ -179,6 +187,7 @@ async function runPipelineInner(input: PipelineInput): Promise<PipelineResult> {
         subsidiaryId:   input.subsidiaryId,
         documentType:   input.documentType,
         status:         "extracting",
+        processingStage: "read",
         storageKey:     storageEnabled ? storageKey : null,
         attachmentKey:  input.attachmentKey ?? null,
         processedBy:    input.requestedBy ?? null,
@@ -357,6 +366,9 @@ async function runPipelineInner(input: PipelineInput): Promise<PipelineResult> {
       usageDelta.aiTokensOutput  = extraction.completionTokens;
     }
 
+    // The document is read: from here on it is looked up (duplicates, catalogs).
+    await setStage(docId, "match");
+
     // ── 4. Duplicate detection (after extraction — we need vendor + number) ──
     let qaDuplicateOf: number | null = null;
     if (detectDupes && extraction.invoice.vendor && extraction.invoice.invoiceNumber) {
@@ -436,6 +448,7 @@ async function runPipelineInner(input: PipelineInput): Promise<PipelineResult> {
     });
 
     // ── 6b. AP checks: vendor rule, fiscal validation, invoice ↔ PO ─────────
+    await setStage(docId, "checks");
     const { checks, decision } = await runApChecks({
       organizationId: input.organizationId,
       subsidiaryId:   input.subsidiaryId,
@@ -588,7 +601,7 @@ async function runPipelineInner(input: PipelineInput): Promise<PipelineResult> {
     // failed send left the document with "sin líneas" as if nothing had been read.
     const sendDraft = draftWithPo(payload);
     await db.update(historyDocuments).set({
-      status: "processing", products: { ...payload, approval_draft: sendDraft } as unknown, poInternalId: poId, updatedAt: new Date(),
+      status: "processing", processingStage: "send", products: { ...payload, approval_draft: sendDraft } as unknown, poInternalId: poId, updatedAt: new Date(),
     }).where(eq(historyDocuments.id, docId));
 
     // Read dry_run fresh here so tenant changes during processing take effect

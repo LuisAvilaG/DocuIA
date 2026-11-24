@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { btn, Drawer } from "@/components/kit";
 import { friendlyError } from "@/lib/ap/friendly-error";
 import { apStatus } from "@/lib/status-vocabulary";
+import { activeStep, uploadSteps, type UploadStep } from "@/lib/ap/upload-steps";
 import type { InvoiceFormat } from "@/lib/subsidiaries/invoice-format";
 
 export interface UploadSubsidiary { id: string; name: string; invoiceFormat: InvoiceFormat; country: string | null }
@@ -26,6 +27,10 @@ interface Item {
   vendor?: string | null;
   total?: number | null;
   erpId?: string | null;
+  /** Where the pipeline is: read, match, checks or send. */
+  stage?: string | null;
+  /** It waits for a provider batch instead of being read right away. */
+  batch?: boolean;
 }
 
 const BULK_MAX = 20;
@@ -34,7 +39,8 @@ const DOC_ACCEPT = ".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/
 const XML_ACCEPT = ".xml,text/xml,application/xml";
 const SETTLED = new Set<ItemStatus>(["review", "completed", "pending_approval", "awaiting_receipt", "failed"]);
 const NEEDS = new Set<ItemStatus>(["review", "pending_approval", "awaiting_receipt", "failed"]);
-const POLL_MS = 3000;
+// Short enough for the steps to be seen moving: a document is read in seconds.
+const POLL_MS = 1500;
 const POLL_LIMIT_MS = 4 * 60_000;
 
 const baseName = (name: string) => name.replace(/\.[^.]+$/, "").trim().toLowerCase();
@@ -68,6 +74,21 @@ function reasonOf(it: Item, raw?: string | null): string {
     case "awaiting_receipt": return "Espera la entrada de almacén";
     default: return errorMessage || apStatus(it.status).label;
   }
+}
+
+const money = (n: number) => n.toLocaleString("es-MX", { style: "currency", currency: "MXN" });
+
+/** The steps of one document, from what the panel knows about it. */
+function stepsOf(it: Item, raw?: string | null): UploadStep[] {
+  return uploadSteps({
+    status: it.status,
+    stage: it.stage,
+    received: Boolean(it.docId),
+    batch: it.batch,
+    readSummary: [it.numDoc, it.vendor, it.total != null ? money(it.total) : null].filter(Boolean).join(" · ") || null,
+    reason: NEEDS.has(it.status) ? reasonOf(it, raw) : null,
+    sentSummary: [it.total != null ? money(it.total) : null, it.erpId ? `ERP ${it.erpId}` : null].filter(Boolean).join(" · ") || null,
+  });
 }
 
 export function UploadDrawer({ subsidiaries, bulkEnabled, onClose, onUploaded }: {
@@ -171,7 +192,7 @@ export function UploadDrawer({ subsidiaries, bulkEnabled, onClose, onUploaded }:
         const data = await res.json().catch(() => ({}));
         if (data.documentId) docKeys.set(data.documentId, it.key);
         if (!res.ok) patch(it.key, { status: "failed", error: data.error ?? "No se pudo procesar", docId: data.documentId });
-        else patch(it.key, { status: (data.status ?? "queued") as ItemStatus, docId: data.documentId });
+        else patch(it.key, { status: (data.status ?? "queued") as ItemStatus, docId: data.documentId, batch: data.batch === true });
       } catch {
         patch(it.key, { status: "failed", error: "Sin conexión con el servidor" });
       }
@@ -186,12 +207,12 @@ export function UploadDrawer({ subsidiaries, bulkEnabled, onClose, onUploaded }:
       try {
         const res = await fetch(`/api/v1/workflow/status?ids=${ids.join(",")}`);
         if (res.ok) {
-          const { documents } = await res.json() as { documents: Array<{ id: number; status: ItemStatus; vendor: string | null; numDoc: string | null; total: string | number | null; netsuiteDocId: string | null; errorMessage: string | null }> };
+          const { documents } = await res.json() as { documents: Array<{ id: number; status: ItemStatus; vendor: string | null; numDoc: string | null; total: string | number | null; netsuiteDocId: string | null; errorMessage: string | null; processingStage: string | null }> };
           const pendingIds: number[] = [];
           for (const d of documents) {
             const key = docKeys.get(d.id);
             if (!key) continue;
-            patch(key, { status: d.status, vendor: d.vendor, numDoc: d.numDoc, total: d.total != null ? Number(d.total) : null, erpId: d.netsuiteDocId });
+            patch(key, { status: d.status, stage: d.processingStage, vendor: d.vendor, numDoc: d.numDoc, total: d.total != null ? Number(d.total) : null, erpId: d.netsuiteDocId });
             setReasons((r) => ({ ...r, [key]: d.errorMessage }));
             if (!SETTLED.has(d.status)) pendingIds.push(d.id);
           }
@@ -220,7 +241,9 @@ export function UploadDrawer({ subsidiaries, bulkEnabled, onClose, onUploaded }:
     const summary = phase === "run"
       ? sending
         ? `Subiendo ${n === 1 ? "el archivo" : "los archivos"}. No cierres este panel hasta que terminen de subir.`
-        : `${n - running.length} de ${n} terminados. Ya puedes cerrar este panel; el proceso sigue.`
+        : n === 1
+          ? `Paso ${Math.min(5, activeStep(items[0]) + 1)} de 5. Ya puedes cerrar este panel; el proceso sigue.`
+          : `${n - running.length} de ${n} terminados. Ya puedes cerrar este panel; el proceso sigue.`
       : [
           done.length ? `${done.length === n ? (n === 1 ? "Ya está" : "Todos están") : `${done.length} ya ${done.length === 1 ? "está" : "están"}`} en el ERP.` : "",
           needs.length ? `${needs.length === n ? (n === 1 ? "Necesita" : "Todos necesitan") : `Los otros ${needs.length} necesitan`} algo de ti.` : "",
@@ -241,13 +264,27 @@ export function UploadDrawer({ subsidiaries, bulkEnabled, onClose, onUploaded }:
           </>
         )}
       >
-        {running.length > 0 && (
+        {/* One document: its steps, so the progress is seen as it happens. */}
+        {n === 1 && (
           <section>
-            <Label>{phase === "run" ? "En proceso" : "Siguen en proceso"}</Label>
-            {running.map((it) => <ResultRow key={it.key} mark="run" title={it.file.name} sub={it.status === "pending" ? "En espera" : it.status === "uploading" ? "Subiendo…" : "Leyendo…"} />)}
+            <div className="mb-5 flex items-center gap-2.5 text-[13.5px]">
+              <FileBadge file={items[0].file} />
+              <b className="min-w-0 truncate font-semibold">{items[0].file.name}</b>
+            </div>
+            <Steps steps={stepsOf(items[0], reasons[items[0].key])} />
           </section>
         )}
-        {needs.length > 0 && (
+        {n > 1 && running.length > 0 && (
+          <section>
+            <Label>{phase === "run" ? "En proceso" : "Siguen en proceso"}</Label>
+            {running.map((it) => {
+              const at = activeStep(it);
+              return <ResultRow key={it.key} mark="run" title={it.file.name} progress={at}
+                sub={it.status === "pending" ? "En espera de subir" : `Paso ${at + 1} de 5 · ${stepsOf(it)[at].title}`} />;
+            })}
+          </section>
+        )}
+        {n > 1 && needs.length > 0 && (
           <section>
             <Label>Necesitan algo de ti</Label>
             {needs.map((it) => (
@@ -260,13 +297,13 @@ export function UploadDrawer({ subsidiaries, bulkEnabled, onClose, onUploaded }:
             ))}
           </section>
         )}
-        {done.length > 0 && (
+        {n > 1 && done.length > 0 && (
           <section>
             <Label>Enviados al ERP sin intervención · {done.length}</Label>
             {done.slice(0, 6).map((it) => (
               <ResultRow key={it.key} mark="ok"
                 title={[it.numDoc ?? it.file.name, it.vendor].filter(Boolean).join(" · ")}
-                sub={[it.total != null ? it.total.toLocaleString("es-MX", { style: "currency", currency: "MXN" }) : null, it.erpId ? `ERP ${it.erpId}` : null].filter(Boolean).join(" · ") || "En el ERP"}
+                sub={[it.total != null ? money(it.total) : null, it.erpId ? `ERP ${it.erpId}` : null].filter(Boolean).join(" · ") || "En el ERP"}
               />
             ))}
             {done.length > 6 && <p className="mt-1.5 text-[12.5px] text-muted-foreground">y {done.length - 6} más · <button type="button" onClick={onClose} className="text-link hover:underline">ver todos</button></p>}
@@ -380,7 +417,55 @@ const MARK = {
   run:  { cls: "bg-tone-info-bg text-tone-info", sym: "",  sr: "En proceso" },
 } as const;
 
-function ResultRow({ mark, title, sub, action }: { mark: keyof typeof MARK; title: string; sub: string; action?: React.ReactNode }) {
+const STEP_MARK: Record<UploadStep["state"], { cls: string; sym: string; sr: string }> = {
+  done:      { cls: "bg-tone-ok-bg text-tone-ok",     sym: "✓", sr: "Hecho" },
+  active:    { cls: "bg-tone-info-bg text-tone-info", sym: "",  sr: "En curso" },
+  pending:   { cls: "border border-[#D6D2C8] bg-card text-muted-foreground", sym: "", sr: "Pendiente" },
+  failed:    { cls: "bg-tone-err-bg text-tone-err",   sym: "✕", sr: "Se detuvo aquí" },
+  attention: { cls: "bg-tone-warn-bg text-tone-warn", sym: "!", sr: "Necesita algo de ti" },
+  waiting:   { cls: "bg-tone-blue-bg text-tone-blue", sym: "●", sr: "En espera" },
+};
+
+/** The steps of a document, top to bottom, joined by a line that fills as they finish. */
+function Steps({ steps }: { steps: UploadStep[] }) {
+  const current = steps.find((s) => s.state !== "done" && s.state !== "pending") ?? steps[steps.length - 1];
+  return (
+    <>
+      <ol aria-label="Avance del documento">
+        {steps.map((s, i) => {
+          const m = STEP_MARK[s.state];
+          const lastStep = i === steps.length - 1;
+          return (
+            <li key={i} aria-current={s.state === "active" ? "step" : undefined} className="grid grid-cols-[28px_minmax(0,1fr)] gap-x-3">
+              <span className="relative flex justify-center">
+                {!lastStep && <span aria-hidden className={cn("absolute bottom-1 top-8 w-px", s.state === "done" ? "bg-[#A9D6BF]" : "bg-border")} />}
+                <span className={cn("flex size-7 items-center justify-center rounded-full text-[12px] font-bold tabular-nums", m.cls)}>
+                  {s.state === "active" ? <Loader2 className="size-3.5 animate-spin" /> : <span aria-hidden>{m.sym || i + 1}</span>}
+                  <span className="sr-only">{m.sr}</span>
+                </span>
+              </span>
+              <span className={cn("min-w-0 pt-[3px]", !lastStep && "pb-5")}>
+                <b className={cn("block text-sm leading-snug", s.state === "pending" ? "font-medium text-muted-foreground" : "font-semibold")}>{s.title}</b>
+                {s.detail && (
+                  <span className={cn("mt-0.5 block text-[13px] leading-snug",
+                    s.state === "failed" ? "text-tone-err" : s.state === "attention" ? "text-tone-warn" : "text-muted-foreground")}>{s.detail}</span>
+                )}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+      {/* Read aloud as it moves, without repeating the whole list. */}
+      <span role="status" className="sr-only">{current.title}{current.detail ? `: ${current.detail}` : ""}</span>
+    </>
+  );
+}
+
+function ResultRow({ mark, title, sub, action, progress }: {
+  mark: keyof typeof MARK; title: string; sub: string; action?: React.ReactNode;
+  /** Steps already finished (0–5): draws the bar of a document still in process. */
+  progress?: number;
+}) {
   const m = MARK[mark];
   return (
     <div className="grid grid-cols-[22px_minmax(0,1fr)_auto] items-center gap-3 border-b border-line-soft py-2.5 text-[13.5px] last:border-0">
@@ -391,6 +476,13 @@ function ResultRow({ mark, title, sub, action }: { mark: keyof typeof MARK; titl
       <span className="min-w-0">
         <b className="block truncate font-semibold">{title}</b>
         <small className="block truncate text-[12.5px] text-muted-foreground">{sub}</small>
+        {progress !== undefined && (
+          <span aria-hidden className="mt-1.5 flex gap-1">
+            {[0, 1, 2, 3, 4].map((i) => (
+              <i key={i} className={cn("h-1 flex-1 rounded-full", i < progress ? "bg-tone-ok" : i === progress ? "animate-pulse bg-primary/60" : "bg-border")} />
+            ))}
+          </span>
+        )}
       </span>
       {action ?? <span />}
     </div>

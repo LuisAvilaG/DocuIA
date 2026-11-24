@@ -28,7 +28,7 @@ async function handleGET(req: NextRequest) {
       columns: {
         id: true, status: true, vendor: true, numDoc: true, total: true,
         documentType: true, fallbackUsed: true, netsuiteDocId: true, updatedAt: true,
-        errorMessage: true,
+        errorMessage: true, processingStage: true,
       },
     });
     return NextResponse.json({ documents });

@@ -16,7 +16,7 @@ import { DocPreview } from "./doc-preview-lazy";
 import { SelectMenu } from "@/components/ui/select-menu";
 import { FiscalPanel, PoComparisonCard, PoPicker } from "./ap-panels";
 import type { LineMarker } from "./doc-preview";
-import { InvoiceHead, invoiceStages, type InvoiceTab } from "./invoice-head";
+import { InvoiceHead, ReadingConfidence, invoiceStages, type InvoiceTab } from "./invoice-head";
 import { btn, Notice, type Stage } from "@/components/kit";
 import { friendlyError } from "@/lib/ap/friendly-error";
 import { SandboxTestSend } from "@/components/tenant/sandbox-test-send";
@@ -225,6 +225,7 @@ export function ReviewClient({
   const [searchResults, setSearchResults] = useState<CatalogSearchItem[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const itemWindowRef = useRef<HTMLDivElement>(null);
 
   // Prefill when vendor search opens (adjusted during render)
   const [prevVendorSearchOpen, setPrevVendorSearchOpen] = useState(vendorSearchOpen);
@@ -331,18 +332,38 @@ export function ReviewClient({
   if (searchIdx !== prevSearchIdx) {
     setPrevSearchIdx(searchIdx);
     if (searchIdx !== null) {
-      const prefill = lines[searchIdx]?.description ?? "";
-      setSearchQuery(prefill);
+      setSearchQuery("");
       setSearchResults([]);
     }
   }
 
-  // Focus when search dialog opens
+  // The item window opens beside its line: it is brought into view, the search
+  // takes the focus, and Escape or a click outside closes it.
   useEffect(() => {
-    if (searchIdx !== null) {
-      setTimeout(() => searchInputRef.current?.focus(), 60);
+    if (searchIdx === null) return;
+    const t = setTimeout(() => {
+      itemWindowRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      searchInputRef.current?.focus({ preventScroll: true });
+    }, 60);
+    function onKey(e: KeyboardEvent) {
+      // A menu open inside the window (the unit) takes the first Escape.
+      if (e.key === "Escape" && !(e.target as HTMLElement | null)?.closest?.('[role="listbox"]')) setSearchIdx(null);
     }
+    function onDown(e: MouseEvent) {
+      const el = e.target as HTMLElement | null;
+      // A line toggles its own window; the numbers on the document open another line.
+      if (!el || itemWindowRef.current?.contains(el) || el.closest("[data-line-row], [data-doc-preview]")) return;
+      setSearchIdx(null);
+    }
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("mousedown", onDown);
+    return () => { clearTimeout(t); document.removeEventListener("keydown", onKey); document.removeEventListener("mousedown", onDown); };
   }, [searchIdx]);
+
+  // Search results make the window taller: its buttons stay in view.
+  useEffect(() => {
+    if (searchIdx !== null) itemWindowRef.current?.scrollIntoView({ block: "nearest" });
+  }, [searchIdx, searchResults.length, searchLoading]);
 
   // Debounced catalog search — reset/loading flags adjusted during render
   const [prevCatalogSearch, setPrevCatalogSearch] = useState({ searchQuery, searchIdx, subsidiaryId });
@@ -424,7 +445,7 @@ export function ReviewClient({
         catalog_unit_id: item.drtUnitId ?? null, catalog_unit_name: item.drtUnitName ?? null,
       };
     }));
-    setSearchIdx(null);
+    setSearchQuery("");
   }
 
   function setLineUnit(idx: number, unitId: string) {
@@ -441,6 +462,7 @@ export function ReviewClient({
       if (prev === idx) return null;
       return prev > idx ? prev - 1 : prev;
     });
+    setSearchIdx(null);
   }
 
   // Description, quantity and price of a line added by hand (or read without a price).
@@ -454,6 +476,7 @@ export function ReviewClient({
 
   function addLine() {
     setActiveLine(lines.length);
+    setSearchIdx(lines.length);
     setLines(prev => [
       ...prev,
       {
@@ -628,8 +651,8 @@ export function ReviewClient({
   const firstMissing = lines.findIndex((l) => !l.confirmed_item_id);
   const selIdx = activeLine !== null && activeLine >= 0 && activeLine < lines.length ? activeLine : Math.max(0, firstMissing);
   const sel = lines[selIdx] ?? null;
-  const selCandidate = sel ? getCandidateItem(sel) : null;
-  const selOthers = sel ? sel.candidates.filter((c) => c.internal_id !== sel.confirmed_item_id) : [];
+  /** Opens the item window of a line (or moves it there). */
+  const openLine = (i: number) => { setActiveLine(i); setSearchIdx(i); };
   const otherVendors = doc.vendor.options.filter((v) => v.internal_id !== vendorId);
   const activeBbox = sel?.bbox;
   const markers: LineMarker[] = lines.flatMap((l, i) => (l.bbox ? [{ n: l.line_no, bbox: l.bbox, warn: !l.confirmed_item_id, active: i === selIdx }] : []));
@@ -825,99 +848,14 @@ export function ReviewClient({
         <div className="fixed inset-0 z-20" onClick={() => setVendorCandidatesOpen(false)} />
       )}
 
-      {/* ── Catalog search dialog ────────────────────────────────────────── */}
-      {searchIdx !== null && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4"
-          style={{ backgroundColor: "oklch(0.18 0.015 258 / 0.4)" }}
-          onClick={() => setSearchIdx(null)}
-        >
-          <div
-            className="bg-card border border-border rounded-2xl w-full max-w-lg flex flex-col overflow-hidden"
-            style={{ boxShadow: "0 20px 60px oklch(0.18 0.015 258 / 0.15), 0 4px 16px oklch(0.18 0.015 258 / 0.08)", maxHeight: "70vh" }}
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="flex items-center gap-3 px-4 py-3.5 border-b border-border">
-              <Search className="w-4 h-4 text-muted-foreground shrink-0" />
-              <input
-                ref={searchInputRef}
-                type="text"
-                value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
-                placeholder="Nombre o código del ítem..."
-                className="flex-1 text-sm bg-transparent text-foreground placeholder:text-muted-foreground/50 outline-none"
-              />
-              {searchLoading
-                ? <Loader2 className="w-3.5 h-3.5 text-muted-foreground animate-spin shrink-0" />
-                : searchQuery && (
-                  <button onClick={() => setSearchQuery("")} className="text-muted-foreground hover:text-foreground transition-colors shrink-0">
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                )
-              }
-              <button
-                onClick={() => setSearchIdx(null)}
-                className="w-6 h-6 flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors shrink-0"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto">
-              {!searchQuery.trim() || searchQuery.length < 2 ? (
-                <div className="py-12 text-center">
-                  <Search className="w-6 h-6 text-muted-foreground/30 mx-auto mb-2" />
-                  <p className="text-sm text-muted-foreground">Escribe para buscar en el catálogo</p>
-                </div>
-              ) : searchLoading ? (
-                <div className="py-12 flex items-center justify-center gap-2 text-muted-foreground text-sm">
-                  <Loader2 className="w-4 h-4 animate-spin" /> Buscando...
-                </div>
-              ) : searchResults.length === 0 ? (
-                <div className="py-12 text-center">
-                  <p className="text-sm text-muted-foreground">Sin resultados para &quot;{searchQuery}&quot;</p>
-                  <p className="text-xs text-muted-foreground/60 mt-1">Intenta con otro nombre o código</p>
-                </div>
-              ) : (
-                <div className="py-1">
-                  {searchResults.map(item => (
-                    <button
-                      key={item.internalId}
-                      onClick={() => selectFromSearch(searchIdx, item)}
-                      className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-secondary/60 transition-colors text-left group"
-                    >
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-foreground truncate">{item.name || item.itemid}</p>
-                        <div className="flex items-center gap-2 mt-0.5">
-                          {item.itemid && <span className="text-[11px] font-mono text-muted-foreground">{item.itemid}</span>}
-                          {item.unit && <span className="text-[11px] text-muted-foreground/60">· {item.unit}</span>}
-                        </div>
-                      </div>
-                      <CheckCircle2 className="w-4 h-4 text-primary opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="px-4 py-2 border-t border-border bg-secondary/30">
-              <p className="text-[11px] text-muted-foreground">
-                {searchResults.length > 0
-                  ? `${searchResults.length} resultado${searchResults.length !== 1 ? "s" : ""} · Clic para seleccionar`
-                  : "Busca por nombre de ítem o código"}
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* ── Main layout ──────────────────────────────────────────────────── */}
       <div className="flex flex-1 flex-col overflow-hidden">
         <InvoiceHead
           title={[doc.invoice_number ? `Factura ${doc.invoice_number}` : "Factura sin número", vendorName || doc.vendor.name].filter(Boolean).join(" · ")}
           status="review"
           statusDetail={!vendorId ? "falta el proveedor" : missingCount > 0 ? `${missingCount} línea${missingCount === 1 ? "" : "s"} sin ítem` : null}
-          meta={[isCfdi ? "CFDI" : "Factura en PDF", subsidiaryName && `subsidiaria ${subsidiaryName}`, ruleName && `regla «${ruleName}»`, `confianza de lectura ${overallPct} %`]}
+          meta={[isCfdi ? "CFDI" : "Factura en PDF", subsidiaryName && `subsidiaria ${subsidiaryName}`, ruleName && `regla «${ruleName}»`]}
+          actions={<ReadingConfidence pct={overallPct} reason={friendlyError(statusReason)} />}
           stages={stages}
           current={tab}
         />
@@ -925,14 +863,12 @@ export function ReviewClient({
         {tab === "lines" ? (
           <div className={cn("mt-4.5 grid min-h-0 flex-1 border-t border-border", storageKey && "lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]")}>
             {storageKey && (
-              <div className="hidden min-h-0 flex-col overflow-hidden bg-[#E9E6E0] lg:flex">
-                <DocPreview docId={docId} activeBbox={activeBbox} fileExt={fileExt} markers={markers} onMarker={(n) => setActiveLine(lines.findIndex((l) => l.line_no === n))} />
+              <div data-doc-preview className="hidden min-h-0 flex-col overflow-hidden bg-[#E9E6E0] lg:flex">
+                <DocPreview docId={docId} activeBbox={activeBbox} fileExt={fileExt} markers={markers} onMarker={(n) => { const i = lines.findIndex((l) => l.line_no === n); if (i >= 0) openLine(i); }} />
               </div>
             )}
             <div className="min-h-0 overflow-y-auto">
               <div className="flex flex-col gap-4 px-6 py-5.5 md:px-7">
-                {statusReason && <Notice tone="warn" title="Motivo de la revisión">{friendlyError(statusReason)}</Notice>}
-
                 <section aria-labelledby="inv-data">
                   <h2 id="inv-data" className="sr-only">Datos de la factura</h2>
                   <dl className="grid grid-cols-[110px_minmax(0,1fr)] gap-x-3.5 gap-y-2 text-[13.5px]">
@@ -974,20 +910,25 @@ export function ReviewClient({
                 </section>
 
                 <section aria-labelledby="inv-lines">
-                  <div className="flex items-baseline justify-between gap-3">
+                  <div className="flex items-baseline justify-between gap-3 border-t border-border pt-3.5">
                     <h2 id="inv-lines" className="text-[15px] font-semibold">Líneas</h2>
-                    <span className="text-[12.5px] text-muted-foreground">{assignedCount} de {lines.length} listas{storageKey && markers.length > 0 ? " · toca un número en el documento" : ""}</span>
+                    <span className="text-[12.5px] text-muted-foreground">{assignedCount} de {lines.length} listas · toca una línea para cambiar su ítem</span>
                   </div>
-                  <ul className="mt-2">
+                  <ul className="relative mt-2">
                     {lines.map((line, idx) => {
                       const hasItem = Boolean(line.confirmed_item_id);
                       const on = idx === selIdx;
+                      const open = idx === searchIdx;
                       const code = getDisplayCode(line);
                       const unit = unitName(line);
+                      const candidate = getCandidateItem(line);
+                      const others = line.candidates.filter((c) => c.internal_id !== line.confirmed_item_id);
+                      const searching = searchQuery.trim().length >= 2;
+                      const last = idx === lines.length - 1;
                       return (
                         <li key={line.line_no}>
-                          <button type="button" onClick={() => setActiveLine(idx)} aria-current={on || undefined}
-                            className={cn("grid w-full grid-cols-[24px_minmax(0,1fr)_auto] items-center gap-2.5 rounded-[10px] border px-3 py-2.5 text-left text-[13.5px]",
+                          <button type="button" data-line-row onClick={() => (open ? setSearchIdx(null) : openLine(idx))} aria-current={on || undefined} aria-expanded={open}
+                            className={cn("group grid w-full grid-cols-[24px_minmax(0,1fr)_auto_auto] items-center gap-2.5 rounded-[10px] border px-3 py-2.5 text-left text-[13.5px]",
                               on ? "border-[#EBD9AE] bg-[#FFFBF2]" : "border-transparent hover:bg-secondary/40")}>
                             <LineNo n={line.line_no} warn={!hasItem} />
                             <span className="min-w-0">
@@ -996,68 +937,113 @@ export function ReviewClient({
                                 {hasItem ? [code ?? getDisplayName(line), unit].filter(Boolean).join(" · ") : "Sin ítem del ERP"}
                               </small>
                             </span>
+                            <span className={cn("text-[12.5px] font-semibold text-link", !on && "opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100")}>{hasItem ? "Cambiar ítem" : "Elegir ítem"}</span>
                             <span className="tabular-nums text-muted-foreground">{line.amount !== null ? `$${fmt(line.amount)}` : "—"}</span>
                           </button>
+
+                          {/* The item window opens under its line, so the document stays in view. */}
+                          {open && (
+                            <div ref={itemWindowRef} role="dialog" aria-label={`Ítem de la línea ${line.line_no}`}
+                              className="absolute inset-x-0 z-20 mt-2 flex max-w-[640px] scroll-mb-4 flex-col rounded-[14px] border border-[#D6D2C8] bg-card shadow-[0_18px_50px_rgba(30,32,41,0.22),0_2px_8px_rgba(30,32,41,0.08)]">
+                              <span aria-hidden className="absolute -top-[7px] left-[17px] size-3 rotate-45 border-l border-t border-[#D6D2C8] bg-card" />
+                              <div className="flex items-start justify-between gap-3.5 border-b border-line-soft px-4.5 pb-3 pt-4">
+                                <div className="min-w-0">
+                                  <span className="block text-[11.5px] font-semibold uppercase tracking-[0.05em] text-foreground/75">Línea {line.line_no} de {lines.length}</span>
+                                  <b className="mt-0.5 block truncate text-base font-semibold tracking-[-0.01em]">{line.description || "Línea sin descripción"}</b>
+                                  {!line.manual && (
+                                    <span className="block truncate text-[12.5px] text-muted-foreground">
+                                      En el documento: {[line.item_code, `${line.quantity} × ${line.rate !== null ? `$${fmt(line.rate)}` : "sin precio"}`, line.uom].filter(Boolean).join(" · ")}
+                                    </span>
+                                  )}
+                                </div>
+                                <button type="button" onClick={() => setSearchIdx(null)} aria-label="Cerrar" className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border bg-card text-foreground/70 hover:text-foreground"><X className="size-4" /></button>
+                              </div>
+
+                              <div className="flex flex-col gap-3 px-4.5 py-3.5">
+                                <label className="relative block">
+                                  <span className="sr-only">Buscar en el catálogo del ERP</span>
+                                  <Search aria-hidden className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                                  <input ref={searchInputRef} type="search" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
+                                    placeholder="Buscar en el catálogo del ERP: nombre o código"
+                                    className="min-h-10 w-full rounded-lg border border-[#D6D2C8] bg-white pl-9 pr-9 text-[13.5px] outline-none focus:border-primary focus:ring-2 focus:ring-primary/20" />
+                                  {searchLoading && <Loader2 aria-hidden className="absolute right-3 top-1/2 size-4 -translate-y-1/2 animate-spin text-muted-foreground" />}
+                                </label>
+
+                                {searching ? (
+                                  searchLoading && searchResults.length === 0 ? (
+                                    <p className="text-[13px] text-muted-foreground">Buscando…</p>
+                                  ) : searchResults.length === 0 ? (
+                                    <p className="text-[13px] text-muted-foreground">Sin resultados para «{searchQuery.trim()}». Prueba con otro nombre o con el código.</p>
+                                  ) : (
+                                    <div role="radiogroup" aria-label="Resultados del catálogo" className="flex max-h-60 flex-col gap-1.5 overflow-y-auto pr-0.5">
+                                      {searchResults.map((item) => (
+                                        <ItemOptionRow key={item.internalId} name={`item-${line.line_no}`} checked={item.internalId === line.confirmed_item_id}
+                                          title={[item.itemid && item.itemid !== item.name ? item.itemid : null, item.name || item.itemid].filter(Boolean).join(" · ")}
+                                          sub={item.unit ? `Unidad ${item.unit}` : null} tag="Del catálogo"
+                                          onPick={() => selectFromSearch(idx, item)} />
+                                      ))}
+                                    </div>
+                                  )
+                                ) : (
+                                  <div role="radiogroup" aria-label="Ítem del ERP" className="flex flex-col gap-1.5">
+                                    {hasItem && (
+                                      <ItemOptionRow name={`item-${line.line_no}`} checked
+                                        title={[code !== getDisplayName(line) ? code : null, getDisplayName(line)].filter(Boolean).join(" · ")}
+                                        sub={[line.recommendation_source === "memory" && candidate ? "Aprendido de facturas anteriores" : candidate ? "Sugerido" : "Elegido del catálogo", unit ? `unidad ${unit}` : null].filter(Boolean).join(" · ")}
+                                        tag="Asignado ahora" onPick={() => {}} />
+                                    )}
+                                    {others.slice(0, 4).map((c, i) => (
+                                      <ItemOptionRow key={c.internal_id} name={`item-${line.line_no}`} checked={false}
+                                        title={[c.itemid && c.itemid !== c.name ? c.itemid : null, c.name || c.itemid].filter(Boolean).join(" · ")}
+                                        sub={c.unit ? `Unidad ${c.unit}` : null}
+                                        tag={c.memory_source ? "Aprendido" : !hasItem && i === 0 ? "Sugerido" : "Otra opción"} accent={c.memory_source || (!hasItem && i === 0)}
+                                        onPick={() => selectFromCandidate(idx, c.internal_id)} />
+                                    ))}
+                                    {!hasItem && others.length === 0 && <p className="text-[13px] text-muted-foreground">Sin coincidencias en el catálogo del ERP. Búscalo arriba por nombre o código.</p>}
+                                  </div>
+                                )}
+
+                                {line.manual && (
+                                  <label className="flex flex-col gap-1 text-[12.5px] text-foreground/75">Descripción
+                                    <input type="text" value={line.description} onChange={(e) => editLine(idx, { description: e.target.value })} className={lineInput} />
+                                  </label>
+                                )}
+                                <div className="grid grid-cols-[minmax(0,1fr)_88px_112px] gap-2.5 text-[12.5px] text-foreground/75">
+                                  <div className="flex min-w-0 flex-col gap-1">
+                                    <span id={`unit-${line.line_no}`}>Unidad</span>
+                                    {candidate && candidate.unit_ids.length > 1 ? (
+                                      <SelectMenu value={line.confirmed_unit_id ?? ""} onChange={(v) => setLineUnit(idx, v)} ariaLabel="Unidad de medida"
+                                        options={candidate.unit_ids.map((uid, i) => ({ value: uid, label: candidate.unit_names[i] || uid }))} />
+                                    ) : (
+                                      <span aria-labelledby={`unit-${line.line_no}`} className="flex min-h-9 items-center truncate rounded-lg border border-line-soft bg-secondary/40 px-2.5 text-[13.5px] text-foreground">{unit ?? "—"}</span>
+                                    )}
+                                  </div>
+                                  <label className="flex flex-col gap-1">Cantidad
+                                    <input type="number" min="0" step="any" value={line.quantity} onChange={(e) => editLine(idx, { quantity: e.target.value === "" ? 0 : Number(e.target.value) })} className={cn(lineInput, "tabular-nums")} />
+                                  </label>
+                                  <label className="flex flex-col gap-1">Precio unitario
+                                    <input type="number" min="0" step="any" value={line.rate ?? ""} onChange={(e) => editLine(idx, { rate: e.target.value === "" ? null : Number(e.target.value) })} className={cn(lineInput, "tabular-nums")} />
+                                  </label>
+                                </div>
+                              </div>
+
+                              <div className="flex flex-wrap items-center gap-2 border-t border-line-soft px-4.5 py-3">
+                                <button type="button" onClick={() => deleteLine(idx)} className={btn("text", "sm", "px-0 text-tone-err")}><Trash2 />Quitar línea</button>
+                                <span className="ml-auto flex flex-wrap gap-2">
+                                  <button type="button" disabled={idx === 0} onClick={() => openLine(idx - 1)} className={btn("secondary", "sm")}>Línea anterior</button>
+                                  <button type="button" onClick={() => (last ? setSearchIdx(null) : openLine(idx + 1))} className={btn("primary", "sm")}>
+                                    {last ? "Listo" : `Guardar y seguir con la ${line.line_no + 1}`}
+                                  </button>
+                                </span>
+                              </div>
+                            </div>
+                          )}
                         </li>
                       );
                     })}
                   </ul>
                   <button type="button" onClick={addLine} className={btn("text", "sm", "mt-1 px-3 text-link")}><Plus />Agregar línea</button>
                 </section>
-
-                {sel && (
-                  <section aria-label={`Línea ${sel.line_no}`} className="flex flex-col gap-2.5 rounded-xl border border-border bg-white p-4">
-                    <span className="text-xs font-semibold uppercase tracking-[0.05em] text-foreground/75">
-                      Línea {sel.line_no} · {sel.quantity} × {sel.rate !== null ? `$${fmt(sel.rate)}` : "sin precio"}
-                    </span>
-                    {sel.confirmed_item_id ? (
-                      <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-[10px] border border-[#CFE7E3] bg-[#F1F8F7] px-3 py-2.5 text-[13.5px]">
-                        <span className="min-w-0">
-                          <b className="block truncate font-semibold">{[getDisplayCode(sel), getDisplayName(sel)].filter(Boolean).join(" · ")}</b>
-                          <span className="text-[12.5px] text-muted-foreground">
-                            {sel.recommendation_source === "memory" && selCandidate ? "Aprendido de facturas anteriores" : selCandidate ? "Sugerido" : "Elegido del catálogo"}
-                          </span>
-                        </span>
-                        {selCandidate && selCandidate.unit_ids.length > 1 ? (
-                          <SelectMenu value={sel.confirmed_unit_id ?? ""} onChange={(v) => setLineUnit(selIdx, v)} leadingLabel="Unidad" ariaLabel="Unidad de medida" align="right" className="w-52 shrink-0"
-                            options={selCandidate.unit_ids.map((uid, i) => ({ value: uid, label: selCandidate.unit_names[i] || uid }))} />
-                        ) : unitName(sel) ? <span className="text-[12.5px] text-muted-foreground">Unidad {unitName(sel)}</span> : null}
-                      </div>
-                    ) : sel.candidates.length === 0 ? (
-                      <p className="text-[13.5px] text-muted-foreground">Sin coincidencias en el catálogo del ERP. Búscalo a mano.</p>
-                    ) : null}
-                    {selOthers.length > 0 && (
-                      <ul className="flex flex-col gap-1.5">
-                        {selOthers.slice(0, 4).map((c, i) => (
-                          <li key={c.internal_id} className={cn("flex items-center justify-between gap-2.5 rounded-[10px] px-3 py-2 text-[13.5px]", !sel.confirmed_item_id && i === 0 ? "border border-[#CFE7E3] bg-[#F1F8F7]" : "border border-border")}>
-                            <span className="min-w-0">
-                              <b className="block truncate font-semibold">{[c.itemid && c.itemid !== c.name ? c.itemid : null, c.name || c.itemid].filter(Boolean).join(" · ")}</b>
-                              <span className="text-[12.5px] text-muted-foreground">{c.memory_source ? "Aprendido" : !sel.confirmed_item_id && i === 0 ? "Sugerido" : "Otra opción"}{c.unit ? ` · unidad ${c.unit}` : ""}</span>
-                            </span>
-                            <button type="button" onClick={() => selectFromCandidate(selIdx, c.internal_id)} className={btn(!sel.confirmed_item_id && i === 0 ? "primary" : "secondary", "sm")}>Usar</button>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                    {(sel.manual || (sel.rate === null && sel.amount === null)) && (
-                      <div className="grid grid-cols-[minmax(0,1fr)_88px_112px] gap-2.5 text-[12.5px] text-muted-foreground">
-                        <label className="flex flex-col gap-1">Descripción
-                          <input type="text" value={sel.description} onChange={(e) => editLine(selIdx, { description: e.target.value })} readOnly={!sel.manual} className={lineInput} />
-                        </label>
-                        <label className="flex flex-col gap-1">Cantidad
-                          <input type="number" min="0" step="any" value={sel.quantity} onChange={(e) => editLine(selIdx, { quantity: e.target.value === "" ? 0 : Number(e.target.value) })} className={lineInput} />
-                        </label>
-                        <label className="flex flex-col gap-1">Precio unitario
-                          <input type="number" min="0" step="any" value={sel.rate ?? ""} onChange={(e) => editLine(selIdx, { rate: e.target.value === "" ? null : Number(e.target.value) })} className={lineInput} />
-                        </label>
-                      </div>
-                    )}
-                    <div className="flex flex-wrap gap-2">
-                      <button type="button" onClick={() => setSearchIdx(selIdx)} className={btn("text", "sm", "px-0 text-link")}><Search />Buscar otro ítem</button>
-                      <button type="button" onClick={() => deleteLine(selIdx)} className={btn("text", "sm", "ml-auto px-0 hover:text-tone-err")}><Trash2 />Quitar línea</button>
-                    </div>
-                  </section>
-                )}
 
                 <p className="flex flex-wrap justify-between gap-2 border-t border-border pt-2.5 text-[13.5px] tabular-nums">
                   <span>Total ${fmt(Number(doc.totals.total))} {doc.currency}</span>
@@ -1076,7 +1062,7 @@ export function ReviewClient({
           </div>
         ) : (
           <div className="mt-4.5 min-h-0 flex-1 overflow-y-auto border-t border-border">
-            <div className="flex max-w-[980px] flex-col gap-4 px-6 py-5.5 md:px-8">
+            <div className="mx-auto flex w-full max-w-[980px] flex-col gap-4 px-6 py-5.5 md:px-8">
               {tab === "po" && (
                 poEnabled ? (
                   <>
@@ -1160,6 +1146,23 @@ export function ReviewClient({
         </div>
       </div>
     </>
+  );
+}
+
+/** One choice in the item window: a radio row with the item, its unit and where it comes from. */
+function ItemOptionRow({ name, checked, title, sub, tag, accent = false, onPick }: {
+  name: string; checked: boolean; title: string; sub: string | null; tag: string; accent?: boolean; onPick: () => void;
+}) {
+  return (
+    <label className={cn("grid cursor-pointer grid-cols-[18px_minmax(0,1fr)_auto] items-center gap-2.5 rounded-[10px] border bg-white px-3 py-2 text-[13.5px]",
+      checked ? "border-primary shadow-[0_0_0_3px_rgba(14,124,112,0.1)]" : "border-border hover:border-foreground/30")}>
+      <input type="radio" name={name} checked={checked} onChange={onPick} className="size-4 accent-primary" />
+      <span className="min-w-0">
+        <b className="block truncate font-semibold">{title}</b>
+        {sub && <small className="block truncate text-[12.5px] text-muted-foreground first-letter:uppercase">{sub}</small>}
+      </span>
+      <span className={cn("whitespace-nowrap rounded-md px-1.5 py-0.5 text-[11.5px] font-semibold", accent ? "bg-tone-info-bg text-tone-info" : "bg-tone-mute-bg text-foreground/75")}>{tag}</span>
+    </label>
   );
 }
 

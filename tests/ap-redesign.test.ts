@@ -76,3 +76,26 @@ test("la carga respeta el formato de la subsidiaria", async () => {
   assert.ok(formatMismatch("pdf", "xml_cfdi"));
   assert.equal(formatMismatch("cfdi", "purchase_order"), null);
 });
+
+test("pasos del panel de carga: qué va hecho, qué corre y dónde se detuvo", async () => {
+  const { activeStep, uploadSteps } = await import("../lib/ap/upload-steps");
+  const states = (input: Parameters<typeof uploadSteps>[0]) => uploadSteps(input).map((s) => s.state);
+
+  assert.equal(activeStep({ status: "uploading" }), 0);
+  assert.equal(activeStep({ status: "extracting", stage: "checks" }), 3);
+  assert.deepEqual(states({ status: "extracting", stage: "match", received: true }), ["done", "done", "active", "pending", "pending"]);
+  assert.equal(uploadSteps({ status: "queued", received: true, batch: true })[1].detail, "En espera de su lote; puede tardar.");
+
+  // Lo leído aparece bajo «Leer el documento» en cuanto se conoce.
+  assert.equal(uploadSteps({ status: "processing", stage: "send", received: true, readSummary: "A-1 · ACME" })[1].detail, "A-1 · ACME");
+
+  // Al terminar, el último paso dice cómo quedó.
+  const review = uploadSteps({ status: "review", stage: "checks", received: true, reason: "2 líneas sin ítem del ERP" });
+  assert.deepEqual(review.map((s) => s.state), ["done", "done", "done", "done", "attention"]);
+  assert.equal(review[4].title, "Pasa a revisión");
+  assert.equal(uploadSteps({ status: "completed", stage: "send", received: true })[4].title, "En el ERP");
+
+  // Un fallo se queda en el paso donde ocurrió; sin documento, en la subida.
+  assert.deepEqual(states({ status: "failed", stage: "send", received: true, reason: "El ERP la rechazó" }), ["done", "done", "done", "done", "failed"]);
+  assert.deepEqual(states({ status: "failed", received: false, reason: "Sin conexión" }), ["failed", "pending", "pending", "pending", "pending"]);
+});

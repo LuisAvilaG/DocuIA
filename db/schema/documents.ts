@@ -32,6 +32,9 @@ export const historyDocuments = pgTable("history_documents", {
   processedBy:      varchar("processed_by", { length: 36 }),
   approvedBy:       varchar("approved_by", { length: 36 }),
   errorMessage:     text("error_message"),
+  // Where the pipeline is (or stopped): "read", "match", "checks" or "send".
+  // The upload panel draws its steps from it.
+  processingStage:  varchar("processing_stage", { length: 16 }),
   // PO the invoice is matched to (ERP internal id).
   poInternalId:     varchar("po_internal_id", { length: 64 }),
   // CFDI UUID, for duplicate detection (XML method only).

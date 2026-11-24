@@ -14,7 +14,7 @@ import type { PoComparison, PoOutcome, PoSuggestion } from "@/lib/workflow/po-ma
 import type { EffectiveVendorRule } from "@/lib/workflow/vendor-rules";
 import { DocPreview } from "./doc-preview-lazy";
 import { SelectMenu } from "@/components/ui/select-menu";
-import { FiscalPanel, PoComparisonCard, PoPicker } from "./ap-panels";
+import { FiscalEmpty, FiscalPanel, PoComparisonCard, PoPicker } from "./ap-panels";
 import type { LineMarker } from "./doc-preview";
 import { InvoiceHead, ReadingConfidence, invoiceStages, type InvoiceTab } from "./invoice-head";
 import { btn, Notice, type Stage } from "@/components/kit";
@@ -1109,7 +1109,7 @@ export function ReviewClient({
               {tab === "fiscal" && (
                 apChecks?.fiscal
                   ? <FiscalPanel fiscal={apChecks.fiscal} />
-                  : <p className="text-sm text-muted-foreground">{isCfdi ? "El CFDI todavía no se ha consultado ante el SAT." : "Las facturas en PDF no llevan validación fiscal."}</p>
+                  : <FiscalEmpty isCfdi={isCfdi} pending />
               )}
 
               {tab === "erp" && (

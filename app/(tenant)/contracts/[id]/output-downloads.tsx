@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Download, Loader2 } from "lucide-react";
+import { btn } from "@/components/kit";
 
 type OutputFormat = "word" | "pdf";
 
@@ -10,7 +11,7 @@ function filenameFromResponse(response: Response, fallback: string) {
   return match?.[1] || fallback;
 }
 
-export function OutputDownloads({ caseId, hasWord }: { caseId: string; hasWord: boolean }) {
+export function OutputDownloads({ caseId, hasWord, variant = "links" }: { caseId: string; hasWord: boolean; /** "buttons": beside a preview of the document. */ variant?: "links" | "buttons" }) {
   const [busy, setBusy] = useState<OutputFormat | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -36,6 +37,20 @@ export function OutputDownloads({ caseId, hasWord }: { caseId: string; hasWord: 
       setBusy(null);
     }
   }
+
+  if (variant === "buttons") return (
+    <div className="flex flex-wrap gap-2.5">
+      <button type="button" onClick={() => void download("pdf")} disabled={busy !== null} className={btn("primary", "md", "min-h-11 flex-[1_1_130px]")}>
+        {busy === "pdf" && <Loader2 className="animate-spin" />}{busy === "pdf" ? "Preparando PDF…" : hasWord ? "PDF para compartir" : "Descargar PDF"}
+      </button>
+      {hasWord && (
+        <button type="button" onClick={() => void download("word")} disabled={busy !== null} className={btn("secondary", "md", "min-h-11 flex-[1_1_130px]")}>
+          {busy === "word" && <Loader2 className="animate-spin" />}{busy === "word" ? "Descargando Word…" : "Word editable"}
+        </button>
+      )}
+      {error && <p role="alert" className="basis-full text-[12.5px] text-tone-err">{error}</p>}
+    </div>
+  );
 
   return (
     <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1.5 shrink-0">

@@ -11,10 +11,10 @@ pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 
 const MAX_PAGES = 30;
 
-export function ReceiptPdf({ url }: { url: string }) {
+export function ReceiptPdf({ url, maxWidth = 720 }: { url: string; /** Narrower when the receipt sits in a column beside its expense. */ maxWidth?: number }) {
   const [pages, setPages] = useState(0);
   // Rendered in the browser only (loaded without SSR), so the window is there.
-  const [width] = useState(() => Math.max(280, Math.min(720, window.innerWidth - 96)));
+  const [width] = useState(() => Math.max(280, Math.min(maxWidth, window.innerWidth - 96)));
   return (
     <Document
       file={url}

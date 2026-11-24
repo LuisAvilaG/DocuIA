@@ -5,8 +5,9 @@
 
 import { useInBrowser } from "@/lib/use-in-browser";
 import { useMemo, useState } from "react";
-import { CheckCircle2, XCircle, CircleHelp, Search, Loader2 } from "lucide-react";
+import { Search, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { StatusPill } from "@/components/kit";
 import type { FiscalValidation } from "@/lib/cfdi/validation";
 import type { LineComparison, PoComparison, PoOutcome, PoSuggestion } from "@/lib/workflow/po-match";
 import type { NSOpenPurchaseOrder } from "@/lib/netsuite/client";
@@ -41,31 +42,69 @@ export function Card({ children, className }: { children: React.ReactNode; class
 
 // ── Fiscal validation ─────────────────────────────────────────────────────────
 
+/** What each fiscal check is about; the check itself says how it came out. */
+const FISCAL_TOPIC: Record<string, string> = {
+  sat_status: "Estado ante el SAT",
+  duplicate_uuid: "Folio fiscal (UUID)",
+  issuer_rfc: "Emisor",
+  receiver_rfc: "Receptor",
+};
+const FISCAL_NOTE = "La validación fiscal se hace con el XML del CFDI. Una factura que llega solo en PDF no la lleva.";
+
+/** One line of an invoice tab: what it is, what it says and, at the end, its state or a link. */
+export function InfoRow({ title, children, end }: { title: string; children: React.ReactNode; end?: React.ReactNode }) {
+  return (
+    <div className="grid grid-cols-1 items-baseline gap-x-4.5 gap-y-1 border-b border-border py-3 text-[13.5px] md:grid-cols-[170px_minmax(0,1fr)_auto]">
+      <b className="font-semibold">{title}</b>
+      <div className="min-w-0">{children}</div>
+      {end ?? <span />}
+    </div>
+  );
+}
+
+function FiscalHead({ tone, title, aside }: { tone: "ok" | "warn" | "err" | "mute"; title: string; aside?: string }) {
+  return (
+    <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-b border-foreground pb-2.5">
+      <h2 className="inline-flex items-center gap-2.5 text-base font-semibold tracking-[-0.01em]">
+        <span aria-hidden className={cn("size-[9px] shrink-0 rounded-full", tone === "ok" ? "bg-tone-ok" : tone === "err" ? "bg-tone-err" : tone === "warn" ? "bg-[#B07C0E]" : "bg-[#B9B5AC]")} />
+        {title}
+      </h2>
+      {aside && <span className="text-[12.5px] text-muted-foreground">{aside}</span>}
+    </div>
+  );
+}
+
 export function FiscalPanel({ fiscal }: { fiscal: FiscalValidation }) {
   const inBrowser = useInBrowser();
-  const tone: Tone = fiscal.outcome === "ok" ? "ok" : fiscal.outcome === "blocked" ? "err" : "warn";
+  const tone = fiscal.outcome === "ok" ? "ok" : fiscal.outcome === "blocked" ? "err" : "warn";
   return (
-    <Card className="p-4">
-      <div className="flex items-center gap-2.5 mb-3">
-        <h2 className="text-sm font-semibold text-foreground">Validación fiscal del CFDI</h2>
-        <Badge tone={tone}>{fiscal.outcome === "ok" ? "Válido" : fiscal.outcome === "blocked" ? "Bloqueado" : "Revisar"}</Badge>
-        <span className="ml-auto text-[0.6875rem] text-muted-foreground">
-          {inBrowser ? `Consultado ${new Date(fiscal.checkedAt).toLocaleString("es-MX", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}` : ""}
-        </span>
-      </div>
-      <ul className="grid gap-2 sm:grid-cols-2">
-        {fiscal.checks.map((check) => (
-          <li key={check.key} className="flex items-start gap-2 text-xs">
-            {check.ok === true
-              ? <CheckCircle2 className="w-3.5 h-3.5 mt-px shrink-0 text-success" aria-label="Correcto" />
-              : check.ok === false
-              ? <XCircle className="w-3.5 h-3.5 mt-px shrink-0 text-destructive" aria-label="Con problema" />
-              : <CircleHelp className="w-3.5 h-3.5 mt-px shrink-0 text-muted-foreground" aria-label="Sin verificar" />}
-            <span><span className="font-medium text-foreground">{check.label}</span>{check.detail && <span className="block text-muted-foreground">{check.detail}</span>}</span>
-          </li>
-        ))}
-      </ul>
-    </Card>
+    <section className="mx-auto w-full max-w-[760px]">
+      <FiscalHead tone={tone}
+        title={fiscal.outcome === "ok" ? "CFDI válido" : fiscal.outcome === "blocked" ? "CFDI bloqueado" : "CFDI por revisar"}
+        aside={inBrowser ? `Consultado ante el SAT el ${new Date(fiscal.checkedAt).toLocaleString("es-MX", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}` : undefined} />
+      {fiscal.outcome !== "ok" && fiscal.reason && <p className={cn("border-b border-border py-3 text-[13.5px] first-letter:uppercase", tone === "err" ? "text-tone-err" : "text-tone-warn")}>{fiscal.reason}.</p>}
+      {fiscal.checks.map((check) => (
+        <InfoRow key={check.key} title={FISCAL_TOPIC[check.key] ?? "Comprobación"}
+          end={<StatusPill tone={check.ok === true ? "ok" : check.ok === false ? "err" : "mute"}>{check.ok === true ? "Correcto" : check.ok === false ? "Con problema" : "Sin verificar"}</StatusPill>}>
+          {check.label}
+          {check.detail && <span className="block break-words text-[12.5px] tabular-nums text-muted-foreground">{check.detail}</span>}
+        </InfoRow>
+      ))}
+      <p className="mt-3.5 text-[12.5px] text-muted-foreground">{FISCAL_NOTE}</p>
+    </section>
+  );
+}
+
+/** The fiscal tab of an invoice that has no validation: it says why, where there used to be one grey sentence. */
+export function FiscalEmpty({ isCfdi, pending = false }: { isCfdi: boolean; pending?: boolean }) {
+  return (
+    <section className="mx-auto w-full max-w-[760px]">
+      <FiscalHead tone="mute" title={isCfdi ? "CFDI sin consultar" : "Sin validación fiscal"} />
+      <InfoRow title="Estado ante el SAT">
+        {isCfdi ? (pending ? "El CFDI todavía no se ha consultado ante el SAT." : "El CFDI no se consultó ante el SAT.") : "No aplica: la factura llegó en PDF."}
+      </InfoRow>
+      <p className="mt-3.5 text-[12.5px] text-muted-foreground">{FISCAL_NOTE}</p>
+    </section>
   );
 }
 

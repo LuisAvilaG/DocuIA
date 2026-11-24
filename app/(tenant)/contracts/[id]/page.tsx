@@ -26,7 +26,7 @@ import { caseApprovalRules } from "@/lib/contracts/approval-state";
 import { canAccessTenantArea } from "@/lib/auth/permissions";
 import { ResubmitPanel } from "./resubmit-panel";
 import { RetryAnalysis } from "./retry-analysis";
-import { CaseCalculations, calculationItemName, evidenceKey } from "./case-calculations";
+import { CaseCalculations, evidenceKey, summarizeCalculations } from "./case-calculations";
 import { DecisionPanel } from "./decision-panel";
 import type { CalculationResult } from "@/lib/contracts/calculations";
 import { calculationsWithOperation } from "@/lib/contracts/revalidate";
@@ -272,14 +272,9 @@ export default async function ContractCasePage({ params, searchParams }: { param
   });
   const outputName = parsedFlow?.success ? parsedFlow.data.nodes.find((node) => node.kind === "generate")?.data.name ?? null : null;
   // The summary of Decisión lists every result in one line: name, factor and value.
-  const summaryResults = shownCalculations.flatMap((calc) => {
-    const factor = (operand: number | null | undefined) => (operand === null || operand === undefined || !calc.operation ? null : `${nf(operand)}${calc.operation === "percentage" ? " %" : ""}`);
-    return calc.items
-      ? calc.items.map((entry, index) => ({ key: `${calc.key}-${index}`, name: [calculationItemName(entry.values, index), factor(entry.operand ?? calc.parts?.operand.value)].filter(Boolean).join(" · "), value: entry.value }))
-      : [{ key: calc.key, name: calc.label, value: calc.value }];
-  });
-  // Validaciones uses the whole width, each half with its own scroll.
-  const fullWidth = tab === "checks" && validations.length > 0;
+  const summaryResults = summarizeCalculations(shownCalculations);
+  // Documentos and Validaciones use the whole width, each half with its own scroll.
+  const fullWidth = (tab === "checks" && validations.length > 0) || (tab === "docs" && docs.length > 0);
   const notices = (
     <>
       {isProcessing && (
@@ -307,7 +302,13 @@ export default async function ContractCasePage({ params, searchParams }: { param
       )}
     </>
   );
-  const hasNotices = isProcessing || kase.status === "failed" || waitingDocs;
+  const typeNotice = tab === "docs" && typeWarnings.length > 0 ? (
+    <Notice tone="warn" title={typeWarnings.length === 1 ? "Un documento no parece del tipo con que se subió" : `${typeWarnings.length} documentos no parecen del tipo con que se subieron`}>
+      <ul className="mt-1 space-y-0.5">{typeWarnings.map((w) => <li key={w.name}><b className="font-medium">{w.name}:</b> {w.text}</li>)}</ul>
+      <p className="mt-1">Si es el documento equivocado, pide el correcto o crea el caso de nuevo.</p>
+    </Notice>
+  ) : null;
+  const hasNotices = isProcessing || kase.status === "failed" || waitingDocs || typeNotice !== null;
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
@@ -326,21 +327,18 @@ export default async function ContractCasePage({ params, searchParams }: { param
 
       {fullWidth ? (
         <div className="mt-4.5 flex min-h-0 flex-1 flex-col overflow-y-auto border-t border-border lg:overflow-hidden">
-          {hasNotices && <div className="flex shrink-0 flex-col gap-5 px-6 py-5.5 md:px-8">{notices}</div>}
-          <CaseChecks docs={checkDocs} findings={findings} passed={passedChecks} notes={infoNotes} analyses={checkAnalyses} verdict={verdict ? VERDICT[verdict].text : undefined} />
+          {hasNotices && <div className="flex shrink-0 flex-col gap-5 border-b border-border px-6 py-5.5 md:px-8">{notices}{typeNotice}</div>}
+          {tab === "docs"
+            ? <CaseDocuments documents={docs} canTrain={session.role === "admin"} />
+            : <CaseChecks docs={checkDocs} findings={findings} passed={passedChecks} notes={infoNotes} analyses={checkAnalyses} verdict={verdict ? VERDICT[verdict].text : undefined} />}
         </div>
       ) : (
       <div className="mt-4.5 min-h-0 flex-1 overflow-y-auto border-t border-border">
         <div className={cn("flex flex-col gap-5 px-6 py-5.5 md:px-8", tab === "calc" ? "mx-auto max-w-[1044px]" : tab === "dec" ? "mx-auto max-w-[1184px]" : "max-w-[1100px]")}>
           {notices}
+          {typeNotice}
 
-          {tab === "docs" && typeWarnings.length > 0 && (
-            <Notice tone="warn" title={typeWarnings.length === 1 ? "Un documento no parece del tipo con que se subió" : `${typeWarnings.length} documentos no parecen del tipo con que se subieron`}>
-              <ul className="mt-1 space-y-0.5">{typeWarnings.map((w) => <li key={w.name}><b className="font-medium">{w.name}:</b> {w.text}</li>)}</ul>
-              <p className="mt-1">Si es el documento equivocado, pide el correcto o crea el caso de nuevo.</p>
-            </Notice>
-          )}
-          {tab === "docs" && <CaseDocuments documents={docs} canTrain={session.role === "admin"} />}
+          {tab === "docs" && <p className="text-sm text-muted-foreground">{isProcessing ? "Los documentos aparecen aquí cuando termina la lectura." : "Este caso no tiene documentos."}</p>}
 
           {tab === "calc" && <CaseCalculations calculations={shownCalculations} docNames={docNames} pages={quotePages} />}
 
@@ -438,7 +436,7 @@ export default async function ContractCasePage({ params, searchParams }: { param
       )}
 
       {/* La decisión siempre a la vista: ya no hay botones al fondo de una página larga. */}
-      {deciding && (tab === "calc" || tab === "checks") && (
+      {deciding && (tab === "docs" || tab === "calc" || tab === "checks") && (
         <div className={cn("flex shrink-0 flex-wrap items-center gap-3 border-t px-6 py-3 md:px-8", openParts.length ? "border-[#EBD9AE] bg-tone-warn-bg" : "border-border bg-card")}>
           <p className="min-w-[240px] flex-1 text-[13.5px]"><b className="font-semibold">Por decidir.</b>{openText ? ` ${openText}` : ""}</p>
           <ActionLink href="?etapa=dec">{canManage ? "Revisar y decidir" : "Ver la decisión"}</ActionLink>

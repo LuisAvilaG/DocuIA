@@ -7,6 +7,7 @@ import { btn, EmptyState, PageFrame, StatusPill, ViewTabs } from "@/components/k
 import { cn } from "@/lib/utils";
 import { DecisionDialog, type CaseDecisionAction } from "../components/decision-dialog";
 import { OutputDownloads } from "../[id]/output-downloads";
+import { OutputPreview } from "../components/output-preview-lazy";
 
 export interface ApprovalCase {
   id: string;
@@ -22,8 +23,24 @@ export interface ApprovalCase {
   unverified: number;
   findings: { severity: "block" | "warn"; title: string; detail: string }[];
   decision: { by: string | null; at: string | null; reason: string | null; override: boolean; acknowledged: number; supportName: string | null } | null;
+  /** Results of the case's calculations, one line each. */
+  calculations: { name: string; value: number | null }[];
+  moreCalculations: number;
   hasOutput: boolean;
   hasWord: boolean;
+}
+
+const nf = (n: number) => n.toLocaleString("es-CO", { maximumFractionDigits: 6 });
+
+/** One line of the record of a decision: what it is, what it says and where to see it whole. */
+function Row({ title, end, children }: { title: string; end?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="grid grid-cols-1 items-baseline gap-x-4.5 gap-y-1 border-b border-border py-3 text-[13.5px] md:grid-cols-[150px_minmax(0,1fr)_auto]">
+      <b className="font-semibold">{title}</b>
+      <div className="min-w-0">{children}</div>
+      {end ?? <span />}
+    </div>
+  );
 }
 
 type Group = ApprovalCase["group"];
@@ -58,7 +75,7 @@ export function ApprovalsClient({ cases, allowOverride }: { cases: ApprovalCase[
   const sel = list.find((c) => c.id === selectedId) ?? list[0] ?? null;
 
   return (
-    <PageFrame>
+    <PageFrame wide>
       <p className="text-xs font-semibold uppercase tracking-[0.06em] text-link">Contratos</p>
       <h1 className="mt-1 text-[26px] font-semibold leading-tight tracking-[-0.025em]">Aprobaciones</h1>
       <p className="mt-1.5 text-sm text-muted-foreground">
@@ -82,35 +99,105 @@ export function ApprovalsClient({ cases, allowOverride }: { cases: ApprovalCase[
           {group === "pending" ? "Los casos aparecen aquí cuando termina su validación." : "Las decisiones quedan registradas con quién, cuándo y por qué."}
         </EmptyState>
       ) : (
-        <div className="mt-4.5 grid overflow-hidden rounded-xl border border-border bg-card lg:min-h-[520px] lg:grid-cols-[380px_minmax(0,1fr)]">
+        <div className="mt-4.5 grid border-t border-border lg:min-h-[520px] lg:grid-cols-[340px_minmax(0,1fr)]">
           <ul className="border-b border-border lg:border-b-0 lg:border-r" aria-label={GROUP_LABEL[group]}>
             {list.map((c) => (
               <li key={c.id}>
                 <button type="button" onClick={() => setSelectedId(c.id)} aria-current={sel?.id === c.id || undefined}
-                  className={cn("flex w-full flex-col gap-1 border-b border-line-soft px-4.5 py-3.5 text-left", sel?.id === c.id ? "bg-tone-info-bg/60" : "hover:bg-secondary/40")}>
+                  className={cn("flex w-full flex-col gap-1 border-b border-line-soft px-4.5 py-3.5 text-left", sel?.id === c.id ? "bg-white shadow-[inset_3px_0_0_#1E2029]" : "hover:bg-secondary/40")}>
                   <b className="truncate text-sm font-semibold">{c.title}</b>
-                  <span className="text-xs text-muted-foreground">{[c.flowName, `${c.documentCount} documento${c.documentCount === 1 ? "" : "s"}`].filter(Boolean).join(" · ")}</span>
-                  <span className="flex items-center justify-between gap-2">
-                    {group === "pending" ? findingsPill(c) : c.decision?.override ? <StatusPill tone="warn">Con excepción</StatusPill> : group === "approved" ? <StatusPill tone="ok">Sin observaciones</StatusPill> : <StatusPill tone="mute">Rechazado</StatusPill>}
-                    <span className="text-xs tabular-nums text-muted-foreground">{group === "pending" ? `espera ${ago(c.updatedAt)}` : [c.decision?.by, when(c.decision?.at ?? c.updatedAt)].filter(Boolean).join(" · ")}</span>
-                  </span>
+                  <span className="text-[12.5px] text-muted-foreground">{[c.flowName, `${c.documentCount} documento${c.documentCount === 1 ? "" : "s"}`].filter(Boolean).join(" · ")}</span>
+                  {group === "pending" ? (
+                    <span className="flex items-center justify-between gap-2">
+                      {findingsPill(c)}
+                      <span className="text-xs tabular-nums text-muted-foreground">espera {ago(c.updatedAt)}</span>
+                    </span>
+                  ) : (
+                    <span className="text-[12.5px] tabular-nums text-muted-foreground">
+                      {group === "rejected" ? "Rechazado" : c.decision?.override ? "Aprobado con excepción" : "Aprobado"} · {when(c.decision?.at ?? c.updatedAt)}
+                    </span>
+                  )}
                 </button>
               </li>
             ))}
           </ul>
 
-          {sel && (
-            <section aria-labelledby="ap-title" className="flex flex-col gap-4.5 px-7 py-6">
+          {sel && group !== "pending" && (
+            <section aria-labelledby="ap-title" className="flex flex-wrap items-start gap-7 py-5.5 lg:pl-7">
+              <div className="flex min-w-0 flex-[999_1_380px] flex-col">
+                <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-b border-foreground pb-2.5">
+                  <div className="min-w-0">
+                    <h2 id="ap-title" className="text-[17px] font-semibold tracking-[-0.015em]">{sel.title}</h2>
+                    <span className="text-[12.5px] text-muted-foreground">{[sel.createdBy && `Subido por ${sel.createdBy}`, when(sel.createdAt), sel.flowName].filter(Boolean).join(" · ")}</span>
+                  </div>
+                  <Link href={`/contracts/${sel.id}`} className="text-[13px] font-semibold text-link hover:underline">Abrir el caso completo</Link>
+                </div>
+                <Row title="Decisión">
+                  <span className="inline-flex items-center gap-2.5 text-base font-semibold tracking-[-0.01em]">
+                    <span aria-hidden className={cn("size-[9px] rounded-full", group === "approved" ? "bg-tone-ok" : "bg-tone-err")} />
+                    {group === "rejected" ? "Rechazado" : sel.decision?.override ? "Aprobado con excepción" : "Aprobado"}
+                  </span>
+                  <span className="block text-[12.5px] text-muted-foreground">{[sel.decision?.by, when(sel.decision?.at ?? sel.updatedAt)].filter(Boolean).join(" · ")}</span>
+                </Row>
+                <Row title={group === "rejected" ? "Motivo" : sel.decision?.override ? "Justificación" : "Comentario"}>
+                  {sel.decision?.reason ? <q>{sel.decision.reason}</q> : <span className="text-muted-foreground">Sin comentario.</span>}
+                </Row>
+                {sel.decision?.override && (
+                  <Row title="Excepción">Aprobado pese a {sel.blockerCount || "los"} bloqueo{sel.blockerCount === 1 ? "" : "s"}{sel.decision.acknowledged ? ` · ${sel.decision.acknowledged} validaci${sel.decision.acknowledged === 1 ? "ón revisada" : "ones revisadas"}` : ""}</Row>
+                )}
+                {sel.decision?.supportName && (
+                  <Row title="Soporte"><a href={`/api/v1/contracts/cases/${sel.id}/support`} className="text-link hover:underline">{sel.decision.supportName}</a></Row>
+                )}
+                <Row title={group === "rejected" ? "Se rechazó con" : "Se aprobó con"}
+                  end={sel.findings.length > 0 ? <Link href={`/contracts/${sel.id}?etapa=checks`} className="text-[13px] font-semibold text-link hover:underline">Ver hallazgos</Link> : undefined}>
+                  {sel.findings.length === 0 ? (
+                    sel.unverified
+                      ? <span className="text-muted-foreground">Sin hallazgos; {sel.unverified} control{sel.unverified === 1 ? " no se pudo" : "es no se pudieron"} verificar.</span>
+                      : <span className="text-muted-foreground">Sin observaciones.</span>
+                  ) : (
+                    <>
+                      {findingsPill(sel)}
+                      <ul className="mt-1.5 flex flex-col gap-1">
+                        {sel.findings.slice(0, 3).map((f, i) => <li key={i}>{f.title}</li>)}
+                        {sel.blockerCount + sel.warningCount > 3 && <li className="text-[12.5px] text-muted-foreground">y {sel.blockerCount + sel.warningCount - 3} más</li>}
+                      </ul>
+                    </>
+                  )}
+                </Row>
+                {sel.calculations.length > 0 && (
+                  <Row title="Cálculos">
+                    <ul className="flex flex-col gap-[5px]">
+                      {sel.calculations.map((c, i) => (
+                        <li key={i} className="flex justify-between gap-3.5">
+                          <span className="min-w-0">{c.name}</span>
+                          <b className={cn("whitespace-nowrap font-semibold tabular-nums", c.value === null && "text-tone-warn")}>{c.value === null ? "Por revisar" : nf(c.value)}</b>
+                        </li>
+                      ))}
+                      {sel.moreCalculations > 0 && <li className="text-[12.5px] text-muted-foreground">y {sel.moreCalculations} más</li>}
+                    </ul>
+                  </Row>
+                )}
+              </div>
+              {sel.hasOutput && (
+                <div className="flex min-w-0 flex-[1_1_300px] flex-col gap-3 lg:max-w-[360px]">
+                  <span className="text-[11.5px] font-semibold uppercase tracking-[0.05em] text-foreground/75">Documento generado</span>
+                  <OutputPreview caseId={sel.id} fullHref={`/contracts/${sel.id}?etapa=doc`} />
+                  <OutputDownloads caseId={sel.id} hasWord={sel.hasWord} variant="buttons" />
+                </div>
+              )}
+            </section>
+          )}
+
+          {sel && group === "pending" && (
+            <section aria-labelledby="ap-title" className="flex flex-col gap-4.5 py-6 lg:pl-7">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div className="min-w-0">
-                  {group !== "pending" && <p className="text-xs font-semibold uppercase tracking-[0.06em] text-link">Registro de la decisión</p>}
                   <h2 id="ap-title" className="mt-1 text-xl font-semibold tracking-[-0.02em]">{sel.title}</h2>
                   <p className="mt-1 text-[13px] text-muted-foreground">{[sel.createdBy && `Subido por ${sel.createdBy}`, when(sel.createdAt), sel.flowName].filter(Boolean).join(" · ")}</p>
                 </div>
                 <Link href={`/contracts/${sel.id}`} className="text-[13.5px] font-semibold text-link hover:underline">Abrir el caso completo →</Link>
               </div>
 
-              {group === "pending" ? (
                 <>
                   <div>
                     <p className="mb-1.5 text-xs font-semibold uppercase tracking-[0.05em] text-foreground/75">Hallazgos</p>
@@ -138,28 +225,6 @@ export function ApprovalsClient({ cases, allowOverride }: { cases: ApprovalCase[
                     {sel.blockerCount > 0 && !allowOverride && <span className="text-[12.5px] text-muted-foreground">Con bloqueos no se puede aprobar: corrige los datos o recházalo.</span>}
                   </div>
                 </>
-              ) : (
-                <>
-                  <dl className="grid grid-cols-[120px_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-[13.5px]">
-                    <dt className="text-muted-foreground">Decidió</dt><dd>{sel.decision?.by ?? "—"}</dd>
-                    <dt className="text-muted-foreground">Cuándo</dt><dd>{when(sel.decision?.at ?? sel.updatedAt)}</dd>
-                    {sel.decision?.override && <><dt className="text-muted-foreground">Excepción</dt><dd>Aprobado pese a {sel.blockerCount || "los"} bloqueo{sel.blockerCount === 1 ? "" : "s"}{sel.decision.acknowledged ? ` · ${sel.decision.acknowledged} validaci${sel.decision.acknowledged === 1 ? "ón revisada" : "ones revisadas"}` : ""}</dd></>}
-                    {sel.decision?.supportName && <><dt className="text-muted-foreground">Soporte</dt><dd><a href={`/api/v1/contracts/cases/${sel.id}/support`} className="text-link hover:underline">{sel.decision.supportName}</a></dd></>}
-                  </dl>
-                  {sel.decision?.reason && (
-                    <div className="rounded-[10px] bg-background px-4 py-3">
-                      <small className="text-xs text-muted-foreground">{group === "rejected" ? "Motivo" : "Justificación"}</small>
-                      <q className="mt-1 block text-[13.5px]">{sel.decision.reason}</q>
-                    </div>
-                  )}
-                  {sel.hasOutput && (
-                    <div className="flex flex-wrap items-center gap-3">
-                      <span className="text-xs font-semibold uppercase tracking-[0.05em] text-foreground/75">Documento generado</span>
-                      <OutputDownloads caseId={sel.id} hasWord={sel.hasWord} />
-                    </div>
-                  )}
-                </>
-              )}
             </section>
           )}
         </div>

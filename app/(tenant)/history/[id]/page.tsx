@@ -22,7 +22,7 @@ import type { Tone } from "@/lib/status-vocabulary";
 import { friendlyError } from "@/lib/ap/friendly-error";
 import { ReviewClient } from "./review-client";
 import { DocPreview } from "./doc-preview-lazy";
-import { FiscalPanel, PoComparisonCard } from "./ap-panels";
+import { FiscalEmpty, FiscalPanel, InfoRow, PoComparisonCard } from "./ap-panels";
 import { InvoiceHead, invoiceStages, parseInvoiceTab, type InvoiceTab } from "./invoice-head";
 import { ApproveAction, AutoRefresh, FailedActions, ReceiptActions } from "./invoice-actions";
 
@@ -194,6 +194,10 @@ export default async function InvoiceDetailPage({ params, searchParams }: {
   const total = doc.total != null ? Number(doc.total) : null;
   const currency = draft?.currency ?? null;
   const reason = friendlyError(doc.errorMessage);
+  // «Orden de compra» sin comparación guardada: qué orden y qué regla aplicaron.
+  const chosenPoId = po?.selectedPoId || doc.poInternalId || null;
+  const chosenPoNumber = chosenPoId ? po?.openPurchaseOrders.find((order) => order.internal_id === chosenPoId)?.tranid ?? null : null;
+  const rule = apChecks?.vendorRule ?? null;
 
   const [nsRecordUrl, exception, approvers, approvedBy, poConfig] = await Promise.all([
     recordUrl(session.orgId, doc),
@@ -286,14 +290,35 @@ export default async function InvoiceDetailPage({ params, searchParams }: {
         </div>
       ) : (
         <div className="mt-4.5 min-h-0 flex-1 overflow-y-auto border-t border-border">
-          <div className="flex max-w-[1100px] flex-col gap-5.5 px-6 py-5.5 md:px-8">
+          <div className={`flex flex-col gap-5.5 px-6 py-5.5 md:px-8 ${tab === "fiscal" || (tab === "po" && !cmp) ? "" : "max-w-[1100px]"}`}>
             {tab === "po" && (
-              cmp ? <PoComparisonCard comparison={cmp} tolerance={tolerance} requireReceipt={po?.requireReceipt ?? false} />
-                : <p className="text-sm text-muted-foreground">{po?.selectedPoId || doc.poInternalId ? "Se eligió una orden de compra, pero no se guardó la comparación." : "La factura se procesó sin orden de compra."}</p>
+              cmp ? <PoComparisonCard comparison={cmp} tolerance={tolerance} requireReceipt={po?.requireReceipt ?? false} /> : (
+                <section className="mx-auto w-full max-w-[760px]">
+                  <SectionTitle title="Orden de compra" aside="Cómo se resolvió en esta factura" />
+                  <InfoRow title="Orden de compra">
+                    {chosenPoId ? (
+                      <>{chosenPoNumber ? `OC ${chosenPoNumber}` : "Se eligió una orden de compra"}<span className="block text-[12.5px] text-muted-foreground">No se guardó la comparación de la factura con la orden.</span></>
+                    ) : (
+                      <>Sin OC<span className="block text-[12.5px] text-muted-foreground">{doc.status === "completed" ? "Se creó en el ERP como factura independiente." : "Se procesa como factura independiente."}</span></>
+                    )}
+                  </InfoRow>
+                  {rule && (
+                    <InfoRow title="Regla del proveedor" end={<Link href="/vendor-rules" className="text-[13px] font-semibold text-link hover:underline">Ver las reglas</Link>}>
+                      {rule.ruleId ? rule.ruleLabel : "Predeterminada"}
+                      <span className="block text-[12.5px] text-muted-foreground">
+                        {rule.poRequirement === "required" ? "Para este proveedor la orden de compra es obligatoria." : rule.poRequirement === "none" ? "Para este proveedor no se usa orden de compra." : "Para este proveedor la orden de compra es opcional."}
+                      </span>
+                    </InfoRow>
+                  )}
+                  <InfoRow title="Recepción de almacén">
+                    <span className="text-muted-foreground">{chosenPoId ? (po?.requireReceipt ? "La regla pide entrada de almacén antes de enviar." : "La regla no pide entrada de almacén.") : "No aplica: sin orden de compra no hay entrada que esperar."}</span>
+                  </InfoRow>
+                </section>
+              )
             )}
 
             {tab === "fiscal" && (
-              apChecks?.fiscal ? <FiscalPanel fiscal={apChecks.fiscal} /> : <p className="text-sm text-muted-foreground">El CFDI no se consultó ante el SAT.</p>
+              apChecks?.fiscal ? <FiscalPanel fiscal={apChecks.fiscal} /> : <FiscalEmpty isCfdi={isCfdi} />
             )}
 
             {tab === "erp" && READING.has(doc.status) && (

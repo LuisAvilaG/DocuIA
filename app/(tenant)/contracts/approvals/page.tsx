@@ -8,6 +8,8 @@ import { db } from "@/lib/db";
 import { contractCases, contractDocuments, contractFlows, contractValidations, orgUsers } from "@/db/schema";
 import { and, desc, eq, gte, inArray } from "drizzle-orm";
 import { ApprovalsClient, type ApprovalCase } from "./approvals-client";
+import { summarizeCalculations } from "../[id]/case-calculations";
+import type { CalculationResult } from "@/lib/contracts/calculations";
 
 type Decision = { action?: string; reason?: string | null; byEmail?: string | null; byId?: string | null; at?: string | null; override?: boolean; acknowledged?: number[]; support?: { name?: string } };
 
@@ -55,7 +57,8 @@ export default async function ContractApprovalsPage() {
   for (const d of documents) docCount.set(d.caseId, (docCount.get(d.caseId) ?? 0) + 1);
 
   const cases: ApprovalCase[] = rows.flatMap((row) => {
-    const result = (row.resultJson ?? {}) as { decision?: Decision | null; outputKey?: string; outputMime?: string };
+    const result = (row.resultJson ?? {}) as { decision?: Decision | null; outputKey?: string; outputMime?: string; calculations?: CalculationResult[] };
+    const results = summarizeCalculations(Array.isArray(result.calculations) ? result.calculations : []);
     const decision = result.decision ?? null;
     const group: ApprovalCase["group"] | null = row.status === "validated" ? "pending"
       : row.status === "rejected" || decision?.action === "reject" ? "rejected"
@@ -85,6 +88,8 @@ export default async function ContractApprovalsPage() {
         acknowledged: Array.isArray(decision.acknowledged) ? decision.acknowledged.length : 0,
         supportName: decision.support?.name ?? null,
       } : null,
+      calculations: results.slice(0, 8).map(({ name, value }) => ({ name, value })),
+      moreCalculations: Math.max(0, results.length - 8),
       hasOutput: Boolean(result.outputKey),
       hasWord: result.outputMime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     }];

@@ -1,42 +1,55 @@
 "use client";
 
+// Un informe de gastos: la tabla de gastos (fecha, subtotal, impuesto, total) y
+// al lado el recibo del gasto elegido. Antes cada gasto era una tarjeta suelta
+// y el recibo no se veía en esta pantalla.
 import { useState } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { Loader2, Receipt } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { formatExpenseTotals } from "@/lib/expense/totals";
-import {
-  PlusCircle, Trash2, Receipt, CheckCircle2, XCircle,
-  AlertCircle, Clock, Send, Loader2, FileText,
-} from "lucide-react";
+import { btn, StatusPill } from "@/components/kit";
+import { formatExpenseAmount, formatExpenseTotals } from "@/lib/expense/totals";
 
-const STATUS_CONFIG = {
-  draft:        { label: "Borrador",      color: "text-muted-foreground bg-muted" },
-  submitted:    { label: "Enviado",       color: "text-primary bg-primary/10" },
-  under_review: { label: "En revisión",   color: "text-warning bg-warning/10" },
-  approved:     { label: "Aprobado",      color: "text-success bg-success/10" },
-  rejected:     { label: "Rechazado",     color: "text-destructive bg-destructive/10" },
-  syncing:      { label: "Sincronizando", color: "text-primary bg-primary/10" },
-  synced:       { label: "En el ERP",   color: "text-success bg-success/10" },
-  exception:    { label: "Error",         color: "text-destructive bg-destructive/10" },
+// pdf.js loads only when a PDF receipt is shown.
+const ReceiptPdf = dynamic(() => import("@/components/expense/receipt-pdf").then((m) => m.ReceiptPdf), {
+  ssr: false,
+  loading: () => <p className="p-6 text-center text-[13px] text-muted-foreground">Cargando recibo…</p>,
+});
+
+const STATUS = {
+  draft:        { label: "Borrador",      tone: "mute" },
+  submitted:    { label: "Enviado",       tone: "info" },
+  under_review: { label: "En revisión",   tone: "warn" },
+  approved:     { label: "Aprobado",      tone: "ok" },
+  rejected:     { label: "Rechazado",     tone: "err" },
+  syncing:      { label: "Sincronizando", tone: "info" },
+  synced:       { label: "En el ERP",     tone: "ok" },
+  exception:    { label: "Error",         tone: "err" },
 } as const;
 
 interface Item {
   id: string; lineNumber: number;
   vendorName: string | null; invoiceNumber: string | null;
-  subtotal: string | null; total: string | null; currency: string;
+  expenseDate: Date | string | null; invoiceDate: Date | string | null;
+  subtotal: string | null; taxAmount: string | null; total: string | null; currency: string;
   documentTypeDetected: string | null;
   needsDocumentoEquivalente: boolean;
   category: { name: string } | null;
-  documents: { id: number; originalName: string | null; ocrConfidence: string | null }[];
+  documents: { id: number; originalName: string | null; ocrConfidence: string | null; mimeType: string | null; hasFile: boolean }[];
 }
 
 interface Report {
-  id: string; purpose: string; status: keyof typeof STATUS_CONFIG;
+  id: string; purpose: string; status: keyof typeof STATUS;
   periodStart: string | null; periodEnd: string | null;
   rejectedReason: string | null; submittedAt: string | null;
   items: Item[];
 }
+
+const day = (value: Date | string | null, year = false) => (value ? new Date(value).toLocaleDateString("es-CO", { day: "2-digit", month: "short", ...(year ? { year: "numeric" } : {}), timeZone: "UTC" }) : null);
+const amount = (value: string | null, currency: string) => (value === null || value === "" ? "—" : formatExpenseAmount(parseFloat(value) || 0, currency || "COP"));
+const lowConfidence = (item: Item) => Boolean(item.documents[0]?.ocrConfidence && parseFloat(item.documents[0].ocrConfidence) < 0.6);
 
 export function ReportDetail({ report, isAdmin, isOwner }: { report: Report; isAdmin: boolean; isOwner: boolean }) {
   const router  = useRouter();
@@ -45,11 +58,15 @@ export function ReportDetail({ report, isAdmin, isOwner }: { report: Report; isA
   const [notice,     setNotice]     = useState<string | null>(null);
   const [deleting,   setDeleting]   = useState<string | null>(null);
   const [error,      setError]      = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   // A draft is edited by its owner (or an administrator), as the API allows:
   // a reviewer who opens it saw buttons that only answered "No autorizado".
   const isDraft = report.status === "draft" && (isOwner || isAdmin);
-  const cfg     = STATUS_CONFIG[report.status] ?? STATUS_CONFIG.draft;
+  const status  = STATUS[report.status] ?? STATUS.draft;
+  const selected = report.items.find((item) => item.id === selectedId) ?? report.items[0] ?? null;
+  const receipt = selected?.documents.find((d) => d.hasFile) ?? null;
+  const toCheck = report.items.filter((item) => lowConfidence(item) || item.needsDocumentoEquivalente).length;
 
   async function handleSubmit() {
     setSubmitting(true); setError(null);
@@ -84,6 +101,7 @@ export function ReportDetail({ report, isAdmin, isOwner }: { report: Report; isA
         setError(data.error ?? "No se pudo eliminar el gasto");
         return;
       }
+      setSelectedId(null);
       router.refresh();
     } catch {
       setError("Error de conexión al eliminar");
@@ -92,132 +110,121 @@ export function ReportDetail({ report, isAdmin, isOwner }: { report: Report; isA
     }
   }
 
+  const period = [day(report.periodStart), day(report.periodEnd, true)].filter(Boolean).join(" – ");
+
   return (
-    <div className="flex-1 overflow-y-auto">
-      {/* Header */}
-      <div className="p-5 border-b border-border">
-        <Link href="/expenses" className="text-xs text-muted-foreground hover:text-foreground transition-colors">← Mis gastos</Link>
-        <div className="flex items-start justify-between mt-2 gap-3">
+    <div className="flex flex-1 flex-col overflow-y-auto lg:overflow-hidden">
+      <div className="shrink-0 px-6 pb-4.5 pt-5.5 md:px-8">
+        <nav aria-label="Ruta" className="text-[13px]"><Link href="/expenses" className="text-link hover:underline">Mis gastos</Link><span className="text-muted-foreground"> / Informe</span></nav>
+        <div className="flex flex-wrap items-start justify-between gap-5">
           <div className="min-w-0">
-            <h1 className="text-base font-semibold text-foreground truncate">{report.purpose}</h1>
-            {(report.periodStart || report.periodEnd) && (
-              <p className="text-xs text-muted-foreground mt-0.5">
-                {report.periodStart && new Date(report.periodStart).toLocaleDateString("es-CO", { day: "2-digit", month: "short", timeZone: "UTC" })}
-                {report.periodStart && report.periodEnd && " – "}
-                {report.periodEnd && new Date(report.periodEnd).toLocaleDateString("es-CO", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" })}
-              </p>
-            )}
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="mt-1.5 text-2xl font-semibold leading-tight tracking-[-0.025em]">{report.purpose}</h1>
+              <StatusPill tone={status.tone}>{status.label}</StatusPill>
+            </div>
+            <p className="mt-1.5 text-[13px] text-muted-foreground">
+              {period && <>{period} · </>}
+              {report.items.length} gasto{report.items.length === 1 ? "" : "s"}
+              {report.items.length > 0 && <> · <b className="font-semibold text-foreground">total {formatExpenseTotals(report.items)}</b></>}
+              {toCheck > 0 && <> · {toCheck} por revisar</>}
+            </p>
           </div>
-          <span className={cn("shrink-0 inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium", cfg.color)}>
-            {cfg.label}
-          </span>
+          {isDraft && (
+            <div className="mt-1.5 flex flex-wrap gap-2.5">
+              <Link href={`/expenses/${report.id}/item/new`} className={btn(report.items.length ? "secondary" : "primary")}>Agregar gasto</Link>
+              {report.items.length > 0 && (
+                <button type="button" onClick={() => void handleSubmit()} disabled={submitting} className={btn("primary")}>
+                  {submitting && <Loader2 className="animate-spin" />}Enviar a aprobación
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         {report.rejectedReason && (
-          <div className="mt-3 p-3 rounded-lg bg-destructive/10 border border-destructive/20">
-            <p className="text-xs text-destructive font-medium">Motivo del rechazo</p>
-            <p className="text-xs text-destructive/80 mt-0.5">{report.rejectedReason}</p>
+          <div role="alert" className="mt-3.5 rounded-xl border border-[#E9C6C2] bg-tone-err-bg px-4 py-3 text-[13.5px]">
+            <b className="font-semibold text-tone-err">Motivo del rechazo.</b> {report.rejectedReason}{" "}
             {report.status === "rejected" && (isOwner || isAdmin) && (
-              <button
-                onClick={handleReopen}
-                disabled={reopening}
-                className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium text-destructive hover:underline disabled:opacity-50"
-              >
-                {reopening && <Loader2 className="w-3 h-3 animate-spin" />}
-                Corregir y volver a enviar
+              <button type="button" onClick={() => void handleReopen()} disabled={reopening} className="inline-flex items-center gap-1.5 font-semibold text-link hover:underline disabled:opacity-50">
+                {reopening && <Loader2 className="size-3.5 animate-spin" />}Corregir y volver a enviar
               </button>
             )}
           </div>
         )}
-        {notice && <p className="mt-3 text-xs text-warning">{notice}</p>}
+        {notice && <p className="mt-3 text-[13px] text-tone-warn">{notice}</p>}
+        {error && <p role="alert" className="mt-3 text-[13px] text-tone-err">{error}</p>}
       </div>
 
-      {/* Items */}
-      <div className="p-5 space-y-3">
-        {report.items.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-12 text-center">
-            <Receipt className="w-8 h-8 text-muted-foreground mb-3" />
-            <p className="text-sm text-foreground font-medium">Sin gastos</p>
-            <p className="text-xs text-muted-foreground mt-1">Agrega el primer gasto a este informe.</p>
+      {report.items.length === 0 ? (
+        <div className="flex flex-1 flex-col items-center justify-center border-t border-border px-6 py-16 text-center">
+          <Receipt aria-hidden className="mb-3 size-8 text-muted-foreground" />
+          <p className="text-sm font-semibold">Este informe todavía no tiene gastos</p>
+          <p className="mt-1 text-[13px] text-muted-foreground">{isDraft ? "Agrega el primero con la foto o el PDF del recibo." : "No se registraron gastos en este informe."}</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 border-t border-border lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
+          <div className="min-w-0 px-6 pb-7 pt-4.5 md:pl-8 md:pr-7 lg:min-h-0 lg:overflow-y-auto">
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-[13.5px]">
+                <thead>
+                  <tr>
+                    {(["Fecha", "Gasto", "Subtotal", "Impuesto", "Total"] as const).map((h, i) => (
+                      <th key={h} scope="col" className={cn("whitespace-nowrap border-b border-border px-3 py-[9px] text-[11.5px] font-semibold uppercase tracking-[0.05em] text-foreground/75 first:pl-1 last:pr-1", i > 1 ? "text-right" : "text-left")}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.items.map((item) => {
+                    const on = item.id === selected?.id;
+                    return (
+                      <tr key={item.id} onClick={() => setSelectedId(item.id)} aria-selected={on}
+                        className={cn("cursor-pointer border-b border-line-soft [&>td]:px-3 [&>td]:py-2.5 [&>td]:align-top [&>td:first-child]:pl-1 [&>td:last-child]:pr-1", on ? "bg-[#FFFBF2]" : "hover:bg-secondary/40")}>
+                        <td className="whitespace-nowrap tabular-nums">{day(item.expenseDate ?? item.invoiceDate) ?? "—"}</td>
+                        <td>
+                          <button type="button" onClick={(e) => { e.stopPropagation(); setSelectedId(item.id); }} className={cn("text-left", on && "font-semibold")}>{item.vendorName ?? "Proveedor no identificado"}</button>
+                          <small className="block text-[12.5px] text-muted-foreground">{[item.category?.name ?? "Sin categoría", item.invoiceNumber && `#${item.invoiceNumber}`].filter(Boolean).join(" · ")}</small>
+                          {lowConfidence(item) && <small className="block text-[12.5px] font-semibold text-tone-warn">Lectura dudosa: revisa los datos</small>}
+                          {item.needsDocumentoEquivalente && <small className="block text-[12.5px] font-semibold text-tone-warn">Requiere documento equivalente</small>}
+                        </td>
+                        <td className="whitespace-nowrap text-right tabular-nums">{amount(item.subtotal, item.currency)}</td>
+                        <td className="whitespace-nowrap text-right tabular-nums">{amount(item.taxAmount, item.currency)}</td>
+                        <td className="whitespace-nowrap text-right font-semibold tabular-nums">{amount(item.total, item.currency)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex flex-wrap justify-between gap-4 pt-3 text-[13.5px]">
+              <span className="text-[12.5px] text-muted-foreground">Toca un gasto para ver su recibo</span>
+              <b className="font-semibold tabular-nums">Total {formatExpenseTotals(report.items)}</b>
+            </div>
           </div>
-        ) : (
-          report.items.map((item) => (
-            <div key={item.id} className="bg-card border border-border rounded-xl p-4">
-              <div className="flex items-start justify-between gap-2">
-                <div className="flex items-start gap-3 min-w-0">
-                  <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0 mt-0.5">
-                    <FileText className="w-4 h-4 text-primary" />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-foreground truncate">
-                      {item.vendorName ?? "Proveedor no identificado"}
-                    </p>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      {item.category?.name ?? "Sin categoría"}
-                      {item.invoiceNumber && ` · #${item.invoiceNumber}`}
-                    </p>
-                    {item.needsDocumentoEquivalente && (
-                      <span className="mt-1.5 inline-flex items-center gap-1 text-[0.6875rem] text-warning font-medium">
-                        <AlertCircle className="w-3 h-3" /> Requiere documento equivalente
-                      </span>
-                    )}
-                    {item.documents[0]?.ocrConfidence && parseFloat(item.documents[0].ocrConfidence) < 0.6 && (
-                      <span className="mt-1 inline-flex items-center gap-1 text-[0.6875rem] text-warning font-medium">
-                        <AlertCircle className="w-3 h-3" /> Confianza OCR baja — verifica los datos
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <p className="text-sm font-semibold tabular-nums text-foreground">
-                    {parseFloat(item.total ?? "0").toLocaleString("es-CO", { style: "currency", currency: item.currency ?? "COP", maximumFractionDigits: 0 })}
-                  </p>
+
+          {selected && (
+            <div className="flex min-w-0 flex-col border-t border-border bg-[#E9E6E0] lg:min-h-0 lg:border-l lg:border-t-0">
+              <div className="flex flex-wrap items-center gap-2.5 border-b border-border bg-[#F4F2EE] px-4 py-2.5 text-[13px]">
+                <b className="min-w-0 truncate font-semibold">Recibo de {selected.vendorName ?? "proveedor no identificado"}</b>
+                <span className="ml-auto flex items-center gap-3.5">
+                  {receipt && <a href={`/api/v1/expenses/documents/${receipt.id}/file`} download className="font-semibold text-link hover:underline">Descargar</a>}
                   {isDraft && (
-                    <button
-                      onClick={() => handleDelete(item.id)}
-                      disabled={deleting === item.id}
-                      className="p-1.5 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-50"
-                    >
-                      {deleting === item.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                    <button type="button" onClick={() => void handleDelete(selected.id)} disabled={deleting === selected.id} className="inline-flex items-center gap-1.5 font-semibold text-tone-err hover:underline disabled:opacity-50">
+                      {deleting === selected.id && <Loader2 className="size-3.5 animate-spin" />}Quitar gasto
                     </button>
                   )}
-                </div>
+                </span>
+              </div>
+              <div className="min-w-0 overflow-auto p-5.5 lg:min-h-0 lg:flex-1">
+                {!receipt ? (
+                  <p className="py-10 text-center text-[13px] text-muted-foreground">Este gasto no tiene recibo adjunto.</p>
+                ) : receipt.mimeType === "application/pdf" ? (
+                  <ReceiptPdf key={receipt.id} url={`/api/v1/expenses/documents/${receipt.id}/file`} maxWidth={480} />
+                ) : (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img key={receipt.id} src={`/api/v1/expenses/documents/${receipt.id}/file`} alt={`Recibo de ${selected.vendorName ?? "este gasto"}`} className="mx-auto block max-w-full shadow-[0_2px_16px_rgba(30,32,41,0.14)]" />
+                )}
               </div>
             </div>
-          ))
-        )}
-
-        {/* Add expense button */}
-        {isDraft && (
-          <Link
-            href={`/expenses/${report.id}/item/new`}
-            className="flex items-center justify-center gap-2 w-full py-3 rounded-xl border-2 border-dashed border-border text-sm text-muted-foreground hover:border-primary/50 hover:text-primary transition-colors"
-          >
-            <PlusCircle className="w-4 h-4" />
-            Agregar gasto
-          </Link>
-        )}
-      </div>
-
-      {/* Footer — total + submit */}
-      {report.items.length > 0 && (
-        <div className="sticky bottom-0 bg-card border-t border-border p-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-muted-foreground">Total del informe</span>
-            <span className="text-base font-semibold tabular-nums text-foreground">
-              {formatExpenseTotals(report.items)}
-            </span>
-          </div>
-          {error && <p className="text-xs text-destructive">{error}</p>}
-          {isDraft && (
-            <button
-              onClick={handleSubmit}
-              disabled={submitting}
-              className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
-            >
-              {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-              Enviar para aprobación
-            </button>
           )}
         </div>
       )}

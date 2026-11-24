@@ -23,7 +23,7 @@ export default async function ReportPage({ params }: { params: Promise<{ id: str
           category:   { columns: { id: true, name: true } },
           department: { columns: { id: true, name: true } },
           class:      { columns: { id: true, name: true } },
-          documents:  { columns: { id: true, originalName: true, ocrConfidence: true } },
+          documents:  { columns: { id: true, originalName: true, ocrConfidence: true, mimeType: true, fileKey: true } },
         },
         orderBy: (t, { asc }) => [asc(t.lineNumber)],
       },
@@ -35,6 +35,11 @@ export default async function ReportPage({ params }: { params: Promise<{ id: str
 
   const serialized = {
     ...report,
+    // The receipt is shown beside its expense: the screen needs its type, never its storage key.
+    items: report.items.map((item) => ({
+      ...item,
+      documents: item.documents.map(({ fileKey, ...document }) => ({ ...document, hasFile: Boolean(fileKey) })),
+    })),
     periodStart: report.periodStart?.toISOString() ?? null,
     periodEnd:   report.periodEnd?.toISOString() ?? null,
     submittedAt: report.submittedAt?.toISOString() ?? null,

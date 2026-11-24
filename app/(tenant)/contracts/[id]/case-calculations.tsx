@@ -21,6 +21,16 @@ export function calculationItemName(values: Record<string, string>, index: numbe
     || `Elemento ${index + 1}`;
 }
 
+/** Every result in one line (name, factor when known, value): the summary of Decisión and of Aprobaciones. */
+export function summarizeCalculations(calculations: CalculationResult[]): Array<{ key: string; name: string; value: number | null }> {
+  return calculations.flatMap((calc) => {
+    const factor = (operand: number | null | undefined) => (operand === null || operand === undefined || !calc.operation ? null : `${nf(operand)}${calc.operation === "percentage" ? " %" : ""}`);
+    return calc.items
+      ? calc.items.map((entry, index) => ({ key: `${calc.key}-${index}`, name: [calculationItemName(entry.values, index), factor(entry.operand ?? calc.parts?.operand.value)].filter(Boolean).join(" · "), value: entry.value }))
+      : [{ key: calc.key, name: calc.label, value: calc.value }];
+  });
+}
+
 /** The quote as the validations keep it, to look up the page where it was found. */
 export const evidenceKey = (quote: string) => quote.trim().slice(0, 400);
 

@@ -32,8 +32,20 @@ function asList(v: unknown): string[] {
   if (v === null || v === undefined || v === "") return [];
   return [String(v)];
 }
-// With several documents of one type, validations, calculations and generated
-// output all read the first one that actually has the field.
+/**
+ * The order every rule reads a case's documents in: the most recently added
+ * first (ties by id, so the order is stable). A corrected document delivered
+ * later (by the contractor's link or a resubmission) then gives its values
+ * instead of the one it corrects. The pipeline builds DocsByType in this order.
+ */
+export function newestFirst<T extends { id?: string; createdAt?: Date | string | null }>(docs: T[]): T[] {
+  const time = (doc: T) => (doc.createdAt ? new Date(doc.createdAt).getTime() : 0);
+  return [...docs].sort((a, b) => time(b) - time(a) || String(b.id ?? "").localeCompare(String(a.id ?? "")));
+}
+
+// With several documents of one type, validations, calculations, approval
+// conditions and generated output all read the first one, in newestFirst
+// order, that actually has the field.
 function firstValue(docsByType: DocsByType, ref: Ref): unknown {
   const docs = docsByType[ref.docType] ?? [];
   const d = docs.find((doc) => hasValue(doc.values[ref.field])) ?? docs[0];
@@ -181,7 +193,10 @@ export function ruleRefs(rule: ValidationRule): Ref[] {
 // ── Per-kind execution ────────────────────────────────────────────────
 function runCrossReference(r: Extract<ValidationRule, { kind: "cross_reference" }>, docs: DocsByType): Finding[] {
   const labels = r.statusLabels ?? { pass: "válido", fail: "no válido", unknown: "indeterminado" };
-  const subjects = (docs[r.subjects.docType] ?? []).flatMap((d) => asList(d.values[r.subjects.field]));
+  // What is checked comes from the latest document that lists it (a corrected
+  // contract replaces the old signers); where to find it is every document of
+  // that type (each member of a consortium has its own certificate).
+  const subjects = asList(firstValue(docs, r.subjects));
   const members = (docs[r.membership.docType] ?? []).flatMap((d) => asList(d.values[r.membership.field]));
   const confDocs = r.confirmation ? (docs[r.confirmation.docType] ?? []) : [];
   const noun = r.membership.label.toLowerCase().replace(/^en\s+/, "");
@@ -289,7 +304,8 @@ function runDocRequired(r: Extract<ValidationRule, { kind: "document_required" }
 }
 
 function runSignatures(r: Extract<ValidationRule, { kind: "signatures_complete" }>, docs: DocsByType): Finding[] {
-  const expected = (docs[r.subjects.docType] ?? []).flatMap((d) => asList(d.values[r.subjects.field]));
+  // The parties come from the latest document that lists them; signatures may be in any.
+  const expected = asList(firstValue(docs, r.subjects));
   const signed = (docs[r.signatures.docType] ?? []).flatMap((d) => asList(d.values[r.signatures.field]));
   if (expected.length === 0) return [unk("firmas", "sin partes", "No hay partes esperadas para verificar firmas.")];
   const missing = expected.filter((e) => !signed.some((s) => namesMatch(e, s)));

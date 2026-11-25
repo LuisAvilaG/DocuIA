@@ -10,7 +10,7 @@ import { assembleResults, isAiRule, type AnalysisOutcome } from "./assemble";
 import { adoptParts, evaluateCalculations, type CalculationResult } from "./calculations";
 import type { AiAnalysisItem, AiAnalysisOutcome } from "./ai-analysis";
 import { archiveValidationsForCase } from "./archive-validations";
-import { caseVerdict } from "./validate";
+import { caseVerdict, newestFirst } from "./validate";
 
 export interface ContractRevalidation {
   caseId: string;
@@ -23,12 +23,12 @@ export interface ContractRevalidation {
   resultJson: Record<string, unknown>;
 }
 
-type StoredDocument = { id: string; detectedType: string | null; extractedJson: unknown; citationsJson: unknown };
+type StoredDocument = { id: string; detectedType: string | null; extractedJson: unknown; citationsJson: unknown; createdAt?: Date | null };
 type StoredAnalysis = { ruleName: string; severity: string; outputMode: string; outcome: string; summary: string | null; itemsJson: unknown; citationsJson: unknown };
 
 function docsByTypeOf(documents: StoredDocument[], overrides: Record<string, Record<string, unknown>> = {}): DocsByType {
   const docsByType: DocsByType = {};
-  for (const document of documents) {
+  for (const document of newestFirst(documents)) {
     if (!document.detectedType) continue;
     (docsByType[document.detectedType] ??= []).push({
       values: overrides[document.id] ?? (document.extractedJson ?? {}) as Record<string, unknown>,

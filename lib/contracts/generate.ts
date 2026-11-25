@@ -389,7 +389,7 @@ export async function renderHtmlPdf(
 }
 
 // Assemble a flat data object for the template from a case's extracted docs +
-// validations. Later documents of the same field win last-writer.
+// validations. Docs come newest first; the first one with a value wins.
 export function assembleCaseData(
   docs: Array<{ detectedType: string | null; extractedJson: unknown }>,
   validations: Array<{ subject: string; status: string; reason: string | null }>,

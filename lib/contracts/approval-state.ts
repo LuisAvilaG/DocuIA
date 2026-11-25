@@ -4,6 +4,7 @@ import { contractCases, contractDocuments, contractFlows, orgUsers } from "@/db/
 import { canApprove } from "@/lib/auth/permissions";
 import { getFeature } from "@/lib/features";
 import { flowGraphSchema } from "./flow";
+import { newestFirst } from "./validate";
 import { requiredSteps, type ApprovalNodeData, type ApprovalRecord, type ApprovalStep } from "./approval-rules";
 
 export interface CaseApprovalRules {
@@ -35,9 +36,10 @@ export async function caseApprovalRules(organizationId: string, caseId: string):
   const node = graph?.success ? graph.data.nodes.find((n) => n.kind === "approval") : undefined;
   if (!node || node.kind !== "approval") return null;
 
-  const docs = await db.query.contractDocuments.findMany({ where: eq(contractDocuments.caseId, caseId), columns: { detectedType: true, extractedJson: true } });
+  const docs = await db.query.contractDocuments.findMany({ where: eq(contractDocuments.caseId, caseId), columns: { id: true, createdAt: true, detectedType: true, extractedJson: true } });
   const byType: Record<string, Array<{ values: Record<string, unknown> }>> = {};
-  for (const d of docs) if (d.detectedType) (byType[d.detectedType] ??= []).push({ values: (d.extractedJson ?? {}) as Record<string, unknown> });
+  // Same order as validations: the newest document of a type gives the amount.
+  for (const d of newestFirst(docs)) if (d.detectedType) (byType[d.detectedType] ??= []).push({ values: (d.extractedJson ?? {}) as Record<string, unknown> });
   const result = (kase.resultJson ?? {}) as { approvals?: ApprovalRecord[] };
   // A step names people. If none of them can sign any more (they left, lost the
   // permission, or the flow came from another client), nobody could: the case

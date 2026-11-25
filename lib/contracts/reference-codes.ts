@@ -12,12 +12,21 @@ export interface DetectedReference {
 
 // Intentionally requires a document prefix and a year. Dates, clause numbers
 // and standalone invoice amounts must never turn into correspondence links.
-const CODE = /\b(?:CARTA|OFICIO|INFORME|TRANSMITTAL|TRANS|MEMORANDO|DOCUMENTO)\s*(?:N\s*[°º.o]*\s*)?[-:/]?\s*\d{1,6}\s*[-/]\s*(?:20)?\d{2}\b|\b[A-Z][A-Z0-9]{1,14}(?:[-/][A-Z0-9]{1,14}){0,3}[-/]\d{1,6}[-/](?:20)?\d{2}\b/gi;
+// It runs on text whose whitespace runs are already one space (see flat()):
+// every gap is " ?" and every repeat is bounded, so a page of thousands of
+// spaces after «CARTA N» cannot make the match backtrack for minutes and
+// freeze the process (the queue worker shares it with the API).
+const CODE = /\b(?:CARTA|OFICIO|INFORME|TRANSMITTAL|TRANS|MEMORANDO|DOCUMENTO) ?(?:N ?[°º.o]{0,3} ?)?[-:/]? ?\d{1,6} ?[-/] ?(?:20)?\d{2}\b|\b[A-Z][A-Z0-9]{1,14}(?:[-/][A-Z0-9]{1,14}){0,3}[-/]\d{1,6}[-/](?:20)?\d{2}\b/gi;
+
+/** Whitespace runs (spaces, tabs, line breaks) collapsed to one space. */
+function flat(text: string): string {
+  return text.replace(/\s+/g, " ");
+}
 
 export function normalizeReferenceCode(raw: string): string {
-  return raw.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+  return flat(raw).normalize("NFD").replace(/[\u0300-\u036f]/g, "")
     .toUpperCase()
-    .replace(/\bN\s*[°º.O]*\s*(?=\d)/g, "")
+    .replace(/\bN ?[°º.O]{0,3} ?(?=\d)/g, "")
     .replace(/[^A-Z0-9]/g, "");
 }
 
@@ -41,9 +50,9 @@ export function detectDocumentType(fileName: string, firstPage: string): string 
 
 export function detectOwnCode(fileName: string, firstPage: string): string | null {
   // The heading is stronger evidence than arbitrary references in the body.
-  const heading = firstPage.slice(0, 1200);
+  const heading = flat(firstPage.slice(0, 1200));
   const headingMatch = [...heading.matchAll(CODE)][0]?.[0];
-  const fileMatch = [...fileName.matchAll(CODE)][0]?.[0];
+  const fileMatch = [...flat(fileName).matchAll(CODE)][0]?.[0];
   return (headingMatch || fileMatch || null)?.trim() ?? null;
 }
 
@@ -51,13 +60,14 @@ export function detectReferences(pages: IndexedPageText[], ownCode: string | nul
   const own = ownCode ? normalizeReferenceCode(ownCode) : null;
   const found = new Map<string, DetectedReference>();
   for (const page of pages) {
-    for (const match of page.text.matchAll(CODE)) {
-      const rawCode = match[0].replace(/\s+/g, " ").trim();
+    const text = flat(page.text);
+    for (const match of text.matchAll(CODE)) {
+      const rawCode = match[0].trim();
       const normalizedCode = normalizeReferenceCode(rawCode);
       if (!normalizedCode || normalizedCode === own || found.has(normalizedCode)) continue;
       const start = Math.max(0, (match.index ?? 0) - 140);
-      const end = Math.min(page.text.length, (match.index ?? 0) + match[0].length + 180);
-      const context = page.text.slice(start, end).replace(/\s+/g, " ").trim();
+      const end = Math.min(text.length, (match.index ?? 0) + match[0].length + 180);
+      const context = text.slice(start, end).trim();
       found.set(normalizedCode, { rawCode, normalizedCode, pageNumber: page.pageNumber, context });
       if (found.size >= max) return [...found.values()];
     }

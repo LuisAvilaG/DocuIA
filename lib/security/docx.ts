@@ -16,10 +16,16 @@ const decodeEntities = (text: string) => text
  * "INCLUDE" + "PICTURE" is INCLUDEPICTURE: the runs of a field are
  * concatenated as Word does, and each field is kept apart from the next.
  */
+// Every pattern on part XML stops at the next "<": a tag cannot contain one
+// (nor can an attribute value or instrText content in well-formed XML). With
+// "[^>]*" or "[\s\S]*?" a part made of thousands of unclosed "<w:fldChar" or
+// "<" made each attempt scan to the end of the part, quadratic time that
+// blocked the server for hours on a 5 KB upload (the timeout below cannot fire
+// while a regex runs).
 export function fieldInstructions(xml: string): string[] {
   const fields: string[] = [];
   const open: string[] = [];
-  const token = /<w:fldChar\b[^>]*\bw:fldCharType\s*=\s*["'](begin|separate|end)["'][^>]*>|<w:instrText\b[^>]*>([\s\S]*?)<\/w:instrText>/gi;
+  const token = /<w:fldChar\b[^<>]*\bw:fldCharType\s*=\s*["'](begin|separate|end)["'][^<>]*>|<w:instrText\b[^<>]*>([^<]*)<\/w:instrText>/gi;
   for (const m of xml.matchAll(token)) {
     if (m[1]) {
       const type = m[1].toLowerCase();
@@ -32,7 +38,7 @@ export function fieldInstructions(xml: string): string[] {
     }
   }
   fields.push(...open);
-  for (const m of xml.matchAll(/<w:fldSimple\b[^>]*\bw:instr\s*=\s*(?:"([^"]*)"|'([^']*)')/gi)) fields.push(m[1] ?? m[2] ?? "");
+  for (const m of xml.matchAll(/<w:fldSimple\b[^<>]*\bw:instr\s*=\s*(?:"([^"<]*)"|'([^'<]*)')/gi)) fields.push(m[1] ?? m[2] ?? "");
   return fields.map(decodeEntities);
 }
 
@@ -44,7 +50,10 @@ export function hasDangerousField(xml: string): boolean {
 // templates) and are rejected; a clickable web or mail hyperlink is not
 // fetched and is allowed, e.g. a company website in the footer.
 function hasForbiddenRelationship(rels: string): boolean {
-  for (const [tag] of rels.matchAll(/<Relationship\b[^>]*>/gi)) {
+  for (const [tag] of rels.matchAll(/<Relationship\b[^<>]*>/gi)) {
+    // A real relationship is a few hundred characters; the attribute patterns
+    // below are only run on tags of a sane size.
+    if (tag.length > 4096) return true;
     const external = /TargetMode\s*=\s*["']\s*External/i.test(tag);
     const target = /\bTarget\s*=\s*["']\s*([^"']*)/i.exec(tag)?.[1]?.trim() ?? "";
     const remote = /^(https?|file|ftp|smb):/i.test(target) || target.startsWith("//") || target.startsWith("\\\\");
@@ -53,6 +62,27 @@ function hasForbiddenRelationship(rels: string): boolean {
     if (!(hyperlink && /^(https?:\/\/|mailto:)/i.test(target))) return true;
   }
   return false;
+}
+
+/**
+ * The document parts must be well-formed where the template filler reads them
+ * (lib/contracts/word-template.ts matches <w:p>, <w:tr> and <w:t> with lazy
+ * patterns): every "<" closes before the next one, and every opening tag has
+ * its closing tag after it. Unclosed tags are what turn those patterns
+ * quadratic; Word never writes them.
+ */
+export function hasWellFormedRuns(xml: string): boolean {
+  if (/<[^<>]*(?:<|$)/.test(xml)) return false;
+  for (const tag of ["w:p", "w:tr", "w:t"]) {
+    let depth = 0;
+    for (const m of xml.matchAll(new RegExp(`<(/?)${tag}(?:\\s[^<>]*)?>`, "g"))) {
+      if (m[0].endsWith("/>")) continue;
+      depth += m[1] ? -1 : 1;
+      if (depth < 0) return false;
+    }
+    if (depth !== 0) return false;
+  }
+  return true;
 }
 
 /** Bound actual decompression before PizZip/LibreOffice sees a DOCX. Reject
@@ -95,12 +125,20 @@ export async function validateDocx(buffer: Buffer): Promise<void> {
         stream.on("error", fail);
         stream.on("end", () => {
           if (xml) {
-            const text = Buffer.concat(chunks).toString("utf8").replace(/&#(?:x([0-9a-f]+)|(\d+));/gi, (_, hex, dec) => String.fromCodePoint(Math.min(0x10ffff, parseInt(hex || dec, hex ? 16 : 10))));
-            if (text.includes("\0") || /<!DOCTYPE|<!ENTITY|<[^>]*altChunk\b|macroEnabled|vbaProject/i.test(text)
+            const raw = Buffer.concat(chunks).toString("utf8");
+            // An encoded "<" or ">" (&#60;) becomes a neutral character: decoded
+            // as such it would cut a tag or an instruction short and hide it
+            // from the checks below.
+            const text = raw.replace(/&#(?:x([0-9a-f]+)|(\d+));/gi, (_, hex, dec) => {
+              const code = Math.min(0x10ffff, parseInt(hex || dec, hex ? 16 : 10));
+              return code === 60 || code === 62 ? "�" : String.fromCodePoint(code);
+            });
+            if (text.includes("\0") || /<!DOCTYPE|<!ENTITY|<!\[CDATA\[|<[^<>]*altChunk\b|macroEnabled|vbaProject/i.test(text)
               || (/\.rels$/i.test(name) && hasForbiddenRelationship(text))
               || hasDangerousField(text)) {
               return fail(new Error("La plantilla contiene vínculos externos o contenido activo no permitido"));
             }
+            if (/^word\/.+\.xml$/i.test(name) && !hasWellFormedRuns(raw)) return fail(new Error("El documento Word está dañado"));
           }
           zip.readEntry();
         });

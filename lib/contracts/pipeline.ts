@@ -5,7 +5,7 @@ import { withAiUsage } from "@/lib/ai/usage";
 import { randomUUID } from "crypto";
 import { db } from "@/lib/db";
 import { contractCases, contractDocuments, contractExtractionLearnings, contractValidations, contractVisualTrainingVariants, contractAiAnalysisResults } from "@/db/schema";
-import { and, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import { uploadFile, getFileBuffer, getFileSize } from "@/lib/storage/minio";
 import { createExtractDeps, DEFAULT_CONTRACT_MODEL, type ContractExtractDeps, type ExtractSource } from "./extract";
 import { AI_MODELS } from "@/lib/ai/provider";
@@ -163,7 +163,8 @@ async function processContractCaseInner(caseId: string, injectedDeps?: ContractE
 
   try {
     const [docs, plan, validationsFeature, learnings] = await Promise.all([
-      db.query.contractDocuments.findMany({ where: eq(contractDocuments.caseId, caseId) }),
+      // Upload order: the case summary lists documents as they were added.
+      db.query.contractDocuments.findMany({ where: eq(contractDocuments.caseId, caseId), orderBy: [asc(contractDocuments.createdAt), asc(contractDocuments.id)] }),
       loadPlanForProcessing(kase),
       isFeatureEnabled(kase.organizationId, "contract_advanced_validations"),
       db.query.contractExtractionLearnings.findMany({
@@ -318,7 +319,9 @@ async function processContractCaseInner(caseId: string, injectedDeps?: ContractE
         citationsJson: citations,
       }).where(eq(contractDocuments.id, doc.id));
 
-      (docsByType[typeKey] ??= []).push({ values, citations, documentId: doc.id });
+      // Newest first: a document delivered later (a corrected policy, a new
+      // version of the contract) gives its values before the one it corrects.
+      (docsByType[typeKey] ??= []).unshift({ values, citations, documentId: doc.id });
       summary.push({
         documentId: doc.id, type: typeKey, typeName, fields: Object.keys(values).length,
         ...(useLocator ? { pages: [...pagesUsed].sort((a, b) => a - b), pageCount: pageCount ?? pages.length } : {}),

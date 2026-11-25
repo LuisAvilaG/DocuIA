@@ -40,8 +40,9 @@ async function handlePOST(_req: NextRequest, { params }: { params: Promise<{ id:
 
   try {
     const [docs, validations, analyses, plan] = await Promise.all([
-      // A stable order: a field present in two documents takes its value from the first one.
-      db.query.contractDocuments.findMany({ where: eq(contractDocuments.caseId, id), columns: { detectedType: true, extractedJson: true }, orderBy: (d, { asc }) => [asc(d.createdAt), asc(d.id)] }),
+      // Newest first, as validations read them: a field present in two
+      // documents takes its value from the one added last (the corrected one).
+      db.query.contractDocuments.findMany({ where: eq(contractDocuments.caseId, id), columns: { detectedType: true, extractedJson: true }, orderBy: (d, { desc }) => [desc(d.createdAt), desc(d.id)] }),
       db.query.contractValidations.findMany({ where: eq(contractValidations.caseId, id), columns: { subject: true, status: true, reason: true } }),
       db.query.contractAiAnalysisResults.findMany({ where: eq(contractAiAnalysisResults.caseId, id), columns: { ruleName: true, summary: true, itemsJson: true } }),
       loadCasePlan(kase),

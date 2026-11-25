@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, FileUp, FileText, Clock, AlertTriangle,
   GitMerge, Database, SlidersHorizontal, BarChart3, Settings, Workflow, ClipboardCheck,
-  LogOut, User, Users, Zap, Crown, Receipt, ScrollText, FolderOpen, BrainCircuit, KeyRound, ListChecks, Menu, X,
+  LogOut, User, Users, Zap, Crown, Receipt, ScrollText, FolderOpen, BrainCircuit, KeyRound, ListChecks, Menu, X, Network,
 } from "lucide-react";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { ChangePasswordDialog } from "@/components/shared/change-password-dialog";
@@ -24,7 +24,7 @@ function readLastProduct(): ProductKey | null {
 // lucide icon name → component (registry stores names as strings)
 const ICONS: Record<string, React.ElementType> = {
   LayoutDashboard, FileUp, FileText, Clock, AlertTriangle, GitMerge, Database, SlidersHorizontal,
-  BarChart3, Settings, Workflow, ClipboardCheck, Receipt, ScrollText, FolderOpen, BrainCircuit, ListChecks, Users,
+  BarChart3, Settings, Workflow, ClipboardCheck, Receipt, ScrollText, FolderOpen, BrainCircuit, ListChecks, Users, Network,
 };
 
 const PLAN_BADGE: Record<string, string> = {

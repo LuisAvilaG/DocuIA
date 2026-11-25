@@ -9,6 +9,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import { getOwnedUpload } from "@/lib/contracts/uploads";
 import { caseApprovalRules } from "@/lib/contracts/approval-state";
 import { checkApproval } from "@/lib/contracts/approval-rules";
+import { dispatchRouteNotices } from "@/lib/approval-map/notices";
 import { logAudit } from "@/lib/audit/log";
 import { getFeature, isFeatureEnabled } from "@/lib/features";
 
@@ -85,9 +86,10 @@ async function handlePOST(req: NextRequest, { params }: { params: Promise<{ id: 
         steps: rules.steps, done,
         actor: { id: session.sub, canApprove: true },
         creatorId: kase.createdBy, noSelfApproval: rules.noSelfApproval,
-        blocked, exceptionUserIds: rules.node.exceptionUserIds,
+        blocked, exceptionUserIds: rules.node.exceptionUserIds, ordered: rules.ordered,
       });
       if (!check.ok) return { error: check.reason, status: 403 };
+      if (check.step.comment && !reason) return { error: `El paso «${check.step.label}» pide un comentario al firmar.`, status: 400 };
       if (!await claimSupport()) return { error: "El soporte ya se usó en otro caso.", status: 409 };
       // El soporte queda con la firma que lo adjuntó, sea o no la última.
       approvals = [...done, { stepKey: check.step.key, label: check.step.label, byId: session.sub, byEmail: session.email, at: now, reason: reason || null, ...(supportRef ? { support: supportRef } : {}) }];
@@ -116,6 +118,8 @@ async function handlePOST(req: NextRequest, { params }: { params: Promise<{ id: 
     return NextResponse.json({ error: outcome.error, ...(outcome.needsOverride ? { needsOverride: true } : {}) }, { status: outcome.status });
   }
 
+  // Los avisos del mapa a los que el caso acaba de llegar.
+  if (rules?.map) await dispatchRouteNotices(session.orgId, id);
   if (outcome.pending) {
     await logAudit({ orgId: session.orgId, userId: session.sub, userEmail: session.email, action: "contract.approval_step", resourceType: "contract_case", resourceId: id, metadata: { pending: outcome.pending, reason: reason || null } });
     return NextResponse.json({ ok: true, status: "partial", pending: outcome.pending });

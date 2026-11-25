@@ -10,6 +10,9 @@ import { and, asc, desc, eq, gte, inArray } from "drizzle-orm";
 import { ApprovalsClient, type ApprovalCase } from "./approvals-client";
 import { summarizeCalculations } from "../[id]/case-calculations";
 import type { CalculationResult } from "@/lib/contracts/calculations";
+import { caseApprovalRules, caseTurn } from "@/lib/contracts/approval-state";
+import { loadApprovalPeople } from "@/lib/approval-map/state";
+import { orgTimeZone } from "@/lib/org-time-zone";
 
 type Decision = { action?: string; reason?: string | null; byEmail?: string | null; byId?: string | null; at?: string | null; override?: boolean; acknowledged?: number[]; support?: { name?: string } };
 
@@ -54,6 +57,15 @@ export default async function ContractApprovalsPage() {
 
   const flowNames = new Map(flows.map((f) => [f.id, f.name]));
   const userNames = new Map(users.map((u) => [u.id, u.fullName || u.email]));
+  const timeZone = await orgTimeZone(session.orgId);
+  const stamp = (at: string) => new Date(at).toLocaleString("es-MX", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone });
+
+  // A quién le toca cada caso por decidir y su recorrido de firmas (mapa de
+  // aprobaciones o reglas del flujo). Las personas y roles se leen una vez.
+  const rulesEnabled = await isFeatureEnabled(session.orgId, "contract_approval_rules").catch(() => false);
+  const people = rulesEnabled && pendingRows.length ? await loadApprovalPeople(session.orgId) : undefined;
+  const pendingRules = new Map(await Promise.all(pendingRows.map(async (row) =>
+    [row.id, rulesEnabled ? await caseApprovalRules(session.orgId, row.id, people).catch(() => null) : null] as const)));
   const docsByCase = new Map<string, typeof documents>();
   for (const d of documents) docsByCase.set(d.caseId, [...(docsByCase.get(d.caseId) ?? []), d]);
 
@@ -67,6 +79,22 @@ export default async function ContractApprovalsPage() {
     if (!group) return [];
     const checks = validationsEnabled ? validations.filter((v) => v.caseId === row.id) : [];
     const failing = checks.filter((v) => findingLevel(v) !== null);
+    const rules = group === "pending" ? pendingRules.get(row.id) ?? null : null;
+    const turn = group === "pending" ? caseTurn(rules, { id: session.sub, role: session.role }, row.createdBy, failing.some((v) => findingLevel(v) === "block")) : null;
+    let current = true;
+    const route = (rules?.steps ?? []).map((st) => {
+      const signed = rules!.done.find((d) => d.stepKey === st.key);
+      const state = signed ? "done" as const : current ? "now" as const : "later" as const;
+      if (!signed) current = false;
+      const names = st.approvers.userIds.map((id) => userNames.get(id) ?? "—");
+      return {
+        key: st.key, label: st.label, state,
+        who: signed ? `${userNames.get(signed.byId) ?? signed.byEmail ?? "—"} · ${stamp(signed.at)}`
+          : st.blockedReason ?? (names.length ? names.slice(0, 3).join(" o ") + (names.length > 3 ? ` y ${names.length - 3} más` : "") : "Nadie puede firmarlo hoy"),
+        note: signed ? null : st.note ?? null,
+        mine: !signed && st.approvers.userIds.includes(session.sub),
+      };
+    });
     return [{
       id: row.id,
       group,
@@ -95,8 +123,16 @@ export default async function ContractApprovalsPage() {
       moreCalculations: Math.max(0, results.length - 8),
       hasOutput: Boolean(result.outputKey),
       hasWord: result.outputMime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      turn: turn?.turn ?? null,
+      waitingFor: turn?.waitingFor ?? null,
+      turnReason: turn?.reason ?? null,
+      route,
+      mapName: rules?.map?.map.name ?? null,
+      answers: (rules?.map?.answers ?? []).map((a) => `${a.question}: ${a.answer}`),
     }];
   });
+  // Lo que espera una firma, del más antiguo al más nuevo.
+  cases.sort((a, b) => a.group === "pending" && b.group === "pending" ? a.updatedAt.localeCompare(b.updatedAt) : 0);
 
   return <ApprovalsClient cases={cases} allowOverride={approvalFeature.config.allow_override !== false} requestsEnabled={requestsEnabled} />;
 }

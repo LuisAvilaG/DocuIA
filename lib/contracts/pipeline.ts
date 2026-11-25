@@ -24,6 +24,8 @@ import { contractArchivePages } from "@/db/schema";
 import { fieldBatches, locatePages, pagesText, widenPages } from "./page-selection";
 import { archiveValidationsForCase } from "./archive-validations";
 import { caseVerdict } from "./validate";
+import { mapSnapshotForFlow } from "@/lib/approval-map/state";
+import { dispatchRouteNotices } from "@/lib/approval-map/notices";
 
 export interface CaseFileInput { buffer: Buffer; fileName: string; mimeType: string }
 
@@ -376,6 +378,9 @@ async function processContractCaseInner(caseId: string, injectedDeps?: ContractE
     const stages = plan.flow ? buildFlowTrace(plan.flow, docsByType, summary, !!plan.template, calculations) : null;
 
     const rows = await validationRows(caseId, validations, docs.map((doc) => doc.id));
+    // The approval map the case is decided with: a copy, so editing or
+    // publishing the map later does not change who signs a case in progress.
+    const approvalMap = await mapSnapshotForFlow(kase.organizationId, plan.flowId).catch(() => null);
 
     // Replace prior results and publish the verdict as one unit: a retry that
     // overlaps (or a crash midway) must not leave duplicated or partial rows.
@@ -418,6 +423,7 @@ async function processContractCaseInner(caseId: string, injectedDeps?: ContractE
           calculationValues,
           verdict,
           flow: { source: plan.source, stages, snapshot: flowSnapshot(plan) },
+          ...(approvalMap ? { approvalMap } : {}),
         },
         updatedAt: new Date(),
       }).where(eq(contractCases.id, caseId));
@@ -429,6 +435,8 @@ async function processContractCaseInner(caseId: string, injectedDeps?: ContractE
       resourceId: caseId,
       metadata: { documents: summary.length, validations: validations.length, analyses: analyses.length, verdict },
     });
+    // An «Aviso» at the start of the map goes out as soon as the case is ready.
+    if (approvalMap) await dispatchRouteNotices(kase.organizationId, caseId);
     if (await isFeatureEnabled(kase.organizationId, "contract_reference_archive")) {
       for (const doc of docs) {
         try {

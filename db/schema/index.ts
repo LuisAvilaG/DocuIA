@@ -12,6 +12,7 @@ export * from "./expenses";
 export * from "./products";
 export * from "./contracts";
 export * from "./contract-archive";
+export * from "./approval-maps";
 export * from "./rate-limits";
 export * from "./vendor-rules";
 export * from "./ai-batches";

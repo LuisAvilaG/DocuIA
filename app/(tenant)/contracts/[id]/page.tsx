@@ -21,7 +21,7 @@ import { CaseProcessingRefresh } from "./case-processing-refresh";
 import { getFeature, isFeatureEnabled } from "@/lib/features";
 import { flowGraphSchema } from "@/lib/contracts/flow";
 import { CaseActivity, type CaseActivityItem } from "./case-activity";
-import { caseApprovalRules } from "@/lib/contracts/approval-state";
+import { caseApprovalRules, caseTurn } from "@/lib/contracts/approval-state";
 import { canAccessTenantArea } from "@/lib/auth/permissions";
 import { ResubmitPanel } from "./resubmit-panel";
 import { RetryAnalysis } from "./retry-analysis";
@@ -262,12 +262,18 @@ export default async function ContractCasePage({ params, searchParams }: { param
   const when = (at: string | Date) => new Date(at).toLocaleString("es-MX", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone });
   const decisionSteps = (approvalRules?.steps ?? []).map((st) => {
     const signed = approvalRules!.done.find((d) => d.stepKey === st.key);
+    const names = st.approvers.userIds.map((uid) => userNames.get(uid) ?? "—");
     return {
       key: st.key, label: st.label,
-      who: st.approvers.mode === "any" ? "cualquier persona con permiso" : `${st.approvers.userIds.length} persona${st.approvers.userIds.length === 1 ? "" : "s"} asignada${st.approvers.userIds.length === 1 ? "" : "s"}`,
+      who: st.blockedReason ?? (st.approvers.mode === "any" ? "cualquier persona con permiso"
+        : names.length ? names.slice(0, 3).join(" o ") + (names.length > 3 ? ` y ${names.length - 3} más` : "") : "nadie puede firmarlo hoy"),
+      note: signed ? null : st.note ?? null,
       signed: signed ? `Aprobó ${userNames.get(signed.byId) ?? signed.byEmail ?? "—"} · ${when(signed.at)}` : null,
     };
   });
+  // A quién le toca: el formulario de decisión solo se muestra a quien puede firmar ahora.
+  const turn = kase.status === "validated" ? caseTurn(approvalRules, { id: session.sub, role: session.role }, kase.createdBy ?? null, verdict === "block") : null;
+  const mapAnswers = (approvalRules?.map?.answers ?? []).map((a) => `${a.question}: ${a.answer}`);
   const outputName = parsedFlow?.success ? parsedFlow.data.nodes.find((node) => node.kind === "generate")?.data.name ?? null : null;
   // The summary of Decisión lists every result in one line: name, factor and value.
   const summaryResults = summarizeCalculations(shownCalculations);
@@ -412,7 +418,8 @@ export default async function ContractCasePage({ params, searchParams }: { param
 
               <DecisionPanel caseId={kase.id} caseTitle={caseTitle} status={kase.status} verdict={validationsEnabled ? verdict : null} decision={result.decision} decidedAt={decidedAt}
                 hasOutput={Boolean(result.outputKey)} generationEnabled={generationEnabled} approvalEnabled={approvalFeature.isEnabled} allowOverride={approvalFeature.config.allow_override !== false}
-                canManage={canManage} steps={decisionSteps} openFindings={blocks + warns} requestsEnabled={requestsEnabled} />
+                canManage={canManage} steps={decisionSteps} openFindings={blocks + warns} requestsEnabled={requestsEnabled}
+                turn={turn?.turn ?? null} turnReason={turn?.reason ?? null} mapName={approvalRules?.map?.map.name ?? null} mapAnswers={mapAnswers} />
             </div>
           )}
 

@@ -104,6 +104,8 @@ export const contractFlows = pgTable("contract_flows", {
   // Con Versiones de flujo: lo que se edita sin afectar los casos hasta publicar.
   draftJson:      json("draft_json"),
   draftUpdatedAt: timestamp("draft_updated_at"),
+  // Mapa de aprobaciones que decide quién firma sus casos (null: la etapa Aprobación del flujo, como antes).
+  approvalMapId:  varchar("approval_map_id", { length: 36 }),
   createdAt:      timestamp("created_at").notNull().defaultNow(),
   updatedAt:      timestamp("updated_at").notNull().defaultNow(),
 }, (t) => [

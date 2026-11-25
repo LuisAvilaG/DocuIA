@@ -31,6 +31,15 @@ export interface ApprovalCase {
   moreCalculations: number;
   hasOutput: boolean;
   hasWord: boolean;
+  /** Por decidir: si esta persona puede firmar ahora, si espera a otra o si ya firmó. */
+  turn: "mine" | "others" | "signed" | null;
+  waitingFor: string | null;
+  turnReason: string | null;
+  /** Las firmas del caso en orden, con quién puede firmar la que sigue. */
+  route: { key: string; label: string; state: "done" | "now" | "later"; who: string; note: string | null; mine: boolean }[];
+  mapName: string | null;
+  /** Por qué el mapa lo llevó por ese camino: «Tipo de contrato: Obra». */
+  answers: string[];
 }
 
 const nf = (n: number) => n.toLocaleString("es-CO", { maximumFractionDigits: 6 });
@@ -46,8 +55,39 @@ function Row({ title, end, last, children }: { title: string; end?: React.ReactN
   );
 }
 
-type Group = ApprovalCase["group"];
-const GROUP_LABEL: Record<Group, string> = { pending: "Por decidir", approved: "Aprobados", rejected: "Rechazados" };
+type Group = "mine" | "others" | "approved" | "rejected";
+const GROUPS: Group[] = ["mine", "others", "approved", "rejected"];
+const GROUP_LABEL: Record<Group, string> = { mine: "Te toca", others: "Esperan a otra persona", approved: "Aprobados", rejected: "Rechazados" };
+const groupOf = (c: ApprovalCase): Group => c.group === "pending" ? (c.turn === "mine" ? "mine" : "others") : c.group;
+
+/** Las firmas del caso en orden: las hechas, la que sigue y las que faltan. */
+function Route({ c }: { c: ApprovalCase }) {
+  return (
+    <div className="flex flex-col gap-2.5">
+      {c.answers.length > 0 && (
+        <span className="flex flex-wrap items-center gap-1.5 text-[12.5px]">
+          <span className="text-muted-foreground">{c.mapName ? `El mapa «${c.mapName}» lo llevó por:` : "Camino:"}</span>
+          {c.answers.map((a) => <span key={a} className="rounded-full border border-[#E2C88E] bg-[#FFFBF2] px-2.5 py-0.5 text-[#5B4208]">{a}</span>)}
+        </span>
+      )}
+      <ol className="flex flex-wrap items-stretch gap-2">
+        {c.route.map((st, i) => (
+          <li key={st.key} className="flex items-stretch gap-2">
+            {i > 0 && <span aria-hidden className="self-center text-muted-foreground">→</span>}
+            <span className={cn("flex min-w-[150px] max-w-[240px] flex-col rounded-[10px] border bg-white px-3 py-2",
+              st.state === "done" ? "border-[#B8DCC9]" : st.state === "now" ? "border-2 border-primary" : "border-border opacity-70")}>
+              <small className={cn("text-[10.5px] font-semibold uppercase tracking-[0.05em]", st.state === "done" ? "text-tone-ok" : st.state === "now" ? "text-link" : "text-muted-foreground")}>
+                {st.state === "done" ? "Firmó" : st.state === "now" ? (st.mine ? "Te toca" : "Sigue") : "Después"} · {st.label}
+              </small>
+              <span className="text-[13px] leading-snug">{st.who}</span>
+              {st.note && <span className="mt-1 text-[12px] leading-snug text-muted-foreground">{st.note}</span>}
+            </span>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
 
 function ago(iso: string): string {
   const min = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
@@ -67,25 +107,28 @@ function findingsPill(c: ApprovalCase) {
 
 export function ApprovalsClient({ cases, allowOverride, requestsEnabled }: { cases: ApprovalCase[]; allowOverride: boolean; /** Rejecting can also ask the contractor for corrected documents. */ requestsEnabled: boolean }) {
   const router = useRouter();
-  const [group, setGroup] = useState<Group>("pending");
+  const [group, setGroup] = useState<Group>(() => cases.some((c) => groupOf(c) === "mine") || !cases.some((c) => groupOf(c) === "others") ? "mine" : "others");
   const [flow, setFlow] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const flows = useMemo(() => [...new Set(cases.map((c) => c.flowName).filter((n): n is string => Boolean(n)))].sort(), [cases]);
-  const counts = useMemo(() => ({ pending: 0, approved: 0, rejected: 0, ...Object.fromEntries((["pending", "approved", "rejected"] as Group[]).map((g) => [g, cases.filter((c) => c.group === g).length])) }), [cases]);
-  const list = cases.filter((c) => c.group === group && (!flow || c.flowName === flow));
+  const inFlow = useMemo(() => cases.filter((c) => !flow || c.flowName === flow), [cases, flow]);
+  const counts = useMemo(() => Object.fromEntries(GROUPS.map((g) => [g, inFlow.filter((c) => groupOf(c) === g).length])) as Record<Group, number>, [inFlow]);
+  const list = inFlow.filter((c) => groupOf(c) === group);
   const sel = list.find((c) => c.id === selectedId) ?? list[0] ?? null;
+  const pending = group === "mine" || group === "others";
 
   return (
     <PageFrame wide>
       <p className="text-xs font-semibold uppercase tracking-[0.06em] text-link">Contratos</p>
       <h1 className="mt-1 text-[26px] font-semibold leading-tight tracking-[-0.025em]">Aprobaciones</h1>
       <p className="mt-1.5 text-sm text-muted-foreground">
-        {counts.pending ? `${counts.pending} caso${counts.pending === 1 ? " espera" : "s esperan"} tu decisión. Cada uno muestra sus hallazgos antes de que decidas.` : "Nada espera tu decisión."}
+        {counts.mine ? `${counts.mine} caso${counts.mine === 1 ? " espera" : "s esperan"} tu firma.` : "Nada espera tu firma."}
+        {counts.others ? ` Otro${counts.others === 1 ? "" : "s"} ${counts.others} ${counts.others === 1 ? "está" : "están"} en manos de otra persona.` : ""}
       </p>
 
       <div className="mt-6 flex flex-wrap items-end gap-3">
-        <ViewTabs className="min-w-0 flex-1" items={(["pending", "approved", "rejected"] as Group[]).map((g) => ({
+        <ViewTabs className="min-w-0 flex-1" items={GROUPS.map((g) => ({
           key: g, label: GROUP_LABEL[g], count: counts[g], active: group === g, onSelect: () => { setGroup(g); setSelectedId(null); },
         }))} />
         {flows.length > 1 && (
@@ -97,8 +140,8 @@ export function ApprovalsClient({ cases, allowOverride, requestsEnabled }: { cas
       </div>
 
       {list.length === 0 ? (
-        <EmptyState className="mt-4.5" title={group === "pending" ? "Nada por decidir" : `Sin casos ${GROUP_LABEL[group].toLowerCase()} en los últimos 90 días`}>
-          {group === "pending" ? "Los casos aparecen aquí cuando termina su validación." : "Las decisiones quedan registradas con quién, cuándo y por qué."}
+        <EmptyState className="mt-4.5" title={group === "mine" ? "Nada espera tu firma" : group === "others" ? "Nada espera a otra persona" : `Sin casos ${GROUP_LABEL[group].toLowerCase()} en los últimos 90 días`}>
+          {pending ? "Los casos aparecen aquí cuando termina su validación, en el paso que le toca a cada quien." : "Las decisiones quedan registradas con quién, cuándo y por qué."}
         </EmptyState>
       ) : (
         <div className="mt-4.5 grid border-t border-border lg:min-h-[520px] lg:grid-cols-[340px_minmax(0,1fr)]">
@@ -109,7 +152,10 @@ export function ApprovalsClient({ cases, allowOverride, requestsEnabled }: { cas
                   className={cn("flex w-full flex-col gap-1 border-b border-line-soft px-4.5 py-3.5 text-left", sel?.id === c.id ? "bg-white shadow-[inset_3px_0_0_#1E2029]" : "hover:bg-secondary/40")}>
                   <b className="truncate text-sm font-semibold">{c.title}</b>
                   <span className="text-[12.5px] text-muted-foreground">{[c.flowName, `${c.documentCount} documento${c.documentCount === 1 ? "" : "s"}`].filter(Boolean).join(" · ")}</span>
-                  {group === "pending" ? (
+                  {group === "others" && (
+                    <span className="text-[12.5px] text-foreground/80">{c.turn === "signed" ? `Ya firmaste${c.waitingFor ? ` · espera a ${c.waitingFor}` : ""}` : c.waitingFor ? `Espera a ${c.waitingFor}` : c.turnReason}</span>
+                  )}
+                  {pending ? (
                     <span className="flex items-center justify-between gap-2">
                       {findingsPill(c)}
                       <span className="text-xs tabular-nums text-muted-foreground">espera {ago(c.updatedAt)}</span>
@@ -135,7 +181,11 @@ export function ApprovalsClient({ cases, allowOverride, requestsEnabled }: { cas
                   <Link href={`/contracts/${sel.id}`} className="text-[13px] font-semibold text-link hover:underline">Abrir el caso completo</Link>
                 </div>
 
-                {group === "pending" ? (
+                {pending && sel.route.length > 0 && (
+                  <Row title="Firmas"><Route c={sel} /></Row>
+                )}
+
+                {pending ? (
                   <Row title="Hallazgos">
                     {sel.findings.length === 0 ? (
                       sel.unverified
@@ -207,15 +257,20 @@ export function ApprovalsClient({ cases, allowOverride, requestsEnabled }: { cas
                   </Row>
                 )}
 
-                {group === "pending" && (
+                {group === "mine" && (
                   <Row title="Tu decisión" last>
                     <DecisionForm key={sel.id} caseId={sel.id} caseTitle={sel.title} blocked={sel.blockerCount > 0} allowOverride={allowOverride}
                       openFindings={sel.blockerCount + sel.warningCount} requestsEnabled={requestsEnabled} onDecided={() => router.refresh()} />
                   </Row>
                 )}
+                {group === "others" && (
+                  <Row title="Tu decisión" last>
+                    <span className="text-muted-foreground">{sel.turn === "signed" ? "Ya firmaste este caso; falta otra persona." : sel.turnReason ?? "Este paso lo firma otra persona."}</span>
+                  </Row>
+                )}
               </div>
 
-              {group === "pending" ? (
+              {pending ? (
                 <div className="flex min-w-0 flex-[1_1_300px] flex-col gap-3 lg:max-w-[360px]">
                   <span className="text-[11.5px] font-semibold uppercase tracking-[0.05em] text-foreground/75">{sel.documents.length > 1 ? `Documentos del caso · ${sel.documents.length}` : "Documento del caso"}</span>
                   <SourcePreview key={sel.id} documents={sel.documents} fullHref={`/contracts/${sel.id}?etapa=docs`} />

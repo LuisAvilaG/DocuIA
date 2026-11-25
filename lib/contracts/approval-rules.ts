@@ -9,7 +9,19 @@ export interface ApprovalNodeData {
   conditions: Array<{ label: string; docType: string; field: string; op: "gt" | "gte"; value: number; approvers: Approvers }>;
   exceptionUserIds: string[];
 }
-export interface ApprovalStep { key: string; label: string; approvers: Approvers }
+export interface ApprovalStep {
+  key: string;
+  label: string;
+  approvers: Approvers;
+  /** Mapa de aprobaciones: por qué firma quien firma (el titular subió el caso, está fuera…). */
+  note?: string | null;
+  /** Mapa de aprobaciones: el paso no se puede firmar todavía, y por qué. */
+  blockedReason?: string;
+  /** Mapa de aprobaciones: el rol o la persona del paso, tal como se dibujó. */
+  who?: string;
+  /** Mapa de aprobaciones: quien firma este paso debe dejar un comentario. */
+  comment?: boolean;
+}
 export interface ApprovalRecord { stepKey: string; byId: string; byEmail: string | null; at: string; reason: string | null }
 
 type DocsByType = Record<string, Array<{ values: Record<string, unknown> }>>;
@@ -53,8 +65,20 @@ export function checkApproval(opts: {
   noSelfApproval: boolean;
   blocked: boolean;
   exceptionUserIds: string[];
+  /** Mapa de aprobaciones: los pasos se firman en orden, solo el primero pendiente. */
+  ordered?: boolean;
 }): ApprovalCheck {
   const { steps, done, actor } = opts;
+  if (opts.ordered) {
+    if (!actor.canApprove) return { ok: false, reason: "No tienes permiso para aprobar casos." };
+    const pending = steps.filter((s) => !done.some((d) => d.stepKey === s.key));
+    const next = pending[0];
+    if (!next) return { ok: false, reason: "El caso ya tiene todas sus aprobaciones." };
+    if (next.blockedReason) return { ok: false, reason: next.blockedReason };
+    if (done.some((d) => d.byId === actor.id)) return { ok: false, reason: "Ya firmaste este caso; falta otra persona." };
+    if (!next.approvers.userIds.includes(actor.id)) return { ok: false, reason: `Este paso lo firma ${next.label}${next.approvers.userIds.length ? "" : ", y hoy nadie puede"}.` };
+    return { ok: true, step: next, last: pending.length === 1 };
+  }
   if (!actor.canApprove) return { ok: false, reason: "No tienes permiso para aprobar casos." };
   if (opts.noSelfApproval && opts.creatorId && opts.creatorId === actor.id) return { ok: false, reason: "Quien crea el caso no puede aprobarlo." };
   if (opts.blocked && opts.exceptionUserIds.length > 0 && !opts.exceptionUserIds.includes(actor.id)) {

@@ -142,6 +142,7 @@ export const PRODUCT_MODULES: Record<ProductKey, NavModule[]> = {
     { href: "/contracts/archive",    label: "Archivo",       icon: "FolderOpen",      feature: "contract_reference_archive" },
     { href: "/contracts/metrics",    label: "Métricas",      icon: "BarChart3",       feature: "contract_metrics" },
     { href: "/contracts/flow",       label: "Flujos",        icon: "Workflow",        feature: "contract_flow_builder", adminOnly: true, group: "config" },
+    { href: "/contracts/approval-maps", label: "Mapas de aprobación", icon: "Network", feature: "contract_approval_rules", adminOnly: true, group: "config" },
     { href: "/contracts/quality",    label: "Aprendizajes",  icon: "BrainCircuit",    feature: "contract_ai_extraction", adminOnly: true, group: "config" },
     { href: "/settings?tab=team",    label: "Usuarios",      icon: "Users",           adminOnly: true, group: "config" },
   ],

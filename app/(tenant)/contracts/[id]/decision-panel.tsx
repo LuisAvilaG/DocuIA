@@ -14,13 +14,13 @@ import { btn, StatusPill } from "@/components/kit";
 import { DecisionForm } from "../components/decision-form";
 
 interface Decision { action?: string; reason?: string | null; byEmail?: string | null; at?: string | null; override?: boolean; support?: { name?: string } }
-export interface DecisionStep { key: string; label: string; who: string; signed: string | null }
+export interface DecisionStep { key: string; label: string; who: string; signed: string | null; note?: string | null }
 
 const row = "flex flex-col gap-2 border-t border-border py-4 text-[13.5px] first-of-type:border-foreground";
 const label = "text-[11.5px] font-semibold uppercase tracking-[0.05em] text-foreground/75";
 const hint = "text-[12.5px] text-muted-foreground";
 
-export function DecisionPanel({ caseId, caseTitle, status, verdict, decision, decidedAt, hasOutput, generationEnabled, approvalEnabled, allowOverride, canManage, steps, openFindings, requestsEnabled }: {
+export function DecisionPanel({ caseId, caseTitle, status, verdict, decision, decidedAt, hasOutput, generationEnabled, approvalEnabled, allowOverride, canManage, steps, openFindings, requestsEnabled, turn = null, turnReason = null, mapName = null, mapAnswers = [] }: {
   caseId: string;
   caseTitle: string;
   status: string;
@@ -39,6 +39,12 @@ export function DecisionPanel({ caseId, caseTitle, status, verdict, decision, de
   openFindings: number;
   /** Rejecting can also ask the contractor for corrected documents. */
   requestsEnabled: boolean;
+  /** Whether this person can sign now, waits for someone else, or already signed (null: anyone who decides). */
+  turn?: "mine" | "others" | "signed" | null;
+  turnReason?: string | null;
+  /** Approval map the case is decided with, and the answers that chose its path. */
+  mapName?: string | null;
+  mapAnswers?: string[];
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState<"generate" | "reopen" | null>(null);
@@ -47,7 +53,7 @@ export function DecisionPanel({ caseId, caseTitle, status, verdict, decision, de
   const approved = status === "approved" || (status === "generated" && decision?.action === "approve");
   const rejected = status === "rejected";
   const decided = approved || rejected;
-  const deciding = approvalEnabled && !decided && canManage && status === "validated";
+  const deciding = approvalEnabled && !decided && canManage && status === "validated" && (turn === null || turn === "mine");
 
   async function run(action: "generate" | "reopen") {
     setError(null);
@@ -121,12 +127,21 @@ export function DecisionPanel({ caseId, caseTitle, status, verdict, decision, de
         </>
       ) : (
         <>
+          {mapAnswers.length > 0 && (
+            <div className={row}>
+              <span className={label}>{mapName ? `Mapa «${mapName}»` : "Camino"}</span>
+              <span className="flex flex-wrap gap-1.5">
+                {mapAnswers.map((a) => <span key={a} className="rounded-full border border-[#E2C88E] bg-[#FFFBF2] px-2.5 py-0.5 text-[12.5px] text-[#5B4208]">{a}</span>)}
+              </span>
+            </div>
+          )}
           {steps.map((step) => (
             <div key={step.key} className={row}>
               <span className="flex flex-wrap items-baseline justify-between gap-2.5">
                 <span><b className="font-semibold">{step.label}</b><span className="text-muted-foreground"> · {step.who}</span></span>
                 {step.signed ? <StatusPill tone="ok">{step.signed}</StatusPill> : <StatusPill tone="warn">Pendiente</StatusPill>}
               </span>
+              {step.note && <span className={hint}>{step.note}</span>}
             </div>
           ))}
           <div className={row}>
@@ -137,7 +152,9 @@ export function DecisionPanel({ caseId, caseTitle, status, verdict, decision, de
               <span className="text-muted-foreground">
                 {!canManage ? "Tu rol puede consultar el caso, no decidirlo."
                   : !approvalEnabled ? "Este caso no pasa por aprobación."
-                  : "Este caso aún no está listo para decisión. Espera a que termine la validación."}
+                  : status !== "validated" ? "Este caso aún no está listo para decisión. Espera a que termine la validación."
+                  : turn === "signed" ? "Ya firmaste este caso; falta otra persona."
+                  : turnReason ?? "Este paso lo firma otra persona."}
               </span>
             )}
           </div>

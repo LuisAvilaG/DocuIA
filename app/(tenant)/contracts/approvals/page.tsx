@@ -6,7 +6,7 @@ import { isProductActive } from "@/lib/products";
 import { getFeature, isFeatureEnabled } from "@/lib/features";
 import { db } from "@/lib/db";
 import { contractCases, contractDocuments, contractFlows, contractValidations, orgUsers } from "@/db/schema";
-import { and, desc, eq, gte, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray } from "drizzle-orm";
 import { ApprovalsClient, type ApprovalCase } from "./approvals-client";
 import { summarizeCalculations } from "../[id]/case-calculations";
 import type { CalculationResult } from "@/lib/contracts/calculations";
@@ -43,18 +43,19 @@ export default async function ContractApprovalsPage() {
   ]);
   const rows = [...pendingRows, ...decidedRows];
   const ids = rows.map((r) => r.id);
-  const [flows, documents, validations, users, validationsEnabled] = await Promise.all([
+  const [flows, documents, validations, users, validationsEnabled, requestsEnabled] = await Promise.all([
     db.query.contractFlows.findMany({ where: eq(contractFlows.organizationId, session.orgId), columns: { id: true, name: true } }),
-    ids.length ? db.query.contractDocuments.findMany({ where: inArray(contractDocuments.caseId, ids), columns: { caseId: true } }) : Promise.resolve([]),
+    ids.length ? db.query.contractDocuments.findMany({ where: inArray(contractDocuments.caseId, ids), columns: { id: true, caseId: true, originalName: true, mimeType: true }, orderBy: [asc(contractDocuments.createdAt)] }) : Promise.resolve([]),
     ids.length ? db.query.contractValidations.findMany({ where: inArray(contractValidations.caseId, ids), columns: { caseId: true, ok: true, severity: true, ruleName: true, subject: true, reason: true } }) : Promise.resolve([]),
     db.query.orgUsers.findMany({ where: eq(orgUsers.organizationId, session.orgId), columns: { id: true, fullName: true, email: true } }),
     isFeatureEnabled(session.orgId, "contract_advanced_validations"),
+    isFeatureEnabled(session.orgId, "contract_document_requests").catch(() => false),
   ]);
 
   const flowNames = new Map(flows.map((f) => [f.id, f.name]));
   const userNames = new Map(users.map((u) => [u.id, u.fullName || u.email]));
-  const docCount = new Map<string, number>();
-  for (const d of documents) docCount.set(d.caseId, (docCount.get(d.caseId) ?? 0) + 1);
+  const docsByCase = new Map<string, typeof documents>();
+  for (const d of documents) docsByCase.set(d.caseId, [...(docsByCase.get(d.caseId) ?? []), d]);
 
   const cases: ApprovalCase[] = rows.flatMap((row) => {
     const result = (row.resultJson ?? {}) as { decision?: Decision | null; outputKey?: string; outputMime?: string; calculations?: CalculationResult[] };
@@ -71,7 +72,9 @@ export default async function ContractApprovalsPage() {
       group,
       title: row.title || `Caso ${row.id.slice(0, 8)}`,
       flowName: row.flowId ? flowNames.get(row.flowId) ?? null : null,
-      documentCount: docCount.get(row.id) ?? 0,
+      documentCount: docsByCase.get(row.id)?.length ?? 0,
+      // Only a case waiting for a decision shows its documents; a decided one shows what was generated.
+      documents: group === "pending" ? (docsByCase.get(row.id) ?? []).map((d) => ({ id: d.id, name: d.originalName || "Documento", mime: d.mimeType })) : [],
       createdBy: row.createdBy ? userNames.get(row.createdBy) ?? null : null,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
@@ -95,5 +98,5 @@ export default async function ContractApprovalsPage() {
     }];
   });
 
-  return <ApprovalsClient cases={cases} allowOverride={approvalFeature.config.allow_override !== false} />;
+  return <ApprovalsClient cases={cases} allowOverride={approvalFeature.config.allow_override !== false} requestsEnabled={requestsEnabled} />;
 }

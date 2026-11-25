@@ -3,11 +3,12 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { btn, EmptyState, PageFrame, StatusPill, ViewTabs } from "@/components/kit";
+import { EmptyState, PageFrame, StatusPill, ViewTabs } from "@/components/kit";
 import { cn } from "@/lib/utils";
-import { DecisionDialog, type CaseDecisionAction } from "../components/decision-dialog";
+import { DecisionForm } from "../components/decision-form";
 import { OutputDownloads } from "../[id]/output-downloads";
-import { OutputPreview } from "../components/output-preview-lazy";
+import { OutputPreview, SourcePreview } from "../components/output-preview-lazy";
+import type { SourceDocument } from "../components/output-preview";
 
 export interface ApprovalCase {
   id: string;
@@ -15,6 +16,8 @@ export interface ApprovalCase {
   title: string;
   flowName: string | null;
   documentCount: number;
+  /** The documents uploaded to a case that waits for a decision. */
+  documents: SourceDocument[];
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
@@ -33,9 +36,9 @@ export interface ApprovalCase {
 const nf = (n: number) => n.toLocaleString("es-CO", { maximumFractionDigits: 6 });
 
 /** One line of the record of a decision: what it is, what it says and where to see it whole. */
-function Row({ title, end, children }: { title: string; end?: React.ReactNode; children: React.ReactNode }) {
+function Row({ title, end, last, children }: { title: string; end?: React.ReactNode; last?: boolean; children: React.ReactNode }) {
   return (
-    <div className="grid grid-cols-1 items-baseline gap-x-4.5 gap-y-1 border-b border-border py-3 text-[13.5px] md:grid-cols-[150px_minmax(0,1fr)_auto]">
+    <div className={cn("grid grid-cols-1 items-baseline gap-x-4.5 gap-y-1 border-b border-border py-3 text-[13.5px] md:grid-cols-[150px_minmax(0,1fr)_auto]", last && "border-b-0")}>
       <b className="font-semibold">{title}</b>
       <div className="min-w-0">{children}</div>
       {end ?? <span />}
@@ -62,12 +65,11 @@ function findingsPill(c: ApprovalCase) {
   return <StatusPill tone="ok">Sin observaciones</StatusPill>;
 }
 
-export function ApprovalsClient({ cases, allowOverride }: { cases: ApprovalCase[]; allowOverride: boolean }) {
+export function ApprovalsClient({ cases, allowOverride, requestsEnabled }: { cases: ApprovalCase[]; allowOverride: boolean; /** Rejecting can also ask the contractor for corrected documents. */ requestsEnabled: boolean }) {
   const router = useRouter();
   const [group, setGroup] = useState<Group>("pending");
   const [flow, setFlow] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [dialog, setDialog] = useState<{ item: ApprovalCase; action: CaseDecisionAction } | null>(null);
 
   const flows = useMemo(() => [...new Set(cases.map((c) => c.flowName).filter((n): n is string => Boolean(n)))].sort(), [cases]);
   const counts = useMemo(() => ({ pending: 0, approved: 0, rejected: 0, ...Object.fromEntries((["pending", "approved", "rejected"] as Group[]).map((g) => [g, cases.filter((c) => c.group === g).length])) }), [cases]);
@@ -122,7 +124,7 @@ export function ApprovalsClient({ cases, allowOverride }: { cases: ApprovalCase[
             ))}
           </ul>
 
-          {sel && group !== "pending" && (
+          {sel && (
             <section aria-labelledby="ap-title" className="flex flex-wrap items-start gap-7 py-5.5 lg:pl-7">
               <div className="flex min-w-0 flex-[999_1_380px] flex-col">
                 <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-b border-foreground pb-2.5">
@@ -132,38 +134,65 @@ export function ApprovalsClient({ cases, allowOverride }: { cases: ApprovalCase[
                   </div>
                   <Link href={`/contracts/${sel.id}`} className="text-[13px] font-semibold text-link hover:underline">Abrir el caso completo</Link>
                 </div>
-                <Row title="Decisión">
-                  <span className="inline-flex items-center gap-2.5 text-base font-semibold tracking-[-0.01em]">
-                    <span aria-hidden className={cn("size-[9px] rounded-full", group === "approved" ? "bg-tone-ok" : "bg-tone-err")} />
-                    {group === "rejected" ? "Rechazado" : sel.decision?.override ? "Aprobado con excepción" : "Aprobado"}
-                  </span>
-                  <span className="block text-[12.5px] text-muted-foreground">{[sel.decision?.by, when(sel.decision?.at ?? sel.updatedAt)].filter(Boolean).join(" · ")}</span>
-                </Row>
-                <Row title={group === "rejected" ? "Motivo" : sel.decision?.override ? "Justificación" : "Comentario"}>
-                  {sel.decision?.reason ? <q>{sel.decision.reason}</q> : <span className="text-muted-foreground">Sin comentario.</span>}
-                </Row>
-                {sel.decision?.override && (
-                  <Row title="Excepción">Aprobado pese a {sel.blockerCount || "los"} bloqueo{sel.blockerCount === 1 ? "" : "s"}{sel.decision.acknowledged ? ` · ${sel.decision.acknowledged} validaci${sel.decision.acknowledged === 1 ? "ón revisada" : "ones revisadas"}` : ""}</Row>
-                )}
-                {sel.decision?.supportName && (
-                  <Row title="Soporte"><a href={`/api/v1/contracts/cases/${sel.id}/support`} className="text-link hover:underline">{sel.decision.supportName}</a></Row>
-                )}
-                <Row title={group === "rejected" ? "Se rechazó con" : "Se aprobó con"}
-                  end={sel.findings.length > 0 ? <Link href={`/contracts/${sel.id}?etapa=checks`} className="text-[13px] font-semibold text-link hover:underline">Ver hallazgos</Link> : undefined}>
-                  {sel.findings.length === 0 ? (
-                    sel.unverified
-                      ? <span className="text-muted-foreground">Sin hallazgos; {sel.unverified} control{sel.unverified === 1 ? " no se pudo" : "es no se pudieron"} verificar.</span>
-                      : <span className="text-muted-foreground">Sin observaciones.</span>
-                  ) : (
-                    <>
-                      {findingsPill(sel)}
-                      <ul className="mt-1.5 flex flex-col gap-1">
-                        {sel.findings.slice(0, 3).map((f, i) => <li key={i}>{f.title}</li>)}
-                        {sel.blockerCount + sel.warningCount > 3 && <li className="text-[12.5px] text-muted-foreground">y {sel.blockerCount + sel.warningCount - 3} más</li>}
+
+                {group === "pending" ? (
+                  <Row title="Hallazgos">
+                    {sel.findings.length === 0 ? (
+                      sel.unverified
+                        ? <span className="text-muted-foreground">Sin hallazgos, pero {sel.unverified} control{sel.unverified === 1 ? " no se pudo" : "es no se pudieron"} verificar.</span>
+                        : <span className="text-muted-foreground">Sin observaciones.</span>
+                    ) : (
+                      <ul className="flex flex-col gap-2.5">
+                        {sel.findings.map((f, i) => (
+                          <li key={i} className="flex items-start gap-3">
+                            <StatusPill tone={f.severity === "block" ? "err" : "warn"}>{f.severity === "block" ? "Bloqueo" : "A revisar"}</StatusPill>
+                            <span className="min-w-0"><b className="block font-semibold">{f.title}</b>{f.detail !== f.title && <span className="text-muted-foreground">{f.detail}</span>}</span>
+                          </li>
+                        ))}
+                        {sel.blockerCount + sel.warningCount > sel.findings.length && <li className="text-[12.5px] text-muted-foreground">y {sel.blockerCount + sel.warningCount - sel.findings.length} más</li>}
                       </ul>
-                    </>
-                  )}
-                </Row>
+                    )}
+                    {(sel.findings.length > 0 || sel.unverified > 0) && (
+                      <Link href={`/contracts/${sel.id}?etapa=checks`} className="mt-2 inline-block text-[13px] font-semibold text-link hover:underline">Ver hallazgos en el caso</Link>
+                    )}
+                  </Row>
+                ) : (
+                  <>
+                    <Row title="Decisión">
+                      <span className="inline-flex items-center gap-2.5 text-base font-semibold tracking-[-0.01em]">
+                        <span aria-hidden className={cn("size-[9px] rounded-full", group === "approved" ? "bg-tone-ok" : "bg-tone-err")} />
+                        {group === "rejected" ? "Rechazado" : sel.decision?.override ? "Aprobado con excepción" : "Aprobado"}
+                      </span>
+                      <span className="block text-[12.5px] text-muted-foreground">{[sel.decision?.by, when(sel.decision?.at ?? sel.updatedAt)].filter(Boolean).join(" · ")}</span>
+                    </Row>
+                    <Row title={group === "rejected" ? "Motivo" : sel.decision?.override ? "Justificación" : "Comentario"}>
+                      {sel.decision?.reason ? <q>{sel.decision.reason}</q> : <span className="text-muted-foreground">Sin comentario.</span>}
+                    </Row>
+                    {sel.decision?.override && (
+                      <Row title="Excepción">Aprobado pese a {sel.blockerCount || "los"} bloqueo{sel.blockerCount === 1 ? "" : "s"}{sel.decision.acknowledged ? ` · ${sel.decision.acknowledged} validaci${sel.decision.acknowledged === 1 ? "ón revisada" : "ones revisadas"}` : ""}</Row>
+                    )}
+                    {sel.decision?.supportName && (
+                      <Row title="Soporte"><a href={`/api/v1/contracts/cases/${sel.id}/support`} className="text-link hover:underline">{sel.decision.supportName}</a></Row>
+                    )}
+                    <Row title={group === "rejected" ? "Se rechazó con" : "Se aprobó con"}
+                      end={sel.findings.length > 0 ? <Link href={`/contracts/${sel.id}?etapa=checks`} className="text-[13px] font-semibold text-link hover:underline">Ver hallazgos</Link> : undefined}>
+                      {sel.findings.length === 0 ? (
+                        sel.unverified
+                          ? <span className="text-muted-foreground">Sin hallazgos; {sel.unverified} control{sel.unverified === 1 ? " no se pudo" : "es no se pudieron"} verificar.</span>
+                          : <span className="text-muted-foreground">Sin observaciones.</span>
+                      ) : (
+                        <>
+                          {findingsPill(sel)}
+                          <ul className="mt-1.5 flex flex-col gap-1">
+                            {sel.findings.slice(0, 3).map((f, i) => <li key={i}>{f.title}</li>)}
+                            {sel.blockerCount + sel.warningCount > 3 && <li className="text-[12.5px] text-muted-foreground">y {sel.blockerCount + sel.warningCount - 3} más</li>}
+                          </ul>
+                        </>
+                      )}
+                    </Row>
+                  </>
+                )}
+
                 {sel.calculations.length > 0 && (
                   <Row title="Cálculos">
                     <ul className="flex flex-col gap-[5px]">
@@ -177,8 +206,21 @@ export function ApprovalsClient({ cases, allowOverride }: { cases: ApprovalCase[
                     </ul>
                   </Row>
                 )}
+
+                {group === "pending" && (
+                  <Row title="Tu decisión" last>
+                    <DecisionForm key={sel.id} caseId={sel.id} caseTitle={sel.title} blocked={sel.blockerCount > 0} allowOverride={allowOverride}
+                      openFindings={sel.blockerCount + sel.warningCount} requestsEnabled={requestsEnabled} onDecided={() => router.refresh()} />
+                  </Row>
+                )}
               </div>
-              {sel.hasOutput && (
+
+              {group === "pending" ? (
+                <div className="flex min-w-0 flex-[1_1_300px] flex-col gap-3 lg:max-w-[360px]">
+                  <span className="text-[11.5px] font-semibold uppercase tracking-[0.05em] text-foreground/75">{sel.documents.length > 1 ? `Documentos del caso · ${sel.documents.length}` : "Documento del caso"}</span>
+                  <SourcePreview key={sel.id} documents={sel.documents} fullHref={`/contracts/${sel.id}?etapa=docs`} />
+                </div>
+              ) : sel.hasOutput && (
                 <div className="flex min-w-0 flex-[1_1_300px] flex-col gap-3 lg:max-w-[360px]">
                   <span className="text-[11.5px] font-semibold uppercase tracking-[0.05em] text-foreground/75">Documento generado</span>
                   <OutputPreview caseId={sel.id} fullHref={`/contracts/${sel.id}?etapa=doc`} stamp={sel.updatedAt} />
@@ -187,53 +229,9 @@ export function ApprovalsClient({ cases, allowOverride }: { cases: ApprovalCase[
               )}
             </section>
           )}
-
-          {sel && group === "pending" && (
-            <section aria-labelledby="ap-title" className="flex flex-col gap-4.5 py-6 lg:pl-7">
-              <div className="flex flex-wrap items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <h2 id="ap-title" className="mt-1 text-xl font-semibold tracking-[-0.02em]">{sel.title}</h2>
-                  <p className="mt-1 text-[13px] text-muted-foreground">{[sel.createdBy && `Subido por ${sel.createdBy}`, when(sel.createdAt), sel.flowName].filter(Boolean).join(" · ")}</p>
-                </div>
-                <Link href={`/contracts/${sel.id}`} className="text-[13.5px] font-semibold text-link hover:underline">Abrir el caso completo →</Link>
-              </div>
-
-                <>
-                  <div>
-                    <p className="mb-1.5 text-xs font-semibold uppercase tracking-[0.05em] text-foreground/75">Hallazgos</p>
-                    {sel.findings.length === 0 ? (
-                      sel.unverified
-                        ? <p className="text-[13.5px] text-muted-foreground">Sin hallazgos, pero {sel.unverified} control{sel.unverified === 1 ? " no se pudo" : "es no se pudieron"} verificar. Revísalo en el caso.</p>
-                        : <p className="text-[13.5px] text-tone-ok">Todos los controles pasaron.</p>
-                    ) : (
-                      <ul>
-                        {sel.findings.map((f, i) => (
-                          <li key={i} className="flex items-start gap-3 border-b border-line-soft py-2.5 text-[13.5px] last:border-0">
-                            <StatusPill tone={f.severity === "block" ? "err" : "warn"}>{f.severity === "block" ? "Bloqueo" : "A revisar"}</StatusPill>
-                            <span className="min-w-0"><b className="block font-semibold">{f.title}</b>{f.detail !== f.title && <span className="text-muted-foreground">{f.detail}</span>}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                    {sel.blockerCount + sel.warningCount > sel.findings.length && <p className="mt-1 text-xs text-muted-foreground">y {sel.blockerCount + sel.warningCount - sel.findings.length} más en el caso</p>}
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2 border-t border-line-soft pt-4">
-                    {(!sel.blockerCount || allowOverride) && (
-                      <button type="button" className={btn("primary")} onClick={() => setDialog({ item: sel, action: "approve" })}>{sel.blockerCount ? "Aprobar con excepción" : "Aprobar"}</button>
-                    )}
-                    <button type="button" className={btn("danger")} onClick={() => setDialog({ item: sel, action: "reject" })}>Rechazar</button>
-                    {sel.blockerCount > 0 && !allowOverride && <span className="text-[12.5px] text-muted-foreground">Con bloqueos no se puede aprobar: corrige los datos o recházalo.</span>}
-                  </div>
-                </>
-            </section>
-          )}
         </div>
       )}
 
-      {dialog && (
-        <DecisionDialog caseId={dialog.item.id} caseTitle={dialog.item.title} action={dialog.action} blocked={dialog.item.blockerCount > 0}
-          allowOverride={allowOverride} onClose={() => setDialog(null)} onComplete={() => { setDialog(null); router.refresh(); }} />
-      )}
     </PageFrame>
   );
 }

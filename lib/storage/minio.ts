@@ -75,8 +75,9 @@ export async function getFileBuffer(key: string, maxBytes = 60 * 1024 * 1024): P
 
 // Raw object stream — lets callers pipe straight to an HTTP response instead of
 // buffering the whole file (e.g. a 20 MB PDF) into memory.
-export async function getFileStream(key: string): Promise<Readable> {
-  const result = await getClient().send(new GetObjectCommand({ Bucket: BUCKET, Key: key }));
+/** The file, or only the bytes from `range.start` to `range.end` (both included). */
+export async function getFileStream(key: string, range?: { start: number; end: number }): Promise<Readable> {
+  const result = await getClient().send(new GetObjectCommand({ Bucket: BUCKET, Key: key, ...(range ? { Range: `bytes=${range.start}-${range.end}` } : {}) }));
   if (!(result.Body instanceof Readable)) throw new Error("Respuesta de almacenamiento inválida");
   return result.Body;
 }

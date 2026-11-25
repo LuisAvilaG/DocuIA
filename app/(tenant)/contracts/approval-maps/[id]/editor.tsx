@@ -20,6 +20,7 @@ import {
   type Branch, type MapGraph, type MapIssue, type MapNode, type QuestionSubject, type Who,
 } from "@/lib/approval-map/engine";
 import type { ApprovalEditorContext } from "@/lib/approval-map/admin";
+import { FlowChip, FlowPicker } from "../flow-picker";
 
 type NodeType = MapNode["type"];
 type AnyData = Record<string, unknown>;
@@ -475,7 +476,7 @@ function Editor({ mapId }: { mapId: string }) {
           {testing ? (
             <TestPanel mapId={mapId} ctx={ctx} graph={currentGraph()} docName={docName} fieldName={fieldName} onResult={setTest} result={test} />
           ) : selected ? (
-            <NodePanel key={selected.id} node={selected} ctx={ctx} edges={edges} nodes={nodes} flowNames={flowNames} whoText={whoText}
+            <NodePanel key={selected.id} mapId={mapId} node={selected} ctx={ctx} edges={edges} nodes={nodes} flowNames={flowNames} whoText={whoText}
               fieldName={fieldName}
               patch={(p) => patchNode(selected.id, p)} remove={() => removeNode(selected.id)} close={() => setSelectedId(null)} />
           ) : selectedEdge ? (
@@ -485,7 +486,7 @@ function Editor({ mapId }: { mapId: string }) {
               <button type="button" className={btn("danger", "sm", "self-start")} onClick={() => { setEdges((es) => es.filter((e) => e.id !== selectedEdge)); setSelectedEdge(null); }}><Trash2 />Quitar línea</button>
             </div>
           ) : (
-            <MapPanel mapId={mapId} ctx={ctx} issues={issues} errors={errors} settings={settings} setSettings={setSettings}
+            <MapPanel mapId={mapId} mapName={name} ctx={ctx} issues={issues} errors={errors} settings={settings} setSettings={setSettings}
               onPick={(id) => { setSelectedId(id); setSelectedEdge(null); }}
               onFlowsChanged={(flows) => setCtx({ ...ctx, flows })}
               onDeleted={() => { setSaved(snapshot); router.push("/contracts/approval-maps"); }} />
@@ -497,25 +498,41 @@ function Editor({ mapId }: { mapId: string }) {
 }
 
 // ── Panel: el mapa (nada elegido) ─────────────────────────────────────
-function MapPanel({ mapId, ctx, issues, errors, settings, setSettings, onPick, onFlowsChanged, onDeleted }: {
-  mapId: string; ctx: ApprovalEditorContext; issues: MapIssue[]; errors: number;
+const FIRST_FLOWS = 5;
+
+function MapPanel({ mapId, mapName, ctx, issues, errors, settings, setSettings, onPick, onFlowsChanged, onDeleted }: {
+  mapId: string; mapName: string; ctx: ApprovalEditorContext; issues: MapIssue[]; errors: number;
   settings: MapGraph["settings"]; setSettings: (s: MapGraph["settings"]) => void;
   onPick: (nodeId: string) => void; onFlowsChanged: (flows: ApprovalEditorContext["flows"]) => void; onDeleted: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const mine = ctx.flows.filter((f) => f.approvalMapId === mapId).map((f) => f.id);
+  const [showAll, setShowAll] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [picked, setPicked] = useState<string[]>([]);
+  const mine = ctx.flows.filter((f) => f.approvalMapId === mapId).sort((a, b) => a.name.localeCompare(b.name, "es"));
+  // Para agregar: solo flujos activos que todavía no lo usan.
+  const offered = ctx.flows.filter((f) => f.isActive && f.approvalMapId !== mapId);
+  const free = new Set(offered.filter((f) => !f.approvalMapId).map((f) => f.id));
+  const closeAdding = useCallback(() => { setAdding(false); setPicked([]); }, []);
 
-  async function toggleFlow(id: string, on: boolean) {
-    const next = on ? [...mine, id] : mine.filter((x) => x !== id);
+  async function setFlows(next: string[]): Promise<boolean> {
     setBusy(true); setError(null);
     try {
       const res = await fetch(`/api/v1/contracts/approval-maps/${mapId}/flows`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ flowIds: next }) });
       const d = await res.json().catch(() => ({}));
-      if (!res.ok) { setError(d.error ?? "No se pudo cambiar."); return; }
-      onFlowsChanged(ctx.flows.map((f) => f.id === id ? { ...f, approvalMapId: on ? mapId : null } : f));
-    } catch { setError("Sin conexión"); }
+      if (!res.ok) { setError(d.error ?? "No se pudo cambiar."); return false; }
+      const on = new Set(next);
+      onFlowsChanged(ctx.flows.map((f) => on.has(f.id) ? { ...f, approvalMapId: mapId, approvalMapName: mapName }
+        : f.approvalMapId === mapId ? { ...f, approvalMapId: null, approvalMapName: null } : f));
+      return true;
+    } catch { setError("Sin conexión"); return false; }
     finally { setBusy(false); }
+  }
+
+  async function addPicked() {
+    if (!picked.length) return;
+    if (await setFlows([...mine.map((f) => f.id), ...picked])) closeAdding();
   }
 
   async function remove() {
@@ -556,20 +573,43 @@ function MapPanel({ mapId, ctx, issues, errors, settings, setSettings, onPick, o
       </section>
 
       <section>
-        <span className={sectionTitle}>Lo usan</span>
-        <div className="flex flex-col gap-2">
-          {ctx.flows.length === 0 && <p className={hlp}>Todavía no hay flujos.</p>}
-          {ctx.flows.map((f) => {
-            const other = f.approvalMapId && f.approvalMapId !== mapId;
-            return (
-              <label key={f.id} className="flex items-start gap-2.5 text-[13.5px]">
-                <input type="checkbox" className="mt-0.5 size-4 accent-[var(--color-primary)]" checked={f.approvalMapId === mapId} disabled={busy} onChange={(e) => void toggleFlow(f.id, e.target.checked)} />
-                <span>{f.name}{other && <span className="block text-xs text-muted-foreground">Usa otro mapa: marcarlo lo pasa a este.</span>}{!f.isActive && <span className="block text-xs text-muted-foreground">Flujo desactivado.</span>}</span>
-              </label>
-            );
-          })}
+        <span className={sectionTitle}>Lo usan{mine.length > 0 && ` · ${mine.length} flujo${mine.length === 1 ? "" : "s"}`}</span>
+        <div className="rounded-[10px] border border-border bg-white">
+          {mine.length === 0 ? (
+            <p className="px-3 py-3 text-[13px] text-muted-foreground">Todavía no lo usa ningún flujo.</p>
+          ) : (
+            <ul aria-label="Flujos que usan este mapa">
+              {(showAll ? mine : mine.slice(0, FIRST_FLOWS)).map((f) => (
+                <li key={f.id} className="flex min-h-10 items-center gap-2 border-b border-[#F1EFEA] py-1 pl-3 pr-1.5 text-[13.5px]">
+                  <span className="min-w-0 flex-1 truncate" title={f.name}>{f.name}</span>
+                  {!f.isActive && <StatusPill tone="mute">desactivado</StatusPill>}
+                  <button type="button" disabled={busy} onClick={() => void setFlows(mine.filter((x) => x.id !== f.id).map((x) => x.id))}
+                    aria-label={`Quitar ${f.name}`} className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-tone-err disabled:opacity-50"><X className="size-4" /></button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="flex items-center justify-between gap-2 rounded-b-[10px] bg-card px-3 py-2">
+            {mine.length > FIRST_FLOWS
+              ? <button type="button" onClick={() => setShowAll(!showAll)} className="text-[13px] font-semibold text-link hover:underline">{showAll ? "Ver menos" : `Ver los ${mine.length}`}</button>
+              : <span />}
+            <button type="button" aria-expanded={adding} disabled={busy} onClick={() => adding ? closeAdding() : setAdding(true)} className={btn("secondary", "sm")}><Plus />Agregar flujos</button>
+          </div>
         </div>
-        <p className={cn(hlp, "mt-2")}>Los casos de estos flujos se aprueban con la última versión publicada del mapa. Sin publicar, siguen como antes.</p>
+        {adding && (
+          <FlowPicker autoFocus className="mt-2" onClose={closeAdding}
+            flows={offered.map((f) => ({ id: f.id, name: f.name, note: f.approvalMapId ? `usa «${f.approvalMapName ?? "otro mapa"}»` : null }))}
+            selected={picked} onChange={setPicked}
+            scopes={[{ key: "free", label: `Sin mapa · ${free.size}`, ids: free }, { key: "all", label: `Todos · ${offered.length}`, ids: null }]}
+            emptyText="Todos los flujos activos ya usan este mapa."
+            actions={<>
+              <button type="button" onClick={closeAdding} className={btn("secondary", "sm")}>Cancelar</button>
+              <button type="button" onClick={() => void addPicked()} disabled={busy || picked.length === 0} className={btn("primary", "sm")}>
+                {busy && <Loader2 className="animate-spin" />}{picked.length ? `Agregar ${picked.length}` : "Agregar"}
+              </button>
+            </>} />
+        )}
+        <p className={cn(hlp, "mt-2")}>Los casos de estos flujos se aprueban con la última versión publicada del mapa. Sin publicar, siguen como antes.{mine.some((f) => !f.isActive) && " Un flujo desactivado se queda en la lista para poder quitarlo, pero no se ofrece para agregar."}</p>
       </section>
 
       <section>
@@ -594,8 +634,8 @@ function MapPanel({ mapId, ctx, issues, errors, settings, setSettings, onPick, o
 }
 
 // ── Panel: una pieza elegida ──────────────────────────────────────────
-function NodePanel({ node, ctx, nodes, edges, flowNames, whoText, fieldName, patch, remove, close }: {
-  node: FlowNode; ctx: ApprovalEditorContext; nodes: FlowNode[]; edges: Edge[]; flowNames: Map<string, string>;
+function NodePanel({ mapId, node, ctx, nodes, edges, flowNames, whoText, fieldName, patch, remove, close }: {
+  mapId: string; node: FlowNode; ctx: ApprovalEditorContext; nodes: FlowNode[]; edges: Edge[]; flowNames: Map<string, string>;
   whoText: (who: Who | null) => { label: string; sub?: string };
   fieldName: (doc: string, field: string) => string;
   patch: (p: AnyData) => void; remove: () => void; close: () => void;
@@ -624,7 +664,7 @@ function NodePanel({ node, ctx, nodes, edges, flowNames, whoText, fieldName, pat
       <div className="flex flex-col gap-5 p-5">
         {node.type === "start" && <p className="text-[13.5px] text-muted-foreground">Todo caso de los flujos que usan este mapa entra por aquí cuando termina su análisis. Une su punto de abajo con la primera pregunta o firma.</p>}
         {node.type === "end" && <p className="text-[13.5px] text-muted-foreground">El caso queda aprobado al llegar aquí con todas las firmas del camino. Puede haber varios «Aprobado».</p>}
-        {node.type === "question" && <QuestionForm data={data as unknown as QuestionData} patch={patch} ctx={ctx} flowNames={flowNames} fieldName={fieldName} targetLabel={targetLabel} />}
+        {node.type === "question" && <QuestionForm mapId={mapId} data={data as unknown as QuestionData} patch={patch} ctx={ctx} flowNames={flowNames} fieldName={fieldName} targetLabel={targetLabel} />}
         {(node.type === "sign" || node.type === "notify") && <WhoForm kind={node.type} data={data} patch={patch} ctx={ctx} next={targetLabel()} />}
         {node.type !== "start" && (
           <div className="border-t border-line-soft pt-4">
@@ -636,8 +676,8 @@ function NodePanel({ node, ctx, nodes, edges, flowNames, whoText, fieldName, pat
   );
 }
 
-function QuestionForm({ data, patch, ctx, flowNames, fieldName, targetLabel }: {
-  data: QuestionData; patch: (p: AnyData) => void; ctx: ApprovalEditorContext; flowNames: Map<string, string>;
+function QuestionForm({ mapId, data, patch, ctx, flowNames, fieldName, targetLabel }: {
+  mapId: string; data: QuestionData; patch: (p: AnyData) => void; ctx: ApprovalEditorContext; flowNames: Map<string, string>;
   fieldName: (doc: string, field: string) => string; targetLabel: (handle?: string) => string | null;
 }) {
   const choice = subjectChoice(data.subject);
@@ -646,6 +686,12 @@ function QuestionForm({ data, patch, ctx, flowNames, fieldName, targetLabel }: {
   const field = data.subject.kind === "field" ? data.subject : null;
   const doc = field ? ctx.docTypes.find((d) => d.key === field.docType) : undefined;
   const hasOtherwise = data.branches.some((b) => b.otherwise);
+  // «En otro caso» de una pregunta por flujo: los del mapa que no están en otro camino.
+  const named = new Set(data.branches.flatMap((b) => b.flowIds ?? []));
+  const others = ctx.flows.filter((f) => f.approvalMapId === mapId && !named.has(f.id)).length;
+  const otherFlowsText = ctx.flows.some((f) => f.approvalMapId === mapId)
+    ? others === 0 ? "Ningún otro flujo de este mapa: todos están en un camino." : `Los otros ${others === 1 ? "flujo" : `${others} flujos`} que usan este mapa.`
+    : "Los flujos que no están en otro camino.";
 
   const choose = (next: SubjectChoice) => {
     if (next === choice) return;
@@ -699,15 +745,7 @@ function QuestionForm({ data, patch, ctx, flowNames, fieldName, targetLabel }: {
                   <b className="text-[13px] font-semibold">{b.otherwise ? "En otro caso" : `Camino ${i + 1}`}</b>
                   {data.branches.length > 2 && <button type="button" aria-label={`Quitar el camino ${i + 1}`} onClick={() => setBranches(data.branches.filter((x) => x.id !== b.id))} className="text-muted-foreground hover:text-tone-err"><Trash2 className="size-4" /></button>}
                 </div>
-                {!b.otherwise && choice === "flow" && (
-                  <div className="flex flex-wrap gap-1.5">
-                    {ctx.flows.map((f) => {
-                      const on = (b.flowIds ?? []).includes(f.id);
-                      return <button key={f.id} type="button" aria-pressed={on} onClick={() => setBranch(b.id, { flowIds: on ? (b.flowIds ?? []).filter((x) => x !== f.id) : [...(b.flowIds ?? []), f.id] })}
-                        className={cn("rounded-full border px-2.5 py-1 text-xs", on ? "border-primary bg-tone-info-bg font-semibold text-tone-info" : "border-[#D6D2C8] bg-white text-foreground/75")}>{f.name}</button>;
-                    })}
-                  </div>
-                )}
+                {!b.otherwise && choice === "flow" && <BranchFlows branch={b} branches={data.branches} ctx={ctx} mapId={mapId} onChange={setBranches} />}
                 {!b.otherwise && choice === "number" && (
                   <div className="grid grid-cols-[120px_minmax(0,1fr)] gap-2">
                     <select aria-label="Comparación" className={inp} value={b.op ?? "lte"} onChange={(e) => setBranch(b.id, { op: e.target.value as Branch["op"] })}>
@@ -730,7 +768,7 @@ function QuestionForm({ data, patch, ctx, flowNames, fieldName, targetLabel }: {
                     <option value="">Elegir…</option><option value="block">Algo grave (un bloqueo)</option><option value="warn">Solo advertencias</option><option value="ok">Nada</option>
                   </select>
                 )}
-                {b.otherwise && <p className={hlp}>{choice === "flow" ? "Los flujos que no están en otro camino." : "Todo lo que no entra en los demás caminos."}</p>}
+                {b.otherwise && <p className={hlp}>{choice === "flow" ? otherFlowsText : "Todo lo que no entra en los demás caminos."}</p>}
                 <p className={cn("mt-2 text-[12.5px]", next ? "text-muted-foreground" : "text-tone-warn")}>{next ? <>Sigue a <b className="font-semibold text-foreground">{next}</b></> : "Sin unir: arrastra desde su punto en el lienzo."}</p>
               </div>
             );
@@ -764,6 +802,47 @@ function QuestionForm({ data, patch, ctx, flowNames, fieldName, targetLabel }: {
       )}
       {!field && choice === "flow" && flowNames.size === 0 && <p className={hlp}>Todavía no hay flujos para elegir.</p>}
     </>
+  );
+}
+
+/** Los flujos de un camino: fichas con × y «+ Flujo» con el buscador. */
+function BranchFlows({ branch, branches, ctx, mapId, onChange }: {
+  branch: Branch; branches: Branch[]; ctx: ApprovalEditorContext; mapId: string; onChange: (branches: Branch[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const close = useCallback(() => setOpen(false), []);
+  const ids = branch.flowIds ?? [];
+  const byId = new Map(ctx.flows.map((f) => [f.id, f]));
+  const inOther = new Map<string, number>();
+  branches.forEach((b, i) => { if (b.id !== branch.id) for (const id of b.flowIds ?? []) inOther.set(id, i + 1); });
+  const offered = ctx.flows.filter((f) => f.isActive);
+  const ofMap = new Set(offered.filter((f) => f.approvalMapId === mapId).map((f) => f.id));
+
+  // Un flujo va en un solo camino: marcarlo aquí lo saca del otro.
+  const setIds = (next: string[]) => {
+    const added = next.filter((id) => !ids.includes(id));
+    onChange(branches.map((b) => b.id === branch.id ? { ...b, flowIds: next }
+      : added.length && b.flowIds ? { ...b, flowIds: b.flowIds.filter((id) => !added.includes(id)) } : b));
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {/* Abierto, lo marcado se ve en la lista: las fichas no empujan las filas al marcar. */}
+      {!open && ids.map((id) => {
+        const f = byId.get(id);
+        return <FlowChip key={id} name={f?.name ?? "Flujo borrado"} tag={f && !f.isActive ? "desactivado" : null} onRemove={() => setIds(ids.filter((x) => x !== id))} />;
+      })}
+      <button type="button" aria-expanded={open} onClick={() => setOpen(!open)}
+        className={cn("inline-flex items-center gap-1 rounded-full border bg-white px-2.5 py-0.5 text-[12.5px] font-semibold text-link", open ? "border-primary ring-3 ring-primary/15" : "border-dashed border-[#9FCFC8] hover:border-primary")}>
+        <Plus className="size-3.5" />Flujo</button>
+      {ids.length === 0 && !open && <span className="text-[12.5px] text-tone-warn">Elige al menos un flujo.</span>}
+      {open && <FlowPicker autoFocus className="mt-1 basis-full" onClose={close}
+        flows={offered.map((f) => ({ id: f.id, name: f.name, note: inOther.has(f.id) ? `en el camino ${inOther.get(f.id)}` : null }))}
+        selected={ids} onChange={setIds}
+        scopes={[{ key: "map", label: `De este mapa · ${ofMap.size}`, ids: ofMap }, { key: "all", label: `Todos · ${offered.length}`, ids: null }]}
+        emptyText="Todavía no hay flujos activos."
+        actions={<button type="button" onClick={close} className={btn("primary", "sm")}>Listo</button>} />}
+    </div>
   );
 }
 
@@ -839,7 +918,12 @@ function TestPanel({ mapId, ctx, graph, docName, fieldName, onResult, result }: 
     return [...seen.values()];
   }, [graph, docName, fieldName]);
   const usesFlow = graph.nodes.some((n) => n.type === "question" && n.data.subject.kind === "flow");
-  const [flowId, setFlowId] = useState(ctx.flows[0]?.id ?? "");
+  const testFlows = useMemo(() => {
+    const active = ctx.flows.filter((f) => f.isActive);
+    const mine = active.filter((f) => f.approvalMapId === mapId);
+    return (mine.length ? mine : active).sort((a, b) => a.name.localeCompare(b.name, "es"));
+  }, [ctx.flows, mapId]);
+  const [flowId, setFlowId] = useState(testFlows[0]?.id ?? "");
   const [values, setValues] = useState<Record<string, string>>({});
   const [verdict, setVerdict] = useState<"ok" | "warn" | "block">("ok");
   const [creatorId, setCreatorId] = useState("");
@@ -870,7 +954,7 @@ function TestPanel({ mapId, ctx, graph, docName, fieldName, onResult, result }: 
       <div className="grid grid-cols-2 gap-x-3 gap-y-2.5">
         {usesFlow && (
           <label className="col-span-2 flex flex-col gap-1"><span className={lbl}>Flujo del caso</span>
-            <select className={inp} value={flowId} onChange={(e) => setFlowId(e.target.value)}>{ctx.flows.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}</select>
+            <select className={inp} value={flowId} onChange={(e) => setFlowId(e.target.value)}>{testFlows.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}</select>
           </label>
         )}
         {fields.map((f) => (

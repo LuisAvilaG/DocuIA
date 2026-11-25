@@ -3,7 +3,7 @@
 import { NextResponse } from "next/server";
 import { and, eq, gte } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { approvalAbsences, approvalRoleMembers, approvalRoles, contractFlows, orgUsers } from "@/db/schema";
+import { approvalAbsences, approvalMaps, approvalRoleMembers, approvalRoles, contractFlows, orgUsers } from "@/db/schema";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { canApprove } from "@/lib/auth/permissions";
 import { isProductActive } from "@/lib/products";
@@ -29,7 +29,7 @@ export async function approvalMapAdmin(write: boolean): Promise<{ session: Sessi
 
 export interface EditorPerson { id: string; name: string; role: string }
 export interface EditorRole { id: string; name: string; memberIds: string[]; substituteId: string | null }
-export interface EditorFlow { id: string; name: string; approvalMapId: string | null; isActive: boolean }
+export interface EditorFlow { id: string; name: string; approvalMapId: string | null; /** Nombre del mapa que usa hoy. */ approvalMapName: string | null; isActive: boolean }
 export interface EditorDocType { key: string; name: string; fields: Array<{ key: string; label: string }> }
 export interface EditorAbsence { id: string; userId: string; startsOn: string; endsOn: string }
 
@@ -45,13 +45,15 @@ export interface ApprovalEditorContext {
 /** Todo lo que se elige en el mapa y en Roles y personas. */
 export async function approvalEditorContext(organizationId: string): Promise<ApprovalEditorContext> {
   const today = dayIn(await orgTimeZone(organizationId));
-  const [users, roles, members, flows, absences] = await Promise.all([
+  const [users, roles, members, flows, absences, maps] = await Promise.all([
     db.query.orgUsers.findMany({ where: and(eq(orgUsers.organizationId, organizationId), eq(orgUsers.isActive, true)), columns: { id: true, fullName: true, email: true, role: true } }),
     db.query.approvalRoles.findMany({ where: eq(approvalRoles.organizationId, organizationId), columns: { id: true, name: true, substituteUserId: true }, orderBy: (r, { asc }) => [asc(r.name)] }),
     db.query.approvalRoleMembers.findMany({ where: eq(approvalRoleMembers.organizationId, organizationId), columns: { roleId: true, userId: true } }),
     db.query.contractFlows.findMany({ where: eq(contractFlows.organizationId, organizationId), columns: { id: true, name: true, approvalMapId: true, isActive: true, graphJson: true }, orderBy: (f, { asc }) => [asc(f.name)] }),
     db.query.approvalAbsences.findMany({ where: and(eq(approvalAbsences.organizationId, organizationId), gte(approvalAbsences.endsOn, today)), columns: { id: true, userId: true, startsOn: true, endsOn: true }, orderBy: (a, { asc }) => [asc(a.startsOn)] }),
+    db.query.approvalMaps.findMany({ where: eq(approvalMaps.organizationId, organizationId), columns: { id: true, name: true } }),
   ]);
+  const mapNames = new Map(maps.map((m) => [m.id, m.name]));
   const docTypes = new Map<string, EditorDocType>();
   for (const flow of flows) {
     const graph = flowGraphSchema.safeParse(flow.graphJson);
@@ -73,7 +75,7 @@ export async function approvalEditorContext(organizationId: string): Promise<App
     people: users.filter((u) => canApprove(u.role, "contracts")).map((u) => ({ id: u.id, name: u.fullName || u.email, role: u.role }))
       .sort((a, b) => a.name.localeCompare(b.name, "es")),
     roles: roles.map((r) => ({ id: r.id, name: r.name, substituteId: r.substituteUserId, memberIds: members.filter((m) => m.roleId === r.id).map((m) => m.userId) })),
-    flows: flows.map((f) => ({ id: f.id, name: f.name, approvalMapId: f.approvalMapId, isActive: f.isActive })),
+    flows: flows.map((f) => ({ id: f.id, name: f.name, approvalMapId: f.approvalMapId, approvalMapName: f.approvalMapId ? mapNames.get(f.approvalMapId) ?? null : null, isActive: f.isActive })),
     docTypes: [...docTypes.values()].sort((a, b) => a.name.localeCompare(b.name, "es")),
     absences,
     today,

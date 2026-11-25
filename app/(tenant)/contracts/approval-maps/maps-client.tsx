@@ -2,10 +2,11 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, Plus } from "lucide-react";
+import { Loader2, Plus, Search } from "lucide-react";
 import { ActionLink, Drawer, EmptyState, Notice, PageFrame, PageHeader, SectionTitle, StatusPill, btn } from "@/components/kit";
 import { cn } from "@/lib/utils";
 import { ApprovalMapTabs } from "./tabs";
+import { FlowChip, FlowPicker, type PickerScope } from "./flow-picker";
 
 type NodeType = "start" | "question" | "sign" | "notify" | "end";
 
@@ -24,7 +25,7 @@ export interface MapRow {
   drawing: { nodes: { id: string; type: NodeType; x: number; y: number }[]; edges: { source: string; target: string }[] };
 }
 
-export interface FlowOption { id: string; name: string; isActive: boolean; mapId: string | null; mapName: string | null }
+export interface FlowOption { id: string; name: string; isActive: boolean; mapId: string | null; mapName: string | null; /** Casos de los últimos 30 días. */ recentCases: number }
 
 type Start = "single" | "flow" | "field" | "blank";
 
@@ -86,21 +87,11 @@ function MapDrawing({ drawing }: { drawing: MapRow["drawing"] }) {
 
 // ── Pantalla ──────────────────────────────────────────────────────────
 export function MapsClient({ maps, flows }: { maps: MapRow[]; flows: FlowOption[] }) {
-  const router = useRouter();
   const [creating, setCreating] = useState(false);
-  const [assigning, setAssigning] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const unassigned = flows.filter((f) => !f.mapId);
-
-  async function assign(flowId: string, mapId: string) {
-    const map = maps.find((m) => m.id === mapId);
-    if (!map) return;
-    setAssigning(flowId); setError(null);
-    const result = await send(`/api/v1/contracts/approval-maps/${mapId}/flows`, "PUT", { flowIds: [...new Set([...map.flowIds, flowId])] }, "No se pudo asignar el mapa.");
-    setAssigning(null);
-    if (!result.ok) { setError(result.error); return; }
-    router.refresh();
-  }
+  // Los desactivados no se muestran: no reciben casos.
+  const unassigned = flows.filter((f) => f.isActive && !f.mapId)
+    .sort((a, b) => b.recentCases - a.recentCases || a.name.localeCompare(b.name, "es"));
+  const hiddenWithoutMap = flows.filter((f) => !f.isActive && !f.mapId).length;
 
   const newButton = (
     <button type="button" onClick={() => setCreating(true)} className={btn("primary")}><Plus /> Mapa nuevo</button>
@@ -129,7 +120,7 @@ export function MapsClient({ maps, flows }: { maps: MapRow[]; flows: FlowOption[
                   {m.unpublished && <StatusPill tone="warn">Cambios sin publicar</StatusPill>}
                 </div>
                 <p className="text-[13px] text-muted-foreground">
-                  {m.flowNames.length ? <>Lo usan: <span className="text-foreground">{m.flowNames.join(", ")}</span></> : "Todavía no lo usa ningún flujo."}
+                  {m.flowNames.length ? <>Lo usa{m.flowNames.length === 1 ? "" : "n"}: <span className="text-foreground">{m.flowNames.slice(0, 3).join(", ")}</span>{m.flowNames.length > 3 && ` y ${m.flowNames.length - 3} más`}</> : "Todavía no lo usa ningún flujo."}
                 </p>
                 {m.asks.length > 0 && (
                   <p className="flex flex-wrap items-center gap-1.5 text-[12.5px] text-muted-foreground">
@@ -149,36 +140,107 @@ export function MapsClient({ maps, flows }: { maps: MapRow[]; flows: FlowOption[
         </ul>
       )}
 
-      {unassigned.length > 0 && (
-        <section aria-labelledby="flows-without-map" className="mt-10">
-          <SectionTitle title={<span id="flows-without-map">Flujos sin mapa</span>} aside={`${unassigned.length} flujo${unassigned.length === 1 ? "" : "s"}`} />
-          <p className="mt-2.5 text-[13px] text-muted-foreground">Se siguen aprobando como hoy (la etapa Aprobación del flujo, o cualquier aprobador).</p>
-          {error && <p role="alert" className="mt-2 text-sm text-tone-err">{error}</p>}
-          <ul className="mt-2">
-            {unassigned.map((f) => (
-              <li key={f.id} className="flex flex-wrap items-center justify-between gap-3 border-b border-line-soft py-3">
-                <span className="min-w-0 text-[13.5px] font-medium">
-                  {f.name}{!f.isActive && <span className="font-normal text-muted-foreground"> · inactivo</span>}
-                </span>
-                {maps.length > 0 && (
-                  <span className="flex items-center gap-2">
-                    {assigning === f.id && <Loader2 aria-hidden className="size-4 animate-spin text-muted-foreground" />}
-                    <select aria-label={`Mapa para ${f.name}`} value="" disabled={assigning !== null}
-                      onChange={(e) => { if (e.target.value) void assign(f.id, e.target.value); }}
-                      className="min-h-[34px] rounded-lg border border-[#D6D2C8] bg-white px-2.5 text-[13px] focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/40 disabled:opacity-50">
-                      <option value="">Asignar un mapa…</option>
-                      {maps.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-                    </select>
-                  </span>
-                )}
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+      {unassigned.length > 0 && <FlowsWithoutMap flows={unassigned} hidden={hiddenWithoutMap} maps={maps} />}
 
       {creating && <NewMapDrawer flows={flows} onClose={() => setCreating(false)} />}
     </PageFrame>
+  );
+}
+
+// ── Flujos sin mapa ───────────────────────────────────────────────────
+const FIRST_ROWS = 8;
+
+function FlowsWithoutMap({ flows, hidden, maps }: { flows: FlowOption[]; hidden: number; maps: MapRow[] }) {
+  const router = useRouter();
+  const [query, setQuery] = useState("");
+  const [picked, setPicked] = useState<string[]>([]);
+  const [mapId, setMapId] = useState(maps[0]?.id ?? "");
+  const [showAll, setShowAll] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const needle = query.trim().toLocaleLowerCase("es");
+  const matching = needle ? flows.filter((f) => f.name.toLocaleLowerCase("es").includes(needle)) : flows;
+  const shown = showAll || needle ? matching : matching.slice(0, FIRST_ROWS);
+  const canAssign = maps.length > 0;
+  const toggle = (id: string) => setPicked((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
+
+  async function assign() {
+    const map = maps.find((m) => m.id === mapId);
+    if (!map || !picked.length) return;
+    setBusy(true); setError(null);
+    const result = await send(`/api/v1/contracts/approval-maps/${map.id}/flows`, "PUT", { flowIds: [...new Set([...map.flowIds, ...picked])] }, "No se pudo asignar el mapa.");
+    setBusy(false);
+    if (!result.ok) { setError(result.error); return; }
+    setPicked([]);
+    router.refresh();
+  }
+
+  return (
+    <section aria-labelledby="flows-without-map" className="mt-10">
+      <SectionTitle title={<span id="flows-without-map">Flujos sin mapa</span>} aside={`${flows.length} flujo${flows.length === 1 ? "" : "s"} activo${flows.length === 1 ? "" : "s"}`} />
+      <p className="mt-2.5 text-[13px] text-muted-foreground">
+        Se siguen aprobando como hoy (la etapa Aprobación del flujo, o cualquier aprobador).
+        {hidden > 0 && <> Los {hidden === 1 ? "flujos desactivados" : `${hidden} flujos desactivados`} no se muestran.</>}
+      </p>
+
+      {flows.length > FIRST_ROWS && (
+        <label className="mt-3.5 flex min-h-[38px] w-full max-w-[320px] items-center gap-2 rounded-lg border border-[#D6D2C8] bg-white px-2.5 focus-within:border-primary focus-within:ring-3 focus-within:ring-ring/40">
+          <Search aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+          <span className="sr-only">Buscar flujo</span>
+          <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar flujo" className="min-w-0 flex-1 bg-transparent text-[13.5px] outline-none" />
+        </label>
+      )}
+
+
+      <ul className="mt-3 border-t border-border">
+        {shown.map((f) => {
+          const cases = f.recentCases === 0 ? "Sin casos en 30 días" : `${f.recentCases} caso${f.recentCases === 1 ? "" : "s"} en 30 días`;
+          const row = (
+            <>
+              <span className="min-w-0 flex-1 text-[13.5px] font-medium">{f.name}</span>
+              <span className="shrink-0 text-[12.5px] text-muted-foreground">{cases}</span>
+            </>
+          );
+          return (
+            <li key={f.id} className={cn("border-b border-line-soft", picked.includes(f.id) && "bg-tone-info-bg/50")}>
+              {canAssign ? (
+                <label className="flex min-h-[42px] cursor-pointer items-center gap-3 px-1 py-1.5">
+                  <input type="checkbox" checked={picked.includes(f.id)} onChange={() => toggle(f.id)} aria-label={`Elegir ${f.name}`} className="size-4 shrink-0 accent-[var(--color-primary)]" />
+                  {row}
+                </label>
+              ) : <div className="flex min-h-[42px] items-center gap-3 px-1 py-1.5">{row}</div>}
+            </li>
+          );
+        })}
+        {needle && matching.length === 0 && <li className="py-3 text-[13px] text-muted-foreground">Ningún flujo sin mapa tiene «{query.trim()}».</li>}
+      </ul>
+
+      {!needle && matching.length > FIRST_ROWS && (
+        <div className="mt-2.5 flex items-center justify-between gap-3 text-[13px]">
+          <button type="button" onClick={() => setShowAll(!showAll)} className={btn("secondary", "sm")}>{showAll ? "Ver menos" : `Ver los ${matching.length}`}</button>
+          {!showAll && <span className="text-muted-foreground">Mostrando {FIRST_ROWS} de {matching.length}</span>}
+        </div>
+      )}
+      {!canAssign && <p className="mt-2.5 text-[13px] text-muted-foreground">Crea un mapa para asignárselo a estos flujos.</p>}
+      {/* Abajo y fijo: al aparecer no mueve las filas que se están marcando. */}
+      {canAssign && picked.length > 0 && (
+        <div role="region" aria-label="Asignar los elegidos" className="sticky bottom-4 z-10 mt-3 flex flex-wrap items-center gap-3 rounded-[10px] bg-[#0F2A4A] px-3.5 py-2.5 text-[13.5px] text-white shadow-[0_10px_28px_rgba(15,42,74,.25)]">
+          <b className="font-semibold">{picked.length} elegido{picked.length === 1 ? "" : "s"}</b>
+          <span className="text-white/80">Asignarles el mapa</span>
+          <select aria-label="Mapa" value={mapId} onChange={(e) => setMapId(e.target.value)} disabled={busy}
+            className="min-h-9 w-[260px] max-w-full rounded-lg border border-[#D6D2C8] bg-white px-2.5 text-[13px] text-foreground">
+            {maps.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+          </select>
+          <button type="button" onClick={() => void assign()} disabled={busy}
+            className="inline-flex min-h-9 items-center gap-2 rounded-lg bg-[#3DB8A8] px-3.5 text-[13px] font-semibold text-[#0F2A4A] hover:bg-[#52C4B5] disabled:opacity-60">
+            {busy && <Loader2 aria-hidden className="size-4 animate-spin" />}Asignar
+          </button>
+          <button type="button" onClick={() => setPicked([])} disabled={busy} className="px-1.5 text-[13px] font-semibold text-white/90 hover:text-white">Quitar selección</button>
+        </div>
+      )}
+      {error && <p role="alert" className="mt-2 text-sm text-tone-err">{error}</p>}
+    </section>
   );
 }
 
@@ -213,6 +275,15 @@ function NewMapDrawer({ flows, onClose }: { flows: FlowOption[]; onClose: () => 
   }
 
   const toggle = (id: string) => setFlowIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  // Los desactivados no se ofrecen.
+  const offered = flows.filter((f) => f.isActive);
+  const hidden = flows.length - offered.length;
+  const byId = new Map(flows.map((f) => [f.id, f]));
+  const free = new Set(offered.filter((f) => !f.mapId).map((f) => f.id));
+  const scopes: PickerScope[] = [
+    { key: "free", label: `Sin mapa · ${free.size}`, ids: free },
+    { key: "all", label: `Todos · ${offered.length}`, ids: null },
+  ];
 
   return (
     <Drawer title="Mapa nuevo" description="Elige cómo empezar; después lo ajustas en el editor." onClose={onClose} locked={busy} width={540}
@@ -237,24 +308,20 @@ function NewMapDrawer({ flows, onClose }: { flows: FlowOption[]; onClose: () => 
           ))}
         </fieldset>
 
-        <fieldset className="flex flex-col gap-1.5">
+        <fieldset className="flex min-w-0 flex-col">
           <legend className="mb-1.5 text-[13px] font-semibold">Para qué casos es este mapa</legend>
-          {flows.length === 0 ? (
-            <p className="text-[13px] text-muted-foreground">Todavía no hay flujos. Puedes asignarlo después.</p>
-          ) : (
-            <>
-              {flows.map((f) => (
-                <label key={f.id} className="flex cursor-pointer items-start gap-2.5 py-1 text-[13.5px]">
-                  <input type="checkbox" checked={flowIds.includes(f.id)} onChange={() => toggle(f.id)} className="mt-1" />
-                  <span>
-                    {f.name}{!f.isActive && <span className="text-muted-foreground"> · inactivo</span>}
-                    {f.mapName && <span className="block text-xs text-muted-foreground">Hoy usa «{f.mapName}»</span>}
-                  </span>
-                </label>
-              ))}
-              <p className="mt-1 text-xs text-muted-foreground">Un flujo usa un solo mapa: si ya tenía otro, pasa a este.</p>
-            </>
+          <FlowPicker flows={offered.map((f) => ({ id: f.id, name: f.name, note: f.mapName ? `usa «${f.mapName}»` : null }))}
+            selected={flowIds} onChange={setFlowIds} scopes={scopes}
+            emptyText="Todavía no hay flujos activos. Puedes asignarlo después." />
+          {flowIds.length > 0 && (
+            <div aria-label="Flujos elegidos" className="mt-2.5 flex flex-wrap gap-1.5">
+              {flowIds.map((id) => <FlowChip key={id} name={byId.get(id)?.name ?? "Flujo"} onRemove={() => toggle(id)} />)}
+            </div>
           )}
+          <p className="mt-2 text-xs text-muted-foreground">
+            {hidden > 0 && <>Solo se muestran flujos activos (hay {hidden} desactivado{hidden === 1 ? "" : "s"}). </>}
+            Un flujo usa un solo mapa: si marcas uno que ya tenía otro, pasa a este.
+          </p>
         </fieldset>
 
         {error && <Notice tone="err" title={error} />}

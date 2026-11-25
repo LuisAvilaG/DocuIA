@@ -1,10 +1,10 @@
 import { redirect } from "next/navigation";
-import { eq } from "drizzle-orm";
+import { and, count, eq, gte, isNotNull } from "drizzle-orm";
 import { getTenantSession } from "@/lib/auth/jwt";
 import { isProductActive } from "@/lib/products";
 import { isFeatureEnabled } from "@/lib/features";
 import { db } from "@/lib/db";
-import { approvalMaps } from "@/db/schema";
+import { approvalMaps, contractCases } from "@/db/schema";
 import { approvalEditorContext, mapContextFrom } from "@/lib/approval-map/admin";
 import { mapGraphSchema, questionLabel, validateMap, type MapNode } from "@/lib/approval-map/engine";
 import { MapsClient, type FlowOption, type MapRow } from "./maps-client";
@@ -32,14 +32,21 @@ export default async function ApprovalMapsPage() {
   if (!(await isFeatureEnabled(session.orgId, "contract_approval_rules"))) redirect("/contracts/dashboard");
   if (session.role !== "admin") redirect("/cases");
 
-  const [ctx, rows] = await Promise.all([
+  // eslint-disable-next-line react-hooks/purity
+  const since = new Date(Date.now() - 30 * 86_400_000);
+  const [ctx, rows, recent] = await Promise.all([
     approvalEditorContext(session.orgId),
     db.query.approvalMaps.findMany({
       where: eq(approvalMaps.organizationId, session.orgId),
       columns: { id: true, name: true, draftJson: true, publishedJson: true, version: true },
       orderBy: (m, { asc }) => [asc(m.name)],
     }),
+    // Casos de los últimos 30 días por flujo: los flujos sin mapa que más se usan van primero.
+    db.select({ flowId: contractCases.flowId, n: count() }).from(contractCases)
+      .where(and(eq(contractCases.organizationId, session.orgId), isNotNull(contractCases.flowId), gte(contractCases.createdAt, since)))
+      .groupBy(contractCases.flowId),
   ]);
+  const recentCases = new Map(recent.map((r) => [r.flowId, Number(r.n)]));
   const mapCtx = mapContextFrom(ctx);
   const fieldLabels = new Map(ctx.docTypes.flatMap((d) => d.fields.map((f) => [`${d.key}\u0000${f.key}`, f.label] as const)));
 
@@ -82,6 +89,7 @@ export default async function ApprovalMapsPage() {
     isActive: f.isActive,
     mapId: f.approvalMapId && mapNames.has(f.approvalMapId) ? f.approvalMapId : null,
     mapName: f.approvalMapId ? mapNames.get(f.approvalMapId) ?? null : null,
+    recentCases: recentCases.get(f.id) ?? 0,
   }));
 
   return <MapsClient maps={maps} flows={flows} />;

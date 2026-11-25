@@ -7,7 +7,7 @@ import { Document, Page, pdfjs } from "react-pdf";
 
 pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 
-export function OutputPreview({ caseId, fullHref }: { caseId: string; fullHref?: string }) {
+export function OutputPreview({ caseId, fullHref, stamp }: { caseId: string; fullHref?: string; /** When the case last changed: a regenerated document is never read from the browser's cache. */ stamp?: string | number }) {
   const frame = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(300);
   const [pages, setPages] = useState(0);
@@ -23,7 +23,7 @@ export function OutputPreview({ caseId, fullHref }: { caseId: string; fullHref?:
     <>
       <div className="rounded-[10px] bg-[#E9E6E0] p-4">
         <div ref={frame} className="min-h-[220px]">
-          <Document key={caseId} file={`/api/v1/contracts/cases/${caseId}/output?format=pdf`} onLoadSuccess={(pdf) => setPages(pdf.numPages)}
+          <Document key={caseId} file={`/api/v1/contracts/cases/${caseId}/output?format=pdf${stamp ? `&v=${encodeURIComponent(stamp)}` : ""}`} onLoadSuccess={(pdf) => setPages(pdf.numPages)}
             loading={<p className="py-10 text-center text-[13px] text-muted-foreground">Preparando la vista previa…</p>}
             error={<p className="py-10 text-center text-[13px] text-muted-foreground">No se pudo mostrar la vista previa. Descarga el documento para verlo.</p>}>
             <Page pageNumber={1} width={width} renderAnnotationLayer={false} renderTextLayer={false} className="shadow-[0_2px_16px_rgba(30,32,41,0.14)]" />

@@ -181,7 +181,7 @@ export function ApprovalsClient({ cases, allowOverride }: { cases: ApprovalCase[
               {sel.hasOutput && (
                 <div className="flex min-w-0 flex-[1_1_300px] flex-col gap-3 lg:max-w-[360px]">
                   <span className="text-[11.5px] font-semibold uppercase tracking-[0.05em] text-foreground/75">Documento generado</span>
-                  <OutputPreview caseId={sel.id} fullHref={`/contracts/${sel.id}?etapa=doc`} />
+                  <OutputPreview caseId={sel.id} fullHref={`/contracts/${sel.id}?etapa=doc`} stamp={sel.updatedAt} />
                   <OutputDownloads caseId={sel.id} hasWord={sel.hasWord} variant="buttons" />
                 </div>
               )}

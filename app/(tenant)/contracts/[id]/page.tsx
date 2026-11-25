@@ -9,10 +9,9 @@ import { getTenantSession } from "@/lib/auth/jwt";
 import { db } from "@/lib/db";
 import { contractAiAnalysisResults, contractArchiveDocuments, contractCases, contractDocuments, contractValidations, contractFlows, orgUsers, tenantAuditLog } from "@/db/schema";
 import { and, eq, asc, inArray, or, sql } from "drizzle-orm";
-import { FileText } from "lucide-react";
 import { ActionLink, CaseStatusPill, Notice, SectionTitle, StageNav, StatusPill, type Stage } from "@/components/kit";
 import { cn } from "@/lib/utils";
-import { CaseActions } from "./actions";
+import { CaseOutput, GenerateOutput } from "./case-output-lazy";
 import type { CaseDoc } from "./case-documents";
 import { CaseDocuments } from "./case-documents-lazy";
 import { CaseChecks } from "./case-checks-lazy";
@@ -30,7 +29,6 @@ import { CaseCalculations, evidenceKey, summarizeCalculations } from "./case-cal
 import { DecisionPanel } from "./decision-panel";
 import type { CalculationResult } from "@/lib/contracts/calculations";
 import { calculationsWithOperation } from "@/lib/contracts/revalidate";
-import { OutputDownloads } from "./output-downloads";
 
 const pretty = (k: string) => k.replace(/[_.]/g, " ").replace(/\s+/g, " ").trim().replace(/^\w/, (c) => c.toUpperCase());
 const nf = (n: number) => n.toLocaleString("es-CO", { maximumFractionDigits: 6 });
@@ -210,7 +208,7 @@ export default async function ContractCasePage({ params, searchParams }: { param
     !generationEnabled
       ? { key: "doc", label: "Documento", detail: "No aplica", state: "off" }
       : result.outputKey ? { key: "doc", label: "Documento", detail: "Generado", state: "ok", href: "?etapa=doc" }
-      : { key: "doc", label: "Documento", detail: approvalFeature.isEnabled ? "Al aprobar" : "Al terminar", state: "off", href: analysed || decided ? "?etapa=doc" : undefined },
+      : { key: "doc", label: "Documento", detail: rejected ? "No se genera" : decided ? "Sin generar" : approvalFeature.isEnabled ? "Al aprobar" : "Al terminar", state: "off", href: analysed || decided ? "?etapa=doc" : undefined },
   ];
   const valid = new Set([...stages.filter((st) => st.href).map((st) => st.key), "activity"]);
   const fallback = isProcessing || kase.status === "failed" ? "docs"
@@ -273,8 +271,12 @@ export default async function ContractCasePage({ params, searchParams }: { param
   const outputName = parsedFlow?.success ? parsedFlow.data.nodes.find((node) => node.kind === "generate")?.data.name ?? null : null;
   // The summary of Decisión lists every result in one line: name, factor and value.
   const summaryResults = summarizeCalculations(shownCalculations);
-  // Documentos and Validaciones use the whole width, each half with its own scroll.
-  const fullWidth = (tab === "checks" && validations.length > 0) || (tab === "docs" && docs.length > 0);
+  // Documentos, Validaciones and the generated document use the whole width, each half with its own scroll.
+  const fullWidth = (tab === "checks" && validations.length > 0) || (tab === "docs" && docs.length > 0) || (tab === "doc" && Boolean(result.outputKey));
+  // Who may generate the document: after approval where there is one, after validation where there is none.
+  const approvedCase = kase.status === "approved" || (kase.status === "generated" && result.decision?.action === "approve");
+  const canGenerate = generationEnabled && canManage && (approvalFeature.isEnabled ? approvedCase : kase.status === "validated");
+  const decidedAt = result.decision?.at ? new Date(result.decision.at).toLocaleString("es-MX", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone }) : null;
   const notices = (
     <>
       {isProcessing && (
@@ -330,6 +332,8 @@ export default async function ContractCasePage({ params, searchParams }: { param
           {hasNotices && <div className="flex shrink-0 flex-col gap-5 border-b border-border px-6 py-5.5 md:px-8">{notices}{typeNotice}</div>}
           {tab === "docs"
             ? <CaseDocuments documents={docs} canTrain={session.role === "admin"} />
+            : tab === "doc"
+            ? <CaseOutput caseId={kase.id} name={result.outputName ?? null} isWord={isWord} missing={(result.missing ?? []).map(pretty)} canRegenerate={canGenerate} stamp={kase.updatedAt.getTime()} />
             : <CaseChecks docs={checkDocs} findings={findings} passed={passedChecks} notes={infoNotes} analyses={checkAnalyses} verdict={verdict ? VERDICT[verdict].text : undefined} />}
         </div>
       ) : (
@@ -391,9 +395,10 @@ export default async function ContractCasePage({ params, searchParams }: { param
                   </SummaryRow>
                 )}
                 {decided ? (
-                  generationEnabled && (
+                  // Approved and not generated yet: the decision column says so, as the next step.
+                  generationEnabled && (result.outputKey || rejected) && (
                     <SummaryRow title="Documento" link={result.outputKey ? { label: "Ver documento", href: "?etapa=doc" } : undefined}>
-                      {result.outputKey ? "Generado." : rejected ? "No se genera: el caso fue rechazado." : "Todavía no se ha generado."}
+                      {result.outputKey ? "Generado." : "No se genera: el caso fue rechazado."}
                     </SummaryRow>
                   )
                 ) : (
@@ -405,28 +410,17 @@ export default async function ContractCasePage({ params, searchParams }: { param
                 )}
               </section>
 
-              <DecisionPanel caseId={kase.id} caseTitle={caseTitle} status={kase.status} verdict={validationsEnabled ? verdict : null} decision={result.decision}
+              <DecisionPanel caseId={kase.id} caseTitle={caseTitle} status={kase.status} verdict={validationsEnabled ? verdict : null} decision={result.decision} decidedAt={decidedAt}
                 hasOutput={Boolean(result.outputKey)} generationEnabled={generationEnabled} approvalEnabled={approvalFeature.isEnabled} allowOverride={approvalFeature.config.allow_override !== false}
                 canManage={canManage} steps={decisionSteps} openFindings={blocks + warns} requestsEnabled={requestsEnabled} />
             </div>
           )}
 
           {tab === "doc" && (
-            <section className="flex flex-col gap-3">
-              <SectionTitle title="Documento generado" />
-              {result.outputKey ? (
-                <>
-                  <div className="flex flex-wrap items-center gap-3 rounded-xl border border-[#BFE3D0] bg-tone-ok-bg px-5 py-4">
-                    <FileText aria-hidden className="size-5 text-tone-ok" />
-                    <span className="min-w-0 flex-1 text-[13.5px] font-semibold">{isWord ? "Documento en Word listo" : "Documento PDF listo"}</span>
-                    <OutputDownloads caseId={kase.id} hasWord={isWord} />
-                  </div>
-                  {result.missing && result.missing.length > 0 && <p className="text-[13px] text-tone-warn">Quedaron sin dato ({result.missing.length}): {result.missing.slice(0, 6).map(pretty).join(", ")}{result.missing.length > 6 ? "…" : ""}</p>}
-                </>
-              ) : (
-                <p className="text-sm text-muted-foreground">{approvalFeature.isEnabled ? "Se genera cuando el caso se aprueba." : "Se genera al terminar la validación."}</p>
-              )}
-              {!approvalFeature.isEnabled && <CaseActions caseId={kase.id} caseTitle={caseTitle} status={kase.status} verdict={validationsEnabled ? verdict : null} decision={result.decision} hasOutput={Boolean(result.outputKey)} generationEnabled={generationEnabled} approvalEnabled={false} allowOverride={false} canManage={canApprove(session.role, "contracts")} />}
+            <section className="flex flex-col gap-4">
+              <SectionTitle title="Documento" />
+              <GenerateOutput caseId={kase.id} canGenerate={canGenerate}
+                note={rejected ? "No se genera: el caso fue rechazado." : approvalFeature.isEnabled ? (approvedCase ? "El caso está aprobado; falta generar el documento." : "Se genera cuando el caso se aprueba.") : (kase.status === "validated" ? "El caso está validado; ya se puede generar el documento." : "Se genera al terminar la validación.")} />
             </section>
           )}
 

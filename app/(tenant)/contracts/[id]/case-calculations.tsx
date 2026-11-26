@@ -3,7 +3,7 @@
 // página de donde sale. Sin tarjetas ni cifras grandes: renglones y líneas finas.
 import Link from "next/link";
 import { SectionTitle } from "@/components/kit";
-import type { CalculationOperation, CalculationResult } from "@/lib/contracts/calculations";
+import type { CalculationItemResult, CalculationOperation, CalculationResult } from "@/lib/contracts/calculations";
 
 const nf = (n: number) => n.toLocaleString("es-CO", { maximumFractionDigits: 6 });
 const pretty = (k: string) => k.replace(/[_.]/g, " ").replace(/\s+/g, " ").trim().replace(/^\w/, (c) => c.toUpperCase());
@@ -47,9 +47,26 @@ function Operation({ operation, base, operand, formula }: { operation?: Calculat
   );
 }
 
-function Result({ value, status }: { value: number | null; status: string }) {
+function Result({ value, status, currency }: { value: number | null; status: string; currency?: string }) {
   return (
-    <td className={`${td} ${num} font-semibold ${status === "ok" ? "" : "text-tone-warn"}`}>{value === null ? "Por revisar" : nf(value)}</td>
+    <td className={`${td} ${num} font-semibold ${status === "ok" ? "" : "text-tone-warn"}`}>{value === null ? "Por revisar" : `${currency ? `${currency} ` : ""}${nf(value)}`}</td>
+  );
+}
+
+const dmy = (iso: string | null) => iso ? iso.split("-").reverse().join("/") : "sin fecha";
+
+/** What changes the plain operation of one item: a converted base, a minimum that wins, its term dates. */
+function ItemNotes({ entry }: { entry: CalculationItemResult }) {
+  const notes = [
+    entry.conversion && `Base convertida: ${entry.conversion.from} ${nf(entry.conversion.amount)} × ${nf(entry.conversion.rate)}`,
+    entry.minimum !== undefined && entry.minimum !== null && (entry.minimumApplied ? `Se aplica el mínimo: ${nf(entry.minimum)}` : `Mínimo ${nf(entry.minimum)}, superado`),
+    entry.term && (entry.term.start || entry.term.end) && `Vigencia ${dmy(entry.term.start)} – ${dmy(entry.term.end)}`,
+  ].filter(Boolean);
+  return (
+    <>
+      {notes.map((note) => <small key={String(note)} className="block text-[12.5px] text-muted-foreground">{note}</small>)}
+      {entry.term?.reason && <small className="block text-[12.5px] text-muted-foreground">{entry.term.reason}</small>}
+    </>
   );
 }
 
@@ -132,9 +149,13 @@ export function CaseCalculations({ calculations, docNames, pages }: {
                   const page = entry.evidence ? pages[evidenceKey(entry.evidence)] : undefined;
                   return (
                     <tr key={`${calc.key}-${index}`}>
-                      <td className={td}>{calculationItemName(entry.values, index)}{entry.reason && <small className="block text-[12.5px] text-tone-warn">{entry.reason}</small>}</td>
+                      <td className={td}>
+                        {calculationItemName(entry.values, index)}
+                        <ItemNotes entry={entry} />
+                        {entry.reason && <small className="block text-[12.5px] text-tone-warn">{entry.reason}</small>}
+                      </td>
                       <Operation operation={calc.operation} base={entry.base ?? calc.parts?.base.value} operand={entry.operand ?? calc.parts?.operand.value} formula={calc.formula} />
-                      <Result value={entry.value} status={entry.status} />
+                      <Result value={entry.value} status={entry.status} currency={entry.currency} />
                       <td className={`${td} whitespace-nowrap`}>
                         {entry.evidence
                           ? <Link href="?etapa=checks" className="text-link hover:underline">{page ? `p. ${page}` : "Ver cita"}</Link>

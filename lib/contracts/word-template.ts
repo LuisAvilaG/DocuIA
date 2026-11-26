@@ -1,5 +1,6 @@
 import PizZip from "pizzip";
 import { parseLocaleNumber } from "@/lib/numbers";
+import { normalizeContractDate } from "./normalization";
 
 export interface WordTemplateMapping {
   id: string;
@@ -7,7 +8,7 @@ export interface WordTemplateMapping {
   anchorText: string;
   fieldKey: string;
   fieldLabel: string;
-  format?: "text" | "number" | "currency";
+  format?: "text" | "number" | "currency" | "date";
 }
 
 export interface WordTableRepeat {
@@ -139,6 +140,11 @@ function numericValue(value: unknown): number | null {
 
 function printableMapping(value: unknown, format: WordTemplateMapping["format"]): string {
   if (!format || format === "text") return printable(value);
+  if (format === "date") {
+    // 2026-11-13 o «13 de noviembre de 2026» → 13/11/2026; un texto sin fecha se deja como está.
+    const iso = normalizeContractDate(value);
+    return iso ? iso.split("-").reverse().join("/") : printable(value);
+  }
   const number = numericValue(value);
   if (number === null) return printable(value);
   const rendered = number.toLocaleString("es-CO", { maximumFractionDigits: 6 });
@@ -163,7 +169,19 @@ function repeatTableRows(xml: string, repeat: WordTableRepeat, data: Record<stri
 
   return xml.replace(/<w:tr\b[\s\S]*?<\/w:tr>/g, (tableRow) => {
     if (!visibleText(tableRow).includes(repeat.rowAnchorText)) return tableRow;
-    if (!rows.length) return replaceTextInXml(tableRow, repeat.rowAnchorText, "[POR COMPLETAR]");
+    if (!rows.length) {
+      // Nothing of this kind in the contract: one row that says so in its first
+      // cell, the other cells blank (no {{amparo}} or "Desde … hasta" left over).
+      const message = "No aplica para este contrato";
+      let first = true;
+      return replaceTextInXml(tableRow, repeat.rowAnchorText, message).replace(/<w:tc\b[\s\S]*?<\/w:tc>/g, (cell) => {
+        if (first) {
+          first = false;
+          return cell.replace(/(<w:t\b[^>]*>)([^<]*)(<\/w:t>)/g, (_, open: string, text: string, close: string) => `${open}${text.includes(message) ? message : ""}${close}`);
+        }
+        return cell.replace(/(<w:t\b[^>]*>)[^<]*(<\/w:t>)/g, "$1$2");
+      });
+    }
 
     return rows.map((item, index) => {
       let copy = replaceTextInXml(tableRow, repeat.rowAnchorText, "");

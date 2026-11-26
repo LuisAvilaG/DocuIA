@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { assembleResults, type AnalysisOutcome } from "../lib/contracts/assemble";
 import { validateFlowReferences, type FlowGraph } from "../lib/contracts/flow";
-import { adoptParts, evaluateCalculations, type CalculationDefinition } from "../lib/contracts/calculations";
+import { addToDate, adoptParts, evaluateCalculations, type CalculationDefinition } from "../lib/contracts/calculations";
 import type { ContractPlan } from "../lib/contracts/plan";
 
 const plan: ContractPlan = {
@@ -97,4 +97,98 @@ test("a stored result adopts the operation only where the number is the same", (
   const changed = { ...old, items: [{ ...old.items[0], value: 1 }, old.items[1]] };
   assert.equal(adoptParts(changed, fresh), changed);
   assert.equal(adoptParts(old, undefined), old);
+});
+
+// Cotizador de garantías (Lockton): anticipo, mínimos en SMMLV y vigencias con fecha.
+// Datos tomados de los casos reales SN-CTO-26-0117 y CSCG-ABS-021.
+const smmlv = { key: "smmlv", label: "SMMLV vigente", value: 1750905 };
+const garantias: CalculationDefinition = {
+  key: "garantias_porcentuales", label: "Garantías porcentuales", base: { docType: "contrato", field: "valor_contrato" }, operation: "percentage",
+  operand: { type: "item", key: "cantidad" }, decimals: 0, mode: "each_analysis_item", analysisNodeId: "ai", itemFilter: { key: "tipo", value: "porcentaje" },
+  fixedValues: [smmlv], minimum: { amount: { type: "item", key: "minimo_smmlv" }, unit: { type: "fixed", key: "smmlv" } },
+  currency: { rates: [{ code: "USD", fixedKey: "trm_usd" }] },
+  term: {
+    anchors: { inicio: { docType: "contrato", field: "fecha_inicio" }, terminacion: { docType: "contrato", field: "fecha_terminacion" } },
+    startKey: "vigencia_desde_ref", endKey: "vigencia_hasta_ref", monthsKey: "vigencia_meses_adicionales",
+  },
+};
+const anticipo: CalculationDefinition = {
+  ...garantias, key: "garantias_anticipo", label: "Garantías sobre el anticipo", base: { docType: "contrato", field: "valor_anticipo" },
+  itemFilter: { key: "tipo", value: "porcentaje_anticipo" }, minimum: undefined,
+};
+const snCto = { contrato: [{ values: {
+  valor_contrato: "$76.766.897", valor_anticipo: "$38.081.967", fecha_inicio: "13 de noviembre de 2026", fecha_terminacion: "30 de diciembre de 2026",
+} }] };
+const snItems: Record<string, Array<{ values: Record<string, string> }>> = { ai: [
+  { values: { amparo: "Buen manejo del anticipo", tipo: "porcentaje_anticipo", cantidad: "100", vigencia_desde_ref: "inicio", vigencia_hasta_ref: "terminacion", vigencia_meses_adicionales: "6" } },
+  { values: { amparo: "Cumplimiento", tipo: "porcentaje", cantidad: "30", vigencia_desde_ref: "inicio", vigencia_hasta_ref: "terminacion", vigencia_meses_adicionales: "6" } },
+  { values: { amparo: "Estabilidad de la obra", tipo: "porcentaje", cantidad: "30", vigencia_desde_ref: "entrega", vigencia_hasta_ref: "entrega", vigencia_meses_adicionales: "36" } },
+  { values: { amparo: "RCE", tipo: "porcentaje", cantidad: "100", minimo_smmlv: "200", vigencia_desde_ref: "inicio", vigencia_hasta_ref: "terminacion", vigencia_meses_adicionales: "6" } },
+] };
+
+test("the advance guarantee is computed on the advance, not on the contract value", () => {
+  const [porcentuales, sobreAnticipo] = evaluateCalculations([garantias, anticipo], snCto, snItems);
+  assert.deepEqual(sobreAnticipo.items?.map((item) => [item.values.amparo, item.value]), [["Buen manejo del anticipo", 38081967]]);
+  assert.ok(!porcentuales.items?.some((item) => item.values.tipo === "porcentaje_anticipo"));
+});
+
+test("a minimum in SMMLV wins when it is greater than the percentage", () => {
+  const [result] = evaluateCalculations([garantias], snCto, snItems);
+  const rce = result.items?.find((item) => item.values.amparo === "RCE");
+  assert.equal(rce?.value, 350181000, "200 × 1.750.905 is more than 100 % of 76.766.897");
+  assert.equal(rce?.minimumApplied, true);
+  const cumplimiento = result.items?.find((item) => item.values.amparo === "Cumplimiento");
+  assert.equal(cumplimiento?.value, 23030069);
+  assert.equal(cumplimiento?.minimum, undefined, "no minimum column, no minimum");
+  assert.match(result.formula, /mínimo minimo_smmlv × smmlv/);
+});
+
+test("a contract in dollars needs the exchange rate only to compare with a minimum in pesos", () => {
+  const usd = { contrato: [{ values: { valor_contrato: "USD 165.801,19", fecha_terminacion: "5 de febrero de 2027", fecha_inicio: "con la expedición de la orden de compra" } }] };
+  const items: Record<string, Array<{ values: Record<string, string> }>> = { ai: [
+    { values: { amparo: "Cumplimiento", tipo: "porcentaje", cantidad: "20", vigencia_desde_ref: "inicio", vigencia_hasta_ref: "terminacion", vigencia_meses_adicionales: "3" } },
+    { values: { amparo: "RCE", tipo: "porcentaje", cantidad: "100", minimo_smmlv: "200" } },
+  ] };
+  const [withoutRate] = evaluateCalculations([garantias], usd, items);
+  assert.deepEqual(withoutRate.items?.map((item) => [item.value, item.currency, item.status]), [[33160, "USD", "ok"], [null, "USD", "missing"]]);
+  assert.match(withoutRate.items?.[1].reason ?? "", /USD.*tasa de cambio/);
+
+  const [withRate] = evaluateCalculations([{ ...garantias, fixedValues: [smmlv, { key: "trm_usd", label: "TRM", value: 4000 }] }], usd, items);
+  const rce = withRate.items?.[1];
+  assert.equal(rce?.value, 663204760);
+  assert.equal(rce?.currency, undefined, "converted to pesos");
+  assert.deepEqual(rce?.conversion, { from: "USD", amount: 165801.19, rate: 4000 });
+  assert.equal(withRate.items?.[0].currency, "USD", "without a minimum the guarantee keeps the contract currency");
+
+  // Start depends on the purchase order: no date; end is 5 Feb 2027 + 3 months.
+  assert.deepEqual(withRate.items?.[0].term, { start: null, end: "2027-05-05", reason: "Vigencia sin fecha exacta: el contrato no fija la fecha de inicio." });
+});
+
+test("term dates come from the contract dates the model points to", () => {
+  const [result] = evaluateCalculations([garantias], snCto, snItems);
+  assert.deepEqual(result.items?.[0].term, { start: "2026-11-13", end: "2027-06-30" });
+  const estabilidad = result.items?.find((item) => item.values.amparo === "Estabilidad de la obra");
+  assert.deepEqual(estabilidad?.term, { start: null, end: null, reason: "Vigencia sin fecha exacta: el contrato no fija la fecha de entrega." });
+  assert.equal(addToDate("2027-01-31", 1, 0), "2027-02-28");
+  assert.equal(addToDate("2026-12-30", 0, 48), "2027-02-16");
+});
+
+test("the output rows carry base, minimum and term dates for the Word template", () => {
+  const assembled = assembleResults({ ...plan, rules: [], calculations: [garantias] }, snCto as never, [{
+    nodeId: "ai", ruleName: "Garantías", severity: "warn", outputMode: "both",
+    response: { outcome: "review", summary: "", items: snItems.ai.map((item) => ({ ...item, evidence: null })), citations: [] },
+  }], { validationsEnabled: false });
+  const rows = assembled.calculationValues.garantias_porcentuales as Array<Record<string, unknown>>;
+  const rce = rows.find((row) => row.amparo === "RCE")!;
+  assert.equal(rce.value, 350181000);
+  assert.equal(rce.minimo, 350181000);
+  assert.equal(rce.base_calculo, 76766897);
+  assert.equal(rce.vigencia_desde, "13/11/2026");
+  assert.equal(rce.vigencia_hasta, "30/06/2027");
+});
+
+test("flow references of minimums, rates and terms are checked", () => {
+  assert.match(validateFlowReferences(graph({ minimum: { amount: 200, unit: { type: "fixed", key: "smmlv" } } })) ?? "", /valor fijo "smmlv"/);
+  assert.match(validateFlowReferences(graph({ currency: { rates: [{ code: "USD", fixedKey: "trm" }] } })) ?? "", /tasa "trm"/);
+  assert.match(validateFlowReferences(graph({ term: { anchors: {}, startKey: "a", endKey: "b" } })) ?? "", /vigencias/);
 });

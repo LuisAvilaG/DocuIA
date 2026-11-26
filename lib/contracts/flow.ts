@@ -102,6 +102,21 @@ const zCalculate = z.object({
     mode: z.enum(["single", "each_analysis_item"]).default("single"),
     analysisNodeId: z.string().min(1).optional(),
     itemFilter: z.object({ key: z.string().min(1).max(120), value: z.string().max(300) }).optional(),
+    // «Sin que sea inferior a N SMMLV»: el mayor entre la fórmula y cantidad × unidad.
+    minimum: z.object({
+      amount: zCalculationOperand,
+      unit: z.union([zCalculationRef, z.object({ type: z.literal("number"), value: z.number().finite() })]),
+    }).optional(),
+    // Tasas de cambio (valores fijos del nodo) para una base en otra moneda.
+    currency: z.object({ rates: z.array(z.object({ code: z.string().min(3).max(3), fixedKey: z.string().min(1).max(120) })).max(8) }).optional(),
+    // Fechas exactas de la vigencia de cada fila, a partir de las fechas del contrato.
+    term: z.object({
+      anchors: z.record(z.string().min(1).max(40), zRef),
+      startKey: z.string().min(1).max(120),
+      endKey: z.string().min(1).max(120),
+      monthsKey: z.string().min(1).max(120).optional(),
+      daysKey: z.string().min(1).max(120).optional(),
+    }).optional(),
   }),
 });
 const zDocBlock = z.discriminatedUnion("type", [
@@ -118,7 +133,7 @@ const zGenerate = z.object({
     wordTemplate: z.object({
       storageKey: z.string().min(1), originalName: z.string().min(1),
       mimeType: z.literal("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
-      mappings: z.array(z.object({ id: z.string().min(1), anchorText: z.string().min(1).max(500), fieldKey: z.string().min(1).max(120), fieldLabel: z.string().min(1).max(200), format: z.enum(["text", "number", "currency"]).optional() })).max(120),
+      mappings: z.array(z.object({ id: z.string().min(1), anchorText: z.string().min(1).max(500), fieldKey: z.string().min(1).max(120), fieldLabel: z.string().min(1).max(200), format: z.enum(["text", "number", "currency", "date"]).optional() })).max(120),
       tableRepeats: z.array(z.object({ id: z.string().min(1), rowAnchorText: z.string().min(1).max(500), fieldKey: z.string().min(1).max(120), fieldLabel: z.string().min(1).max(200) })).max(24).default([]),
     }).optional(),
   }),
@@ -186,7 +201,7 @@ export function compileFlow(graph: FlowGraph): CompiledFlow {
     } else if (n.kind === "extract") {
       (fieldsByType[n.data.docTypeKey] ??= []).push(...n.data.fields);
     } else if (n.kind === "calculate") {
-      calculations.push({ key: n.data.key, label: n.data.label, base: n.data.base, operation: n.data.operation, operand: n.data.operand, decimals: n.data.decimals, fixedValues: n.data.fixedValues, mode: n.data.mode, analysisNodeId: n.data.analysisNodeId, itemFilter: n.data.itemFilter });
+      calculations.push({ key: n.data.key, label: n.data.label, base: n.data.base, operation: n.data.operation, operand: n.data.operand, decimals: n.data.decimals, fixedValues: n.data.fixedValues, mode: n.data.mode, analysisNodeId: n.data.analysisNodeId, itemFilter: n.data.itemFilter, minimum: n.data.minimum, currency: n.data.currency, term: n.data.term });
     } else if (n.kind === "validate") {
       const rule = n.data.rule as unknown as ValidationRule;
       rules.push({ nodeId: n.id, name: n.data.name, severity: n.data.severity, appliesTo: ruleRefs(rule)[0]?.field ?? rule.kind, conditionsJson: rule });
@@ -289,7 +304,19 @@ export function validateFlowReferences(graph: FlowGraph): string | null {
       if (itemMode && (!n.data.analysisNodeId || !aiNodes.has(n.data.analysisNodeId))) {
         return `El ${where} recorre los hallazgos de un análisis con IA que ya no existe en el flujo.`;
       }
-      for (const [role, ref] of [["base", n.data.base], ["operando", n.data.operand]] as const) {
+      const sides: Array<readonly [string, typeof n.data.operand]> = [["base", n.data.base], ["operando", n.data.operand]];
+      if (n.data.minimum) sides.push(["mínimo", n.data.minimum.amount], ["unidad del mínimo", n.data.minimum.unit]);
+      for (const rate of n.data.currency?.rates ?? []) {
+        if (!fixedKeys.has(rate.fixedKey)) return `El ${where} usa la tasa "${rate.fixedKey}" (${rate.code}) que no está definida.`;
+      }
+      if (n.data.term) {
+        if (!itemMode) return `El ${where} calcula vigencias pero no recorre un análisis con IA.`;
+        for (const ref of Object.values(n.data.term.anchors)) {
+          const err = checkRef(ref, where);
+          if (err) return err;
+        }
+      }
+      for (const [role, ref] of sides) {
         if (typeof ref === "number" || ref.type === "number") continue;
         if (ref.type === "fixed") {
           if (!fixedKeys.has(ref.key)) return `El ${where} usa el valor fijo "${ref.key}" (${role}) que no está definido.`;

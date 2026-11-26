@@ -1,5 +1,5 @@
 import { runValidations, caseVerdict, type DocsByType, type ValidationResult } from "./validate";
-import { evaluateCalculations, type CalculationResult } from "./calculations";
+import { calculationRowExtras, evaluateCalculations, type CalculationResult } from "./calculations";
 import { evidenceFromQuotes } from "./evidence";
 import type { ContractPlan } from "./plan";
 import type { AiAnalysisResponse, AiAnalysisRule } from "./ai-analysis";
@@ -62,7 +62,7 @@ export function assembleResults(
     .map((analysis) => [analysis.nodeId!, analysis.response.items]));
   const calculations = evaluateCalculations(plan.calculations, docsByType, analysisItemsByNode);
   const calculationValues = Object.fromEntries(calculations.map((item) => [item.key,
-    item.items?.map((entry) => ({ ...entry.values, value: entry.value, status: entry.status, evidence: entry.evidence ?? null })) ?? item.value,
+    item.items?.map((entry) => ({ ...entry.values, ...calculationRowExtras(entry), value: entry.value, status: entry.status, evidence: entry.evidence ?? null })) ?? item.value,
   ]));
 
   const validations = [...baseValidations, ...(validationsEnabled ? analyses.map(aiValidation) : [])];

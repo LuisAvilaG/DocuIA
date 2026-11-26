@@ -189,6 +189,9 @@ export function addToDate(iso: string, months: number, days: number): string {
   return target.toISOString().slice(0, 10);
 }
 
+/** The anchors are matched without accents; the reasons show them as written. */
+const ANCHOR_LABEL: Record<string, string> = { suscripcion: "suscripción", terminacion: "terminación" };
+
 const anchorName = (value: string | undefined) => (value ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
 
 function termOf(term: CalculationTerm, values: Record<string, string>, docsByType: DocsByTypeLike): NonNullable<CalculationItemResult["term"]> {
@@ -198,7 +201,7 @@ function termOf(term: CalculationTerm, values: Record<string, string>, docsByTyp
     if (!name || name === "pendiente") { reasons.push("el contrato no dice desde cuándo se cuenta"); return null; }
     const ref = term.anchors[name];
     const date = ref ? normalizeContractDate(rawField(ref, docsByType)) : null;
-    if (!date) reasons.push(`el contrato no fija la fecha de ${name}`);
+    if (!date) reasons.push(`el contrato no fija la fecha de ${ANCHOR_LABEL[name] ?? name}`);
     return date;
   };
   const count = (key?: string) => (key ? normalizeContractNumber(values[key]) : null) ?? 0;

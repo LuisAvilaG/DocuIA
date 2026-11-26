@@ -169,6 +169,10 @@ test("term dates come from the contract dates the model points to", () => {
   assert.deepEqual(result.items?.[0].term, { start: "2026-11-13", end: "2027-06-30" });
   const estabilidad = result.items?.find((item) => item.values.amparo === "Estabilidad de la obra");
   assert.deepEqual(estabilidad?.term, { start: null, end: null, reason: "Vigencia sin fecha exacta: el contrato no fija la fecha de entrega." });
+  // Anchors match without accents; the reason shows the word as written.
+  const [noSigning] = evaluateCalculations([{ ...garantias, term: { ...garantias.term!, anchors: { ...garantias.term!.anchors, suscripcion: { docType: "contrato", field: "fecha_suscripcion" } } } }], snCto,
+    { ai: [{ values: { amparo: "RCE", tipo: "porcentaje", cantidad: "30", vigencia_desde_ref: "suscripción", vigencia_hasta_ref: "terminacion", vigencia_meses_adicionales: "6" } }] });
+  assert.deepEqual(noSigning.items?.[0].term, { start: null, end: "2027-06-30", reason: "Vigencia sin fecha exacta: el contrato no fija la fecha de suscripción." });
   assert.equal(addToDate("2027-01-31", 1, 0), "2027-02-28");
   assert.equal(addToDate("2026-12-30", 0, 48), "2027-02-16");
 });

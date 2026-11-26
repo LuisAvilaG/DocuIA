@@ -193,7 +193,10 @@ function repeatTableRows(xml: string, repeat: WordTableRepeat, data: Record<stri
         // fields (for example {{valor_contrato}}). Leave them for the normal
         // template mapping pass that runs after table expansion.
         if (token !== "index" && !(token in item)) continue;
-        const replacement = token === "index" ? String(index + 1) : printableCell(item[token]);
+        // A result in another currency (USD 33.160) keeps it: a bare number reads as pesos.
+        const replacement = token === "index" ? String(index + 1)
+          : token === "value" && typeof item.moneda === "string" && typeof item.value === "number" ? `${item.moneda} ${printableCell(item.value)}`
+          : printableCell(item[token]);
         copy = replaceTextInXml(copy, placeholder, replacement);
       }
       return copy;

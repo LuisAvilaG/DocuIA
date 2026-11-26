@@ -56,3 +56,12 @@ test("table rows repeat with spaced placeholders and plain lists", () => {
   }, { asegurados: ["Ana", "Luis"] }));
   assert.equal(text(listOut), "AnaLuis");
 });
+
+test("a repeated result in another currency keeps it; one in pesos stays a bare number", () => {
+  const row = `<w:tr><w:tc><w:p><w:r><w:t>{{repeat:garantias}}{{amparo}}: {{value}};</w:t></w:r></w:p></w:tc></w:tr>`;
+  const out = documentXml(fillWordTemplate(docx(`<w:tbl>${row}</w:tbl>`), {
+    ...base, mappings: [],
+    tableRepeats: [{ id: "r", rowAnchorText: "{{repeat:garantias}}", fieldKey: "garantias", fieldLabel: "Garantías" }],
+  }, { garantias: [{ amparo: "Cumplimiento", value: 33160.238, moneda: "USD" }, { amparo: "RC", value: null, moneda: "USD" }, { amparo: "Salarios", value: 23030069 }] }));
+  assert.equal(text(out), "Cumplimiento: USD 33.160,238;RC: [POR COMPLETAR];Salarios: 23.030.069;");
+});

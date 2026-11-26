@@ -62,6 +62,6 @@ test("a repeated result in another currency keeps it; one in pesos stays a bare 
   const out = documentXml(fillWordTemplate(docx(`<w:tbl>${row}</w:tbl>`), {
     ...base, mappings: [],
     tableRepeats: [{ id: "r", rowAnchorText: "{{repeat:garantias}}", fieldKey: "garantias", fieldLabel: "Garantías" }],
-  }, { garantias: [{ amparo: "Cumplimiento", value: 33160.238, moneda: "USD" }, { amparo: "RC", value: null, moneda: "USD" }, { amparo: "Salarios", value: 23030069 }] }));
-  assert.equal(text(out), "Cumplimiento: USD 33.160,238;RC: [POR COMPLETAR];Salarios: 23.030.069;");
+  }, { garantias: [{ amparo: "Cumplimiento", value: 33160.238, moneda: "USD" }, { amparo: "RC", value: null, moneda: "USD" }, { amparo: "RCE", value: 602005883, tasa_cambio: 3630.89 }, { amparo: "Salarios", value: 23030069 }] }));
+  assert.equal(text(out), "Cumplimiento: USD 33.160,238;RC: [POR COMPLETAR];RCE: COP 602.005.883;Salarios: 23.030.069;");
 });

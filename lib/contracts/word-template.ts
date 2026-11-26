@@ -194,8 +194,10 @@ function repeatTableRows(xml: string, repeat: WordTableRepeat, data: Record<stri
         // template mapping pass that runs after table expansion.
         if (token !== "index" && !(token in item)) continue;
         // A result in another currency (USD 33.160) keeps it: a bare number reads as pesos.
+        // One converted to pesos says so (COP 602.005.883), since its base is in dollars.
+        const currency = typeof item.moneda === "string" ? item.moneda : item.tasa_cambio !== undefined ? "COP" : null;
         const replacement = token === "index" ? String(index + 1)
-          : token === "value" && typeof item.moneda === "string" && typeof item.value === "number" ? `${item.moneda} ${printableCell(item.value)}`
+          : token === "value" && currency && typeof item.value === "number" ? `${currency} ${printableCell(item.value)}`
           : printableCell(item[token]);
         copy = replaceTextInXml(copy, placeholder, replacement);
       }
